@@ -772,8 +772,8 @@
             <h2 id="welcome-title">Добро пожаловать!</h2>
             <p>Единый корпоративный портал автоматизации транспортной логистики ФК «ПУЛЬС» (РЦ Черная Грязь)</p>
           </div>
-          <span class="badge">
-            <span class="badge-dot"></span> Сервер активен
+          <span class="badge" id="portal-version-badge">
+            <span class="badge-dot"></span> Версия 1.0
           </span>
         </div>
 
@@ -1116,9 +1116,12 @@
 
             <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; background: #f8fafc; padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border-light);">
               <div style="display: flex; align-items: center; gap: 18px; flex-wrap: wrap;">
-                <span style="font-size: 13px; font-weight: 700;">Доступные разделы:</span>
+                <span style="font-size: 13px; font-weight: 700;">Доступные разделы и подразделы:</span>
                 <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
-                  <input type="checkbox" id="new-perm-opt" checked> 🚛 Раздел «ОПТ» (Графики РК и Заявки)
+                  <input type="checkbox" id="new-perm-opt-schedules" checked> 📊 ОПТ: Графики РК
+                </label>
+                <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                  <input type="checkbox" id="new-perm-opt-orders" checked> 📝 ОПТ: Заявки перевозчикам
                 </label>
                 <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
                   <input type="checkbox" id="new-perm-thermo" checked> 🌡️ Температурные графики
@@ -1374,7 +1377,8 @@
         document.getElementById('pin-auth-overlay').style.display = 'none';
         document.getElementById('app-content').style.display = 'flex';
 
-        if (data.user.permissions.includes('opt') || data.user.role === 'admin') {
+        const perms = data.user.permissions || [];
+        if (perms.includes('opt_schedules') || perms.includes('opt_orders') || perms.includes('opt') || data.user.role === 'admin') {
           loadStorageInfo();
         }
         if (activeTaskId && !pollInterval) {
@@ -1400,12 +1404,17 @@
       if (homeLogin) homeLogin.innerText = user.login;
       if (homePos) homePos.innerText = user.position || 'Специалист отдела логистики';
 
-      const hasOpt = user.role === 'admin' || (user.permissions || []).includes('opt');
-      const hasThermo = user.role === 'admin' || (user.permissions || []).includes('thermo');
+      const perms = user.permissions || [];
       const isAdmin = user.role === 'admin';
+      const hasOptSchedules = isAdmin || perms.includes('opt_schedules') || perms.includes('opt');
+      const hasOptOrders = isAdmin || perms.includes('opt_orders') || perms.includes('opt');
+      const hasAnyOpt = hasOptSchedules || hasOptOrders;
+      const hasThermo = isAdmin || perms.includes('thermo');
 
-      document.getElementById('nav-opt').style.display = hasOpt ? 'flex' : 'none';
-      document.getElementById('subnav-opt').style.display = hasOpt ? 'block' : 'none';
+      document.getElementById('nav-opt').style.display = hasAnyOpt ? 'flex' : 'none';
+      document.getElementById('subnav-opt').style.display = hasAnyOpt ? 'block' : 'none';
+      document.getElementById('subnav-opt-schedules').style.display = hasOptSchedules ? 'flex' : 'none';
+      document.getElementById('subnav-opt-orders').style.display = hasOptOrders ? 'flex' : 'none';
 
       document.getElementById('nav-thermo').style.display = hasThermo ? 'flex' : 'none';
       document.getElementById('admin-nav-group').style.display = isAdmin ? 'block' : 'none';
@@ -1467,11 +1476,12 @@
         subOpt.classList.add('open');
         subOpt.style.display = 'block';
         if (chevron) chevron.style.transform = 'rotate(0deg)';
-        // Если мы еще не внутри ОПТ, открываем по умолчанию Графики РК
+        // Если мы еще не внутри ОПТ, открываем первый доступный подраздел
         const isSchedulesActive = document.getElementById('section-opt-schedules').classList.contains('active');
         const isOrdersActive = document.getElementById('section-opt-orders').classList.contains('active');
         if (!isSchedulesActive && !isOrdersActive) {
-          openSection('opt-schedules');
+          const canSch = document.getElementById('subnav-opt-schedules').style.display !== 'none';
+          openSection(canSch ? 'opt-schedules' : 'opt-orders');
         }
       }
     }
@@ -1523,8 +1533,10 @@
 
         tbody.innerHTML = '';
         data.users.forEach(u => {
-          const hasOpt = u.role === 'admin' || (u.permissions || []).includes('opt');
-          const hasThermo = u.role === 'admin' || (u.permissions || []).includes('thermo');
+          const perms = u.permissions || [];
+          const hasOptSch = u.role === 'admin' || perms.includes('opt_schedules') || perms.includes('opt');
+          const hasOptOrd = u.role === 'admin' || perms.includes('opt_orders') || perms.includes('opt');
+          const hasThermo = u.role === 'admin' || perms.includes('thermo');
 
           const tr = document.createElement('tr');
           tr.innerHTML = `
@@ -1540,13 +1552,18 @@
             <td>
               <div style="display:flex;gap:14px;flex-wrap:wrap;">
                 <label style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;cursor:pointer;">
-                  <input type="checkbox" ${hasOpt ? 'checked' : ''} ${u.is_master ? 'disabled' : ''}
-                    onchange="toggleUserPerm('${u.login}', 'opt', this.checked, ${hasThermo})">
-                  🚛 ОПТ
+                  <input type="checkbox" class="perm-cb-${u.login}" value="opt_schedules" ${hasOptSch ? 'checked' : ''} ${u.is_master ? 'disabled' : ''}
+                    onchange="saveUserPermissions('${u.login}')">
+                  📊 ОПТ: Графики РК
                 </label>
                 <label style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;cursor:pointer;">
-                  <input type="checkbox" ${hasThermo ? 'checked' : ''} ${u.is_master ? 'disabled' : ''}
-                    onchange="toggleUserPerm('${u.login}', 'thermo', this.checked, ${hasOpt})">
+                  <input type="checkbox" class="perm-cb-${u.login}" value="opt_orders" ${hasOptOrd ? 'checked' : ''} ${u.is_master ? 'disabled' : ''}
+                    onchange="saveUserPermissions('${u.login}')">
+                  📝 ОПТ: Заявки
+                </label>
+                <label style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;cursor:pointer;">
+                  <input type="checkbox" class="perm-cb-${u.login}" value="thermo" ${hasThermo ? 'checked' : ''} ${u.is_master ? 'disabled' : ''}
+                    onchange="saveUserPermissions('${u.login}')">
                   🌡️ Термографики
                 </label>
               </div>
@@ -1581,7 +1598,8 @@
       const position = document.getElementById('new-user-position').value.trim();
       const pin = document.getElementById('new-user-pin').value.trim();
       const perms = [];
-      if (document.getElementById('new-perm-opt').checked) perms.push('opt');
+      if (document.getElementById('new-perm-opt-schedules').checked) perms.push('opt_schedules');
+      if (document.getElementById('new-perm-opt-orders').checked) perms.push('opt_orders');
       if (document.getElementById('new-perm-thermo').checked) perms.push('thermo');
 
       try {
@@ -1625,15 +1643,12 @@
       }
     }
 
-    async function toggleUserPerm(login, section, checked, otherChecked) {
+    async function saveUserPermissions(login) {
+      const checkboxes = document.querySelectorAll(`.perm-cb-${CSS.escape(login)}`);
       const perms = [];
-      if (section === 'opt') {
-        if (checked) perms.push('opt');
-        if (otherChecked) perms.push('thermo');
-      } else {
-        if (otherChecked) perms.push('opt');
-        if (checked) perms.push('thermo');
-      }
+      checkboxes.forEach(cb => {
+        if (cb.checked) perms.push(cb.value);
+      });
       await fetch(`/api/admin/users/${encodeURIComponent(login)}/update`, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),

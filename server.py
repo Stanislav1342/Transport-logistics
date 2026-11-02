@@ -73,7 +73,8 @@ except ImportError:
 
 # ─── Настройка FastAPI и CORS ─────────────────────────────────────────────────
 
-app = FastAPI(title="ПУЛЬС — Транспортная логистика", version="v43")
+PORTAL_VERSION = "1.0"
+app = FastAPI(title="ПУЛЬС — Транспортная логистика", version=f"v{PORTAL_VERSION}")
 
 ALLOWED_ORIGIN_REGEX = (
     r"^https?://(localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|"
@@ -97,7 +98,21 @@ if os.path.exists(STATIC_DIR):
 DEFAULT_AUTH_PIN = "123456"
 DEFAULT_ADMIN_LOGIN = "s.khvostov"
 LOGIN_REGEX = re.compile(r"^[a-z]\.[a-z0-9_-]{2,30}$")
-ALL_SECTIONS = ["opt", "thermo"]
+ALL_SECTIONS = ["opt_schedules", "opt_orders", "thermo"]
+
+
+def _normalize_permissions(perms: list[str] | None) -> list[str]:
+    if not perms:
+        return []
+    res: list[str] = []
+    for p in perms:
+        if p == "opt":
+            for sub in ("opt_schedules", "opt_orders"):
+                if sub not in res:
+                    res.append(sub)
+        elif p in ALL_SECTIONS and p not in res:
+            res.append(p)
+    return res
 
 # Защита от перебора (Brute-force): учет неудачных попыток по IP
 FAILED_AUTH_ATTEMPTS: dict[str, list[float]] = {}
@@ -239,7 +254,7 @@ def _sanitize_user_public(u: dict[str, Any]) -> dict[str, Any]:
         "full_name": u.get("full_name", u["login"]),
         "position": u.get("position", "") or "Специалист отдела логистики",
         "role": u.get("role", "user"),
-        "permissions": u.get("permissions", []),
+        "permissions": _normalize_permissions(u.get("permissions", [])),
         "is_active": bool(u.get("is_active", True)),
         "is_master": bool(u.get("is_master", False)),
         "created_at": u.get("created_at", ""),
@@ -295,8 +310,12 @@ def check_auth(
         )
 
     if required_section and user.get("role") != "admin":
-        perms = user.get("permissions", [])
-        if required_section not in perms:
+        perms = _normalize_permissions(user.get("permissions", []))
+        if required_section == "opt_any":
+            allowed = ("opt_schedules" in perms) or ("opt_orders" in perms)
+        else:
+            allowed = required_section in perms
+        if not allowed:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="У вашей учетной записи нет доступа к этому разделу.",
@@ -318,7 +337,7 @@ class CreateUserRequest(BaseModel):
     full_name: str = Field(..., min_length=2, max_length=80)
     position: str = Field(default="Специалист отдела логистики", max_length=100)
     pin: str = Field(..., pattern=r"^\d{6}$")
-    permissions: list[str] = Field(default_factory=lambda: ["opt", "thermo"])
+    permissions: list[str] = Field(default_factory=lambda: ["opt_schedules", "opt_orders", "thermo"])
     role: str = Field(default="user")
 
 
@@ -419,7 +438,7 @@ async def admin_create_user(payload: CreateUserRequest, request: Request):
             detail="Логин должен быть в корпоративном формате 'и.фамилия' латиницей (например: s.khvostov, a.rozhkov)",
         )
 
-    valid_perms = [p for p in payload.permissions if p in ALL_SECTIONS]
+    valid_perms = _normalize_permissions(payload.permissions)
     role = "admin" if payload.role == "admin" else "user"
     if role == "admin":
         valid_perms = list(ALL_SECTIONS)
@@ -485,7 +504,7 @@ async def admin_update_user(target_login: str, payload: UpdateUserRequest, reque
             user["permissions"] = (
                 list(ALL_SECTIONS)
                 if user["role"] == "admin"
-                else [p for p in payload.permissions if p in ALL_SECTIONS]
+                else _normalize_permissions(payload.permissions)
             )
 
         if payload.is_active is not None:
@@ -577,14 +596,16 @@ def get_orders_dir() -> str:
 
 
 def load_schedules_contacts() -> dict[str, str]:
-    for fname in ["contacts_schedules.json", "carriers_contacts.json"]:
-        p = os.path.join(BASE_DIR, fname)
-        if os.path.exists(p):
-            try:
-                with open(p, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception as e:
-                logger.warning("Ошибка чтения %s: %s", p, e)
+    net_dir = r"L:\ОТДЕЛЫ\ТРАНСПОРТНЫЙ ОТДЕЛ\Рожков\РК недельные графики + заявки"
+    for folder in [BASE_DIR, net_dir]:
+        for fname in ["contacts_schedules.json", "carriers_contacts.json"]:
+            p = os.path.join(folder, fname)
+            if os.path.exists(p):
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        return json.load(f)
+                except Exception as e:
+                    logger.warning("Ошибка чтения %s: %s", p, e)
     return {}
 
 
@@ -628,13 +649,15 @@ def get_schedule_carrier_email(carrier_name: str, fallback_email: str = "") -> s
 
 
 def load_orders_contacts() -> dict[str, str]:
-    p = os.path.join(BASE_DIR, "contacts_orders.json")
-    if os.path.exists(p):
-        try:
-            with open(p, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            logger.warning("Ошибка чтения %s: %s", p, e)
+    net_dir = r"L:\ОТДЕЛЫ\ТРАНСПОРТНЫЙ ОТДЕЛ\Рожков\РК недельные графики + заявки"
+    for folder in [BASE_DIR, net_dir]:
+        p = os.path.join(folder, "contacts_orders.json")
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.warning("Ошибка чтения %s: %s", p, e)
     return {}
 
 
@@ -674,7 +697,7 @@ class EmailRequest(BaseModel):
 
 @app.get("/api/storage-info")
 def get_storage_info(request: Request):
-    check_auth(request, required_section="opt")
+    check_auth(request, required_section="opt_any")
     sch_dir = get_schedules_dir()
     ord_dir = get_orders_dir()
     return {
@@ -687,7 +710,7 @@ def get_storage_info(request: Request):
 
 @app.post("/api/upload")
 async def upload_file(request: Request, file: UploadFile = File(...)):
-    check_auth(request, required_section="opt")
+    check_auth(request, required_section="opt_schedules")
     try:
         temp_dir = tempfile.gettempdir()
         safe_name = os.path.basename(file.filename or "plan.xlsm")
@@ -784,7 +807,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
 
 @app.get("/api/list-ready-files")
 def list_ready_files(request: Request):
-    check_auth(request, required_section="opt")
+    check_auth(request, required_section="opt_schedules")
     try:
         schedules_dir = get_schedules_dir()
         if not os.path.exists(schedules_dir):
@@ -833,7 +856,7 @@ def list_ready_files(request: Request):
 
 @app.post("/api/select-file")
 def select_file(req: SelectFileRequest, request: Request):
-    check_auth(request, required_section="opt")
+    check_auth(request, required_section="opt_schedules")
     try:
         schedules_dir = get_schedules_dir()
         safe_name = os.path.basename(req.filename)
@@ -966,14 +989,14 @@ def _build_schedule_email_packages(req: EmailRequest) -> dict[str, Any]:
 @app.post("/api/prepare-emails")
 def prepare_schedule_emails(req: EmailRequest, request: Request):
     """Возвращает сформированные письма для отправки через локальный Outlook сотрудника."""
-    check_auth(request, required_section="opt")
+    check_auth(request, required_section="opt_schedules")
     return _build_schedule_email_packages(req)
 
 
 @app.post("/api/send-emails")
 def send_emails(req: EmailRequest, request: Request):
     """Отправка писем по графикам через локальный Outlook сервера (fallback)."""
-    check_auth(request, required_section="opt")
+    check_auth(request, required_section="opt_schedules")
     pkg = _build_schedule_email_packages(req)
     if pkg.get("status") != "success":
         return pkg
@@ -1034,7 +1057,7 @@ def send_emails(req: EmailRequest, request: Request):
 
 @app.post("/api/orders/generate")
 async def generate_orders_api(request: Request, file: UploadFile = File(...)):
-    check_auth(request, required_section="opt")
+    check_auth(request, required_section="opt_orders")
     try:
         temp_dir = tempfile.gettempdir()
         safe_name = os.path.basename(file.filename or "orders.xlsx")
@@ -1042,9 +1065,20 @@ async def generate_orders_api(request: Request, file: UploadFile = File(...)):
         with open(temp_path, "wb") as f:
             shutil.copyfileobj(file.file, f)
 
+        template_candidates = [
+            os.path.join(BASE_DIR, "Шаблон.docx"),
+            r"L:\ОТДЕЛЫ\ТРАНСПОРТНЫЙ ОТДЕЛ\Рожков\РК недельные графики + заявки\Шаблон.docx",
+            r"L:\ОТДЕЛЫ\ТРАНСПОРТНЫЙ ОТДЕЛ\Рожков\РК недельные графики + заявки\Заявки\Шаблон.docx",
+        ]
+        template_path = template_candidates[0]
+        for cand in template_candidates:
+            if os.path.exists(cand):
+                template_path = cand
+                break
+
         res = orders_core.process_daily_orders(
             input_excel_path=temp_path,
-            template_docx_path=os.path.join(BASE_DIR, "Шаблон.docx"),
+            template_docx_path=template_path,
             output_dir=get_orders_dir(),
         )
         CURRENT_ORDERS_STATE.update(res)
@@ -1055,7 +1089,7 @@ async def generate_orders_api(request: Request, file: UploadFile = File(...)):
 
 @app.get("/api/orders/download-file")
 def download_order_file(filename: str, request: Request):
-    check_auth(request, required_section="opt")
+    check_auth(request, required_section="opt_orders")
     orders_dir = get_orders_dir()
     clean_name = os.path.basename(filename)
     target_path = os.path.join(orders_dir, clean_name)
@@ -1066,7 +1100,7 @@ def download_order_file(filename: str, request: Request):
 
 @app.get("/api/orders/list-files")
 def list_orders_files(request: Request):
-    check_auth(request, required_section="opt")
+    check_auth(request, required_section="opt_orders")
     try:
         orders_dir = get_orders_dir()
         if not os.path.exists(orders_dir):
@@ -1168,14 +1202,14 @@ def _build_orders_email_packages(req: EmailRequest, include_base64: bool = False
 @app.post("/api/orders/prepare-emails")
 def prepare_orders_emails(req: EmailRequest, request: Request):
     """Возвращает пакет писем с вложениями .docx для отправки через локальный Outlook сотрудника."""
-    check_auth(request, required_section="opt")
+    check_auth(request, required_section="opt_orders")
     return _build_orders_email_packages(req, include_base64=True)
 
 
 @app.post("/api/orders/send-emails")
 def send_orders_emails(req: EmailRequest, request: Request):
     """Отправка индивидуальных заявок перевозчикам с вложением .docx (локальный Outlook сервера)."""
-    check_auth(request, required_section="opt")
+    check_auth(request, required_section="opt_orders")
     pkg = _build_orders_email_packages(req, include_base64=False)
     if pkg.get("status") != "success":
         return pkg
@@ -1607,7 +1641,7 @@ async def download_single_pdf(task_id: str, filename: str, request: Request):
 async def server_status():
     return {
         "status": "online",
-        "version": "v43",
+        "version": PORTAL_VERSION,
         "queue_size": job_queue.qsize(),
         "total_jobs": len(jobs_db),
     }
@@ -1618,7 +1652,7 @@ def main():
     port = 8000
 
     print("=" * 68)
-    print("    🚀 ПУЛЬС — ТРАНСПОРТНАЯ ЛОГИСТИКА (v43) — ПОРТАЛ ЗАПУЩЕН!    ")
+    print(f"    🚀 ПУЛЬС — ТРАНСПОРТНАЯ ЛОГИСТИКА (Версия {PORTAL_VERSION}) — ЗАПУЩЕН!    ")
     print("=" * 68)
     print(f"  • Ссылка на этом компьютере:   http://localhost:{port}")
     print(f"  • Ссылка для коллег в офисе:   http://{local_ip}:{port}")

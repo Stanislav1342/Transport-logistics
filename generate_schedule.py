@@ -60,6 +60,7 @@ def find_city_sequence_file(base_dir=None):
         search_dirs.append(base_dir)
     user_home = os.path.expanduser('~')
     search_dirs.extend([
+        r"L:\ОТДЕЛЫ\ТРАНСПОРТНЫЙ ОТДЕЛ\Рожков\РК недельные графики + заявки",
         os.path.dirname(os.path.abspath(__file__)),
         os.path.join(user_home, 'Downloads'),
         os.path.join(user_home, 'Загрузки'),
@@ -221,6 +222,7 @@ def find_tariffs_file(base_dir=None):
         search_dirs.append(base_dir)
     user_home = os.path.expanduser('~')
     search_dirs.extend([
+        r"L:\ОТДЕЛЫ\ТРАНСПОРТНЫЙ ОТДЕЛ\Рожков\РК недельные графики + заявки",
         os.path.dirname(os.path.abspath(__file__)),
         os.path.join(user_home, 'Downloads'),
         os.path.join(user_home, 'Загрузки'),
