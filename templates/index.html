@@ -773,7 +773,7 @@
             <p>Единый корпоративный портал автоматизации транспортной логистики ФК «ПУЛЬС» (РЦ Черная Грязь)</p>
           </div>
           <span class="badge" id="portal-version-badge">
-            <span class="badge-dot"></span> Версия 1.0
+            <span class="badge-dot"></span> Версия 1.1
           </span>
         </div>
 
@@ -898,6 +898,19 @@
               </button>
               <button class="btn btn-outline" onclick="openSendModal('select')">
                 👤 Выбрать конкретного перевозчика...
+              </button>
+            </div>
+            <div id="freeTripsBlock" style="display:none; margin-top: 14px; padding: 14px 16px; background: #fffbeb; border: 1px solid #fde68a; border-left: 4px solid #f59e0b; border-radius: 8px; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;">
+              <div>
+                <div style="font-size: 13.5px; font-weight: 700; color: #92400e;" id="freeTripsLabel">
+                  ❓ В графике обнаружены свободные рейсы со знаком «?»
+                </div>
+                <div style="font-size: 12.5px; color: #b45309; margin-top: 2px;">
+                  Разослать уведомление об этих свободных рейсах всем перевозчикам из базы контактов
+                </div>
+              </div>
+              <button class="btn btn-primary" style="background: #d97706;" onclick="openSendModal('free')">
+                📢 Разослать свободные рейсы («?») всем
               </button>
             </div>
           </div>
@@ -1109,8 +1122,11 @@
                 <input type="text" id="new-user-position" placeholder="Логист по транспорту" required>
               </div>
               <div>
-                <label class="form-label">PIN-код (6 цифр):</label>
-                <input type="text" id="new-user-pin" maxlength="6" pattern="[0-9]{6}" placeholder="654321" required>
+                <label class="form-label">PIN-код (6 цифр, автогенерация):</label>
+                <div style="display: flex; gap: 8px;">
+                  <input type="text" id="new-user-pin" maxlength="6" pattern="[0-9]{6}" placeholder="Автогенерация" required style="font-family: ui-monospace, monospace; font-weight: 700; letter-spacing: 2px;">
+                  <button type="button" class="btn btn-outline" style="padding: 8px 12px; flex-shrink: 0;" title="Сгенерировать новый уникальный PIN-код" onclick="generateRandomPinForInput()">🎲 Сгенерировать</button>
+                </div>
               </div>
             </div>
 
@@ -1266,6 +1282,36 @@
       <div class="modal-footer">
         <button class="btn btn-outline" onclick="closeFileSelectModal()">Отмена</button>
         <button class="btn btn-primary" id="confirmFileSelectBtn" onclick="confirmSelectedFile()" disabled>Выбрать и обновить данные</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── МОДАЛЬНОЕ ОКНО КАРТОЧКИ СОТРУДНИКА ДЛЯ ОТПРАВКИ ────── -->
+  <div class="modal-backdrop" id="userInfoModal">
+    <div class="modal" style="max-width: 480px;">
+      <div class="modal-header">
+        <h3>ℹ️ Данные сотрудника для входа</h3>
+        <button class="modal-close" onclick="closeUserInfoModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 12px;">
+          Карточка доступа сотрудника (нажмите «Скопировать для отправки», чтобы переслать коллеге в мессенджер или почту):
+        </p>
+        <div id="userInfoCardBox" style="background: #f8fafc; border: 1px solid var(--border); border-radius: 10px; padding: 16px; font-size: 14px; line-height: 1.7;">
+          <div><span style="color: var(--text-muted);">ФИО сотрудника:</span> <b id="info-user-name">—</b></div>
+          <div><span style="color: var(--text-muted);">Должность:</span> <b id="info-user-pos">—</b></div>
+          <div style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border);">
+            <div><span style="color: var(--text-muted);">Логин для входа:</span> <b id="info-user-login" style="font-family: ui-monospace, monospace; color: var(--primary); font-size: 15px;">—</b></div>
+            <div><span style="color: var(--text-muted);">Персональный PIN-код:</span> <b id="info-user-pin" style="font-family: ui-monospace, monospace; color: #15803d; font-size: 16px; letter-spacing: 1px;">—</b></div>
+          </div>
+        </div>
+        <div id="copyUserInfoSuccess" style="display: none; margin-top: 10px; text-align: center; font-size: 13px; font-weight: 600; color: #15803d;">
+          ✅ Данные скопированы в буфер обмена!
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="closeUserInfoModal()">Закрыть</button>
+        <button class="btn btn-primary" onclick="copyUserInfoToClipboard()">📋 Скопировать для отправки</button>
       </div>
     </div>
   </div>
@@ -1516,12 +1562,66 @@
 
       if (section === 'admin') {
         loadAdminUsers();
+        const pinInput = document.getElementById('new-user-pin');
+        if (pinInput && !pinInput.value) {
+          generateRandomPinForInput();
+        }
       }
     }
 
     // =========================================================================
     // АДМИН-ПАНЕЛЬ УПРАВЛЕНИЯ УЧЕТКАМИ
     // =========================================================================
+    window.adminUsersList = [];
+
+    async function generateRandomPinForInput() {
+      const pinInput = document.getElementById('new-user-pin');
+      if (!pinInput) return;
+      try {
+        const resp = await fetch('/api/admin/generate-pin', { headers: authHeaders() });
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.pin) {
+            pinInput.value = data.pin;
+            return;
+          }
+        }
+      } catch (e) {}
+      // Локальный резервный генератор 6 цифр
+      pinInput.value = String(Math.floor(100000 + Math.random() * 900000));
+    }
+
+    function openUserInfoModal(login, directUserObj = null) {
+      const u = directUserObj || (window.adminUsersList || []).find(item => item.login === login);
+      if (!u) return;
+
+      document.getElementById('info-modal-name').innerText = u.full_name || '—';
+      document.getElementById('info-modal-position').innerText = u.position || 'Специалист отдела логистики';
+      document.getElementById('info-modal-login').innerText = u.login || '—';
+      document.getElementById('info-modal-pin').innerText = u.pin_plain || '••••••';
+
+      document.getElementById('userInfoModal').classList.add('active');
+    }
+
+    function closeUserInfoModal() {
+      document.getElementById('userInfoModal').classList.remove('active');
+    }
+
+    async function copyUserInfoToClipboard() {
+      const name = document.getElementById('info-modal-name').innerText;
+      const pos = document.getElementById('info-modal-position').innerText;
+      const login = document.getElementById('info-modal-login').innerText;
+      const pin = document.getElementById('info-modal-pin').innerText;
+
+      const text = `Данные для входа в портал «ПУЛЬС — Транспортная логистика»:\nФИО: ${name}\nДолжность: ${pos}\nЛогин: ${login}\nPIN-код: ${pin}`;
+      try {
+        await navigator.clipboard.writeText(text);
+        alert('✅ Данные сотрудника скопированы в буфер обмена!');
+      } catch (e) {
+        prompt('Скопируйте данные сотрудника:', text);
+      }
+    }
+
     async function loadAdminUsers() {
       const tbody = document.getElementById('admin-users-tbody');
       if (!tbody) return;
@@ -1531,6 +1631,7 @@
         const data = await resp.json();
         if (data.status !== 'success') return;
 
+        window.adminUsersList = data.users || [];
         tbody.innerHTML = '';
         data.users.forEach(u => {
           const perms = u.permissions || [];
@@ -1574,15 +1675,16 @@
               </span>
             </td>
             <td style="text-align: right;">
-              ${u.is_master ? '<span style="font-size:12px;color:var(--text-muted);">Управляется через .env</span>' : `
-                <div style="display:inline-flex;gap:6px;">
+              <div style="display:inline-flex;gap:6px;align-items:center;">
+                <button class="btn btn-outline btn-sm" title="Карточка сотрудника (Логин и PIN)" onclick="openUserInfoModal('${u.login}')">ℹ️ Инфо</button>
+                ${u.is_master ? '<span style="font-size:12px;color:var(--text-muted);margin-left:4px;">.env</span>' : `
                   <button class="btn btn-outline btn-sm" onclick="promptChangePin('${u.login}')">🔑 PIN</button>
                   <button class="btn btn-outline btn-sm" onclick="toggleUserActive('${u.login}', ${!u.is_active})">
                     ${u.is_active ? '🚫 Блок' : '✅ Разблок'}
                   </button>
                   <button class="btn btn-danger btn-sm" onclick="deleteUserAccount('${u.login}')">Удалить</button>
-                </div>
-              `}
+                `}
+              </div>
             </td>
           `;
           tbody.appendChild(tr);
@@ -1616,9 +1718,11 @@
         document.getElementById('new-user-login').value = '';
         document.getElementById('new-user-name').value = '';
         document.getElementById('new-user-position').value = '';
-        document.getElementById('new-user-pin').value = '';
-        loadAdminUsers();
-        alert(`✅ Учетная запись '${login}' (${full_name}) успешно создана!`);
+        await loadAdminUsers();
+        await generateRandomPinForInput();
+        if (data.user) {
+          openUserInfoModal(data.user.login, data.user);
+        }
       } catch (e) {
         alert('Ошибка сети: ' + e);
       }
@@ -1667,7 +1771,16 @@
     }
 
     async function promptChangePin(login) {
-      const newPin = prompt(`Введите новый 6-значный PIN-код для сотрудника ${login}:`);
+      let suggestedPin = String(Math.floor(100000 + Math.random() * 900000));
+      try {
+        const r = await fetch('/api/admin/generate-pin', { headers: authHeaders() });
+        if (r.ok) {
+          const d = await r.json();
+          if (d.pin) suggestedPin = d.pin;
+        }
+      } catch (e) {}
+
+      const newPin = prompt(`Введите новый 6-значный PIN-код для сотрудника ${login} (предложен сгенерированный):`, suggestedPin);
       if (!newPin) return;
       if (!/^\d{6}$/.test(newPin.trim())) {
         alert('PIN-код должен состоять ровно из 6 цифр!');
@@ -1679,7 +1792,11 @@
         body: JSON.stringify({ pin: newPin.trim() })
       });
       if (resp.ok) {
-        alert(`✅ PIN-код для '${login}' успешно обновлен!`);
+        const data = await resp.json();
+        await loadAdminUsers();
+        if (data.user) {
+          openUserInfoModal(data.user.login, data.user);
+        }
       }
     }
 
@@ -1725,7 +1842,11 @@
     function updateScheduleUIWithData(data) {
       document.getElementById('statWeek').innerText = data.week_range;
       document.getElementById('statTotal').innerText = data.total_trips + ' машин';
-      document.getElementById('statCarriers').innerText = data.carriers.length;
+      const regularCarriers = (data.carriers || []).filter(c => c.name !== '?');
+      const freeCarrierObj = (data.carriers || []).find(c => c.name === '?');
+      const freeTripsCount = data.free_trips_count !== undefined ? data.free_trips_count : (freeCarrierObj ? freeCarrierObj.count : 0);
+
+      document.getElementById('statCarriers').innerText = regularCarriers.length;
       document.getElementById('statCost').innerText = data.total_cost || '-';
       document.getElementById('currentFileLabel').innerText = 'Файл: ' + data.filename;
       const noTarLabel = document.getElementById('currentNoTariffFileLabel');
@@ -1734,17 +1855,34 @@
       }
       currentLoadedFilename = data.filename;
 
-      availableCarriers = data.carriers;
+      availableCarriers = regularCarriers;
       const container = document.getElementById('carriersContainer');
       container.innerHTML = '';
       const select = document.getElementById('carrierSelect');
       select.innerHTML = '';
 
       data.carriers.forEach(c => {
-        const costStr = c.cost_str ? ` • ${c.cost_str}` : '';
-        container.innerHTML += `<div class="carrier-tag">${c.name} <span>${c.count} рейсов${costStr}</span></div>`;
-        select.innerHTML += `<option value="${c.name}">${c.name} (${c.count} рейсов${costStr})</option>`;
+        if (c.name === '?') {
+          container.innerHTML += `<div class="carrier-tag" style="background:#fff7ed;border-color:#fdba74;color:#9a3412;">❓ Свободные рейсы («?») <span style="color:#c2410c;">${c.count} рейсов • без перевозчика</span></div>`;
+        } else {
+          const costStr = c.cost_str ? ` • ${c.cost_str}` : '';
+          container.innerHTML += `<div class="carrier-tag">${c.name} <span>${c.count} рейсов${costStr}</span></div>`;
+          select.innerHTML += `<option value="${c.name}">${c.name} (${c.count} рейсов${costStr})</option>`;
+        }
       });
+
+      const freeBlock = document.getElementById('freeTripsBlock');
+      const freeLabel = document.getElementById('freeTripsLabel');
+      if (freeBlock) {
+        if (freeTripsCount > 0) {
+          freeBlock.style.display = 'flex';
+          if (freeLabel) {
+            freeLabel.innerText = `❓ Найдено свободных рейсов со знаком «?»: ${freeTripsCount} шт.`;
+          }
+        } else {
+          freeBlock.style.display = 'none';
+        }
+      }
 
       document.getElementById('resultCard').style.display = 'block';
       document.getElementById('emailCard').style.display = 'block';
@@ -1938,6 +2076,9 @@
       if (target === 'select') {
         title.innerText = 'Отправка графика перевозчику';
         selectGroup.style.display = 'block';
+      } else if (target === 'free') {
+        title.innerText = '📢 Рассылка свободных рейсов («?») всем перевозчикам';
+        selectGroup.style.display = 'none';
       } else {
         title.innerText = 'Отправка графика ВСЕМ перевозчикам';
         selectGroup.style.display = 'none';
@@ -1955,8 +2096,10 @@
       if (currentSendTarget === 'select') {
         const carrier = document.getElementById('carrierSelect').value;
         info.innerHTML = `<b>Получатель:</b> ${carrier}`;
+      } else if (currentSendTarget === 'free') {
+        info.innerHTML = `<b>Получатели:</b> Все перевозчики из базы контактов (предложение забрать свободные рейсы со знаком «?»)`;
       } else {
-        info.innerHTML = `<b>Получатели:</b> Все перевозчики (${availableCarriers.length} адресатов)`;
+        info.innerHTML = `<b>Получатели:</b> Все назначенные перевозчики из графика (${availableCarriers.length} адресатов)`;
       }
     }
 
@@ -2002,10 +2145,11 @@
       document.getElementById('sendingStatus').style.display = 'block';
 
       try {
+        const isFreeBroadcast = (currentSendTarget === 'free');
         const res = await dispatchViaLocalOutlookOrServer(
-          '/api/prepare-emails',
-          '/api/send-emails',
-          { mode, carrier }
+          isFreeBroadcast ? '/api/prepare-free-trips-emails' : '/api/prepare-emails',
+          isFreeBroadcast ? '/api/send-free-trips-emails' : '/api/send-emails',
+          isFreeBroadcast ? { mode } : { mode, carrier }
         );
         if (res.status === 'success' || res.status === 'warning') {
           alert(res.message);

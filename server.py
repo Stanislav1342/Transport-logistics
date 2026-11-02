@@ -73,7 +73,7 @@ except ImportError:
 
 # ─── Настройка FastAPI и CORS ─────────────────────────────────────────────────
 
-PORTAL_VERSION = "1.0"
+PORTAL_VERSION = "1.1"
 app = FastAPI(title="ПУЛЬС — Транспортная логистика", version=f"v{PORTAL_VERSION}")
 
 ALLOWED_ORIGIN_REGEX = (
@@ -186,6 +186,7 @@ def _load_users_db() -> dict[str, dict[str, Any]]:
         "is_master": True,
         "salt": admin_salt,
         "pin_hash": _hash_pin(admin_pin, admin_salt),
+        "pin_plain": admin_pin,
         "created_at": users.get(admin_login, {}).get("created_at")
         or datetime.datetime.now().strftime("%d.%m.%Y %H:%M"),
     }
@@ -248,8 +249,8 @@ def _record_failed_attempt(client_ip: str) -> None:
     attempts.append(now)
 
 
-def _sanitize_user_public(u: dict[str, Any]) -> dict[str, Any]:
-    return {
+def _sanitize_user_public(u: dict[str, Any], include_pin: bool = False) -> dict[str, Any]:
+    res = {
         "login": u["login"],
         "full_name": u.get("full_name", u["login"]),
         "position": u.get("position", "") or "Специалист отдела логистики",
@@ -259,6 +260,9 @@ def _sanitize_user_public(u: dict[str, Any]) -> dict[str, Any]:
         "is_master": bool(u.get("is_master", False)),
         "created_at": u.get("created_at", ""),
     }
+    if include_pin:
+        res["pin_plain"] = u.get("pin_plain", "••••••")
+    return res
 
 
 def check_auth(
@@ -336,7 +340,7 @@ class CreateUserRequest(BaseModel):
     login: str = Field(..., min_length=3, max_length=35)
     full_name: str = Field(..., min_length=2, max_length=80)
     position: str = Field(default="Специалист отдела логистики", max_length=100)
-    pin: str = Field(..., pattern=r"^\d{6}$")
+    pin: Optional[str] = Field(default=None)
     permissions: list[str] = Field(default_factory=lambda: ["opt_schedules", "opt_orders", "thermo"])
     role: str = Field(default="user")
 
@@ -422,9 +426,27 @@ async def admin_list_users(request: Request):
     check_auth(request, require_admin=True)
     with USERS_LOCK:
         users = _load_users_db()
-    result = [_sanitize_user_public(u) for u in users.values()]
+    result = [_sanitize_user_public(u, include_pin=True) for u in users.values()]
     result.sort(key=lambda x: (not x["is_master"], x["login"]))
     return {"status": "success", "users": result}
+
+
+def _generate_unique_pin(users: dict[str, dict[str, Any]]) -> str:
+    existing_pins = {u.get("pin_plain") for u in users.values() if u.get("pin_plain")}
+    for _ in range(200):
+        candidate = f"{secrets.randbelow(900000) + 100000}"
+        if candidate not in existing_pins:
+            return candidate
+    return f"{secrets.randbelow(900000) + 100000}"
+
+
+@app.get("/api/admin/generate-pin")
+async def admin_generate_pin(request: Request):
+    check_auth(request, require_admin=True)
+    with USERS_LOCK:
+        users = _load_users_db()
+        pin = _generate_unique_pin(users)
+    return {"status": "success", "pin": pin}
 
 
 @app.post("/api/admin/users")
@@ -451,6 +473,15 @@ async def admin_create_user(payload: CreateUserRequest, request: Request):
                 detail=f"Учетная запись '{login_clean}' уже существует",
             )
 
+        pin_clean = (payload.pin or "").strip()
+        if not pin_clean:
+            pin_clean = _generate_unique_pin(users)
+        elif not re.match(r"^\d{6}$", pin_clean):
+            raise HTTPException(
+                status_code=400,
+                detail="PIN-код должен состоять ровно из 6 цифр",
+            )
+
         salt = secrets.token_hex(16)
         new_user = {
             "login": login_clean,
@@ -461,14 +492,15 @@ async def admin_create_user(payload: CreateUserRequest, request: Request):
             "is_active": True,
             "is_master": False,
             "salt": salt,
-            "pin_hash": _hash_pin(payload.pin.strip(), salt),
+            "pin_hash": _hash_pin(pin_clean, salt),
+            "pin_plain": pin_clean,
             "created_at": datetime.datetime.now().strftime("%d.%m.%Y %H:%M"),
         }
         users[login_clean] = new_user
         _save_users_db(users)
 
     logger.info("Администратор создал учетную запись: %s (%s)", login_clean, payload.full_name)
-    return {"status": "success", "user": _sanitize_user_public(new_user)}
+    return {"status": "success", "user": _sanitize_user_public(new_user, include_pin=True)}
 
 
 @app.post("/api/admin/users/{target_login}/update")
@@ -522,11 +554,12 @@ async def admin_update_user(target_login: str, payload: UpdateUserRequest, reque
             salt = secrets.token_hex(16)
             user["salt"] = salt
             user["pin_hash"] = _hash_pin(pin_val, salt)
+            user["pin_plain"] = pin_val
 
         _save_users_db(users)
 
     logger.info("Обновлены параметры учетной записи: %s", login_clean)
-    return {"status": "success", "user": _sanitize_user_public(user)}
+    return {"status": "success", "user": _sanitize_user_public(user, include_pin=True)}
 
 
 @app.post("/api/admin/users/{target_login}/delete")
@@ -780,6 +813,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
         no_tariff_path = core.get_no_tariffs_copy_path(target_path)
         no_tariff_filename = os.path.basename(no_tariff_path) if no_tariff_path else ""
         manual_trips_count = sum(1 for t in all_trips if t.get("is_manual"))
+        free_trips_list = [t for t in all_trips if str(t.get("carrier", "")).strip() == "?"]
 
         CURRENT_STATE["all_trips"] = all_trips
         CURRENT_STATE["week_range"] = week_range
@@ -799,6 +833,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
             "filename": out_filename,
             "no_tariff_filename": no_tariff_filename,
             "manual_trips": manual_trips_count,
+            "free_trips_count": len(free_trips_list),
             "is_edited": is_edited_schedule,
         }
     except Exception as e:
@@ -895,6 +930,7 @@ def select_file(req: SelectFileRequest, request: Request):
         no_tariff_path = core.get_no_tariffs_copy_path(target_path)
         no_tariff_filename = os.path.basename(no_tariff_path) if no_tariff_path else ""
         manual_trips_count = sum(1 for t in trips if t.get("is_manual"))
+        free_trips_list = [t for t in trips if str(t.get("carrier", "")).strip() == "?"]
 
         CURRENT_STATE["all_trips"] = trips
         CURRENT_STATE["week_range"] = week_range
@@ -910,6 +946,7 @@ def select_file(req: SelectFileRequest, request: Request):
             "filename": safe_name,
             "no_tariff_filename": no_tariff_filename,
             "manual_trips": manual_trips_count,
+            "free_trips_count": len(free_trips_list),
             "week_range": week_range,
             "total_trips": len(trips),
             "total_cost": total_cost_str,
@@ -940,7 +977,7 @@ def _build_schedule_email_packages(req: EmailRequest) -> dict[str, Any]:
     if req.carrier:
         target_trips = [t for t in trips_to_send if t["carrier"] == req.carrier]
     else:
-        target_trips = trips_to_send
+        target_trips = [t for t in trips_to_send if str(t.get("carrier", "")).strip() != "?"]
 
     if not target_trips:
         return {"status": "error", "message": "Рейсы для указанного перевозчика не найдены."}
@@ -1050,6 +1087,128 @@ def send_emails(req: EmailRequest, request: Request):
             "message": f"На сервере не установлен Outlook/pywin32 (подготовлено писем для {action_text}: {len(emails)} шт.). Для отправки со своего ПК запустите outlook_bridge.py.",
             "count": len(emails),
             "missing": missing_carriers,
+        }
+    except Exception as e:
+        return {"status": "error", "message": f"Ошибка Outlook: {str(e)}"}
+
+
+def _build_free_trips_email_packages(req: EmailRequest) -> dict[str, Any]:
+    """Формирует рассылку свободных рейсов (со знаком '?' в столбце Перевозчик) всем перевозчикам из базы."""
+    target_file = CURRENT_STATE.get("last_output_path")
+    if target_file and os.path.exists(target_file):
+        try:
+            disk_trips = core.parse_final_schedule_file(target_file)
+            if disk_trips:
+                CURRENT_STATE["all_trips"] = disk_trips
+        except Exception:
+            pass
+
+    all_trips = CURRENT_STATE.get("all_trips", [])
+    free_trips = [t for t in all_trips if str(t.get("carrier", "")).strip() == "?"]
+    if not free_trips:
+        return {
+            "status": "error",
+            "message": "В графике не найдено свободных рейсов со знаком '?' в колонке «Перевозчик».",
+        }
+
+    sorted_free = sorted(
+        free_trips,
+        key=lambda x: (
+            x.get("dt") or datetime.datetime.strptime(x["date"], "%d.%m.%Y"),
+            x["time"],
+        ),
+    )
+    dates = [tr["date"] for tr in sorted_free]
+    start_d = dates[0] if dates else ""
+    end_d = dates[-1] if dates else ""
+
+    contacts = load_schedules_contacts()
+    if not contacts:
+        return {
+            "status": "error",
+            "message": "База контактов перевозчиков (contacts_schedules.json) пуста или не найдена.",
+        }
+
+    # Группируем уникальные email-цепочки из базы контактов, чтобы не отправлять дубли одному и тому же перевозчику
+    seen_emails: set[str] = set()
+    emails = []
+    for car_name, email_str in contacts.items():
+        clean_email = (email_str or "").strip()
+        if not clean_email:
+            continue
+        email_key = clean_email.lower()
+        if email_key in seen_emails:
+            continue
+        seen_emails.add(email_key)
+
+        subj_dates = f"{start_d} - {end_d}" if start_d != end_d else start_d
+        emails.append(
+            {
+                "carrier": car_name,
+                "to": clean_email,
+                "subject": f"Свободные рейсы РЦ Черная Грязь ({subj_dates})",
+                "html_body": core.generate_free_trips_html(car_name, sorted_free, start_d, end_d),
+                "attachments": [],
+            }
+        )
+
+    return {
+        "status": "success",
+        "mode": req.mode,
+        "emails": emails,
+        "free_trips_count": len(sorted_free),
+        "missing": [],
+    }
+
+
+@app.post("/api/prepare-free-trips-emails")
+def prepare_free_trips_emails(req: EmailRequest, request: Request):
+    check_auth(request, required_section="opt_schedules")
+    return _build_free_trips_email_packages(req)
+
+
+@app.post("/api/send-free-trips-emails")
+def send_free_trips_emails(req: EmailRequest, request: Request):
+    check_auth(request, required_section="opt_schedules")
+    pkg = _build_free_trips_email_packages(req)
+    if pkg.get("status") != "success":
+        return pkg
+
+    emails = pkg.get("emails", [])
+    free_cnt = pkg.get("free_trips_count", 0)
+    draft_mode = (req.mode == "draft")
+
+    try:
+        import pythoncom
+        import win32com.client as win32
+
+        pythoncom.CoInitialize()
+        outlook = win32.Dispatch("outlook.application")
+
+        sent_count = 0
+        for item in emails:
+            mail = outlook.CreateItem(0)
+            mail.To = item["to"]
+            mail.Subject = item["subject"]
+            mail.HTMLBody = item["html_body"]
+            if draft_mode:
+                mail.Save()
+            else:
+                mail.Send()
+            sent_count += 1
+
+        action_text = "сохранено в Черновиках" if draft_mode else "отправлено"
+        return {
+            "status": "success",
+            "message": f"Рассылка о свободных рейсах ({free_cnt} рейс.) успешно выполнена: {action_text} {sent_count} писем всем перевозчикам из базы!",
+            "count": sent_count,
+        }
+    except ImportError:
+        action_text = "черновиков" if draft_mode else "отправки"
+        return {
+            "status": "warning",
+            "message": f"На сервере не установлен Outlook/pywin32 (подготовлено писем о свободных рейсах ({free_cnt} шт.) для {action_text}: {len(emails)} перевозчикам). Запустите outlook_bridge.py.",
+            "count": len(emails),
         }
     except Exception as e:
         return {"status": "error", "message": f"Ошибка Outlook: {str(e)}"}

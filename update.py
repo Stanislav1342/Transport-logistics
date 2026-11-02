@@ -31,14 +31,15 @@ PROTECTED_FILES = {
 
 
 def update_from_github() -> None:
-    print("=" * 64)
-    print("  🔄 ОБНОВЛЕНИЕ ПРОЕКТА ADVANTUM С GITHUB (БЕЗ GIT.EXE)")
-    print("=" * 64)
-    print(f"Скачивание архива: {REPO_ZIP_URL} ...")
+    print("=" * 68)
+    print("  🔄 ОБНОВЛЕНИЕ ПОРТАЛА «ПУЛЬС — ТРАНСПОРТНАЯ ЛОГИСТИКА» С GITHUB")
+    print("=" * 68)
+    print(f"Репозиторий: {REPO_ZIP_URL}")
+    print("Скачивание актуальной версии...")
 
     req = urllib.request.Request(
         REPO_ZIP_URL,
-        headers={"User-Agent": "Advantum-Updater/1.0"},
+        headers={"User-Agent": "Puls-Transport-Logistics-Updater/1.1"},
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         zip_bytes = resp.read()
@@ -51,7 +52,7 @@ def update_from_github() -> None:
             if member.is_dir():
                 continue
 
-            # Убираем корневую папку архива (Advantum-main/)
+            # Убираем корневую папку архива (Transport-logistics-main/)
             parts = member.filename.split("/", 1)
             if len(parts) < 2 or not parts[1]:
                 continue
@@ -68,10 +69,10 @@ def update_from_github() -> None:
             updated_count += 1
             print(f"  [Обновлен] {rel_path}")
 
-    print("=" * 64)
+    print("=" * 68)
     print(f"  ✅ Обновление успешно завершено! Обновлено файлов: {updated_count}")
-    print("  🔒 Ваш файл .env с паролями и PIN-кодом сохранен без изменений.")
-    print("=" * 64)
+    print("  🔒 Ваши локальные справочники, .env и база учеток сохранены.")
+    print("=" * 68)
 
 
 if __name__ == "__main__":

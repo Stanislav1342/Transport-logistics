@@ -919,7 +919,11 @@ def parse_final_schedule_file(excel_path):
             else:
                 delivery_dt = calculate_delivery_datetime(dt_obj or date_str, time_str, city_str)
                 delivery_str = delivery_dt.strftime('%d.%m.%Y %H:%M')
-                    
+
+            raw_car = str(carrier_val or 'ТК Сияние').strip()
+            if raw_car in ('?', '??', '???', '？'):
+                raw_car = '?'
+
             all_trips.append({
                 'date': date_str,
                 'dt': dt_obj,
@@ -927,9 +931,9 @@ def parse_final_schedule_file(excel_path):
                 'month': str(month_val).strip(),
                 'city': city_str,
                 'truck_num': truck_num,
-                'carrier': str(carrier_val or 'ТК Сияние').strip(),
+                'carrier': raw_car,
                 'pallets': pallets,
-                'tariff': tariff_num,
+                'tariff': 0 if raw_car == '?' else tariff_num,
                 'time': time_str,
                 'delivery_dt': delivery_dt,
                 'delivery_str': delivery_str,
@@ -1409,7 +1413,10 @@ def refresh_schedule_file_summary(excel_path):
 
             city_clean = city_norm.get(city_str, city_str)
             car_raw_str = str(c_car or '').strip()
-            car_clean = carriers_norm.get(car_raw_str, car_raw_str) if car_raw_str else 'ТК Сияние'
+            if car_raw_str in ('?', '??', '???', '？'):
+                car_clean = '?'
+            else:
+                car_clean = carriers_norm.get(car_raw_str, car_raw_str) if car_raw_str else 'ТК Сияние'
 
             # Признак 1: строка уже была выделена цветом (при прошлом обновлении или самим сотрудником)
             already_colored = any(is_cell_manual_fill(c) for c in row_check_cells if c is not None)
@@ -1541,15 +1548,18 @@ def refresh_schedule_file_summary(excel_path):
                 if t['pallets'] not in (33, 40):
                     t['pallets'] = 33
 
-            # Тариф: автозаполнение из Тарифы.xlsx
-            calc_tar = tariffs_cached.get(c, {}).get(t['carrier'], 0)
-            known_city_tariffs = set(tariffs_cached.get(c, {}).values())
-            if t['tariff'] == 0 and calc_tar > 0:
-                t['tariff'] = calc_tar
-            elif calc_tar > 0 and t['tariff'] != calc_tar:
-                # Если в ячейке остался тариф другого перевозчика по этому городу (сменили перевозчика)
-                if t['tariff'] in known_city_tariffs:
+            # Тариф: автозаполнение из Тарифы.xlsx (для свободных рейсов '?' тариф = 0)
+            if t['carrier'] == '?':
+                t['tariff'] = 0
+            else:
+                calc_tar = tariffs_cached.get(c, {}).get(t['carrier'], 0)
+                known_city_tariffs = set(tariffs_cached.get(c, {}).values())
+                if t['tariff'] == 0 and calc_tar > 0:
                     t['tariff'] = calc_tar
+                elif calc_tar > 0 and t['tariff'] != calc_tar:
+                    # Если в ячейке остался тариф другого перевозчика по этому городу (сменили перевозчика)
+                    if t['tariff'] in known_city_tariffs:
+                        t['tariff'] = calc_tar
 
         # 5. Пересчитываем время погрузки строго по правилу: 2 машины в час
         for trip_idx, t in enumerate(sorted_trips):
@@ -1802,6 +1812,78 @@ def generate_carrier_html(carrier_name, trips, start_date_str, end_date_str):
         
         <div class="footer">
             Данное сообщение сформировано автоматически и предназначено исключительно для перевозчика {carrier_name}. Конфиденциально.
+        </div>
+    </body>
+    </html>
+    """
+    return html
+
+
+def generate_free_trips_html(carrier_name, free_trips, start_date_str, end_date_str):
+    """Генерирует HTML-письмо о наличии свободных актуальных рейсов (отмеченных знаком '?' в графике)"""
+    rows_html = ""
+    for tr in free_trips:
+        bg_color = "#fff2cc" if tr.get('pallets') == 40 else "#ffffff"
+        deliv_str = tr.get('delivery_str') or tr.get('deliv_date') or ''
+        day_str = tr.get('day') or ''
+        city_str = tr.get('city') or tr.get('route') or ''
+        time_str = str(tr.get('time', ''))[:5]
+        truck_str = str(tr.get('truck_num', ''))
+        pal_str = str(tr.get('pallets', ''))
+        rows_html += f"""
+        <tr style="background-color: {bg_color}; text-align: center;">
+            <td style="padding: 8px; border: 1px solid #d9d9d9;">{tr.get('date', '')}</td>
+            <td style="padding: 8px; border: 1px solid #d9d9d9; font-weight: bold;">{day_str}</td>
+            <td style="padding: 8px; border: 1px solid #d9d9d9; font-weight: bold; color: #1f4e79;">{time_str}</td>
+            <td style="padding: 8px; border: 1px solid #d9d9d9; text-align: left; font-weight: bold;">{city_str}</td>
+            <td style="padding: 8px; border: 1px solid #d9d9d9;">№ {truck_str}</td>
+            <td style="padding: 8px; border: 1px solid #d9d9d9;">{pal_str} пал.</td>
+            <td style="padding: 8px; border: 1px solid #d9d9d9; font-weight: bold; color: #1f4e79;">{deliv_str}</td>
+        </tr>
+        """
+
+    count_word = "свободный актуальный рейс" if len(free_trips) == 1 else "свободные актуальные рейсы"
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            body {{ font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.5; }}
+            table {{ border-collapse: collapse; width: 100%; max-width: 720px; margin-top: 15px; margin-bottom: 20px; }}
+            th {{ background-color: #c55a11; color: #ffffff; padding: 10px; border: 1px solid #c55a11; text-align: center; }}
+            .footer {{ font-size: 12px; color: #7f7f7f; margin-top: 25px; border-top: 1px solid #e0e0e0; padding-top: 10px; }}
+        </style>
+    </head>
+    <body>
+        <p>Добрый день!</p>
+        <p>Информируем вас о том, что с РЦ Черная Грязь появился <b>{count_word}</b> на отгрузку.<br>
+        Просим оперативно сообщить о вашей готовности забрать указанный объем:</p>
+        
+        <table>
+            <thead>
+                <tr>
+                    <th>Дата погрузки</th>
+                    <th>День</th>
+                    <th>Время</th>
+                    <th>Направление</th>
+                    <th>№ ТС</th>
+                    <th>Паллеты</th>
+                    <th>Дата доставки</th>
+                </tr>
+            </thead>
+            <tbody>
+                {rows_html}
+            </tbody>
+        </table>
+        
+        <p>При готовности взять рейс в работу, пожалуйста, ответьте на данное письмо с подтверждением.</p>
+        
+        <p>С уважением,<br>
+        Транспортный отдел ФК «ПУЛЬС»</p>
+        
+        <div class="footer">
+            Автоматическое уведомление о свободных рейсах РЦ Черная Грязь ({carrier_name}).
         </div>
     </body>
     </html>
