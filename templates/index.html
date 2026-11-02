@@ -664,7 +664,7 @@
           <input
             type="text"
             id="modal-login-input"
-            placeholder="s.khvostov"
+            placeholder="i.ivanov"
             autocomplete="username"
             required
           >
@@ -770,45 +770,77 @@
         <div class="page-header">
           <div>
             <h2 id="welcome-title">Добро пожаловать!</h2>
-            <p>Единый корпоративный портал автоматизации транспортной логистики ФК «ПУЛЬС»</p>
+            <p>Единый корпоративный портал автоматизации транспортной логистики ФК «ПУЛЬС» (РЦ Черная Грязь)</p>
+          </div>
+          <span class="badge">
+            <span class="badge-dot"></span> Сервер активен
+          </span>
+        </div>
+
+        <div class="card">
+          <div class="card-title">📌 О корпоративном портале</div>
+          <p style="font-size: 14.5px; color: var(--text); margin-bottom: 14px; line-height: 1.65;">
+            Добро пожаловать в единую систему автоматизации транспортного отдела <b>ФК «ПУЛЬС»</b>.
+            Портал объединяет ключевые рабочие инструменты отдела в одном защищенном веб-интерфейсе с персональным разграничением прав доступа.
+          </p>
+          <div style="background: #f8fafc; border: 1px solid var(--border-light); border-left: 4px solid var(--primary); border-radius: 8px; padding: 14px 18px; margin-bottom: 18px;">
+            <div style="font-size: 13.5px; font-weight: 700; color: var(--primary); margin-bottom: 6px;">
+              👈 Навигация по сервису
+            </div>
+            <div style="font-size: 13.5px; color: #334155; line-height: 1.55;">
+              Для перехода к нужному рабочему инструменту используйте <b>боковое меню слева</b>. В меню отображаются только те разделы, к которым открыт доступ для вашей учетной записи.
+            </div>
+          </div>
+
+          <div class="stats-row" style="margin-top: 8px;">
+            <div class="stat-box">
+              <div class="stat-label">Текущий сотрудник</div>
+              <div class="stat-value" id="home-user-fullname" style="font-size: 15px;">—</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">Корпоративный логин</div>
+              <div class="stat-value" id="home-user-login" style="font-size: 15px; font-family: ui-monospace, monospace;">—</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">Уровень доступа</div>
+              <div class="stat-value" id="home-user-role" style="font-size: 15px; color: #15803d;">—</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">Автоблокировка</div>
+              <div class="stat-value" style="font-size: 15px; color: #475569;">30 минут бездействия</div>
+            </div>
           </div>
         </div>
 
-        <div class="home-grid">
-          <div class="module-card" id="home-card-opt-schedules" style="display: none;" onclick="openSection('opt-schedules')">
-            <div>
-              <div class="module-icon">📊</div>
-              <h3>ОПТ: Графики РК (Отгрузки филиалов)</h3>
-              <p>Формирование недельных графиков отгрузки филиалов, автоматическое распределение рейсов по перевозчикам с учетом тарифов и рассылка в Outlook.</p>
+        <div class="card">
+          <div class="card-title">📖 Краткая памятка по работе с разделами</div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px;">
+            <div style="background: #f8fafc; border: 1px solid var(--border-light); border-radius: 10px; padding: 16px;">
+              <div style="font-weight: 700; font-size: 14px; color: var(--primary); margin-bottom: 6px;">
+                📊 ОПТ &rarr; Графики РК
+              </div>
+              <div style="font-size: 13px; color: var(--text-muted); line-height: 1.5;">
+                Распределение недельных планов отгрузок филиалов по перевозчикам с учетом тарифов и исключений, сохранение готовых графиков на сетевой диск <b>L:</b> и рассылка таблиц рейсов в Outlook.
+              </div>
             </div>
-            <span class="btn btn-primary" style="align-self: flex-start;">Открыть Графики РК &rarr;</span>
-          </div>
 
-          <div class="module-card" id="home-card-opt-orders" style="display: none;" onclick="openSection('opt-orders')">
-            <div>
-              <div class="module-icon">📝</div>
-              <h3>ОПТ: Заявки перевозчикам</h3>
-              <p>Обработка суточного реестра отгрузок, группировка паллет, генерация индивидуальных транспортных заявок Word (.docx) и рассылка в Outlook.</p>
+            <div style="background: #f8fafc; border: 1px solid var(--border-light); border-radius: 10px; padding: 16px;">
+              <div style="font-weight: 700; font-size: 14px; color: var(--primary); margin-bottom: 6px;">
+                📝 ОПТ &rarr; Заявки перевозчикам
+              </div>
+              <div style="font-size: 13px; color: var(--text-muted); line-height: 1.5;">
+                Обработка суточного реестра отгрузок, автоматическая генерация файлов транспортных заявок Word (<b>.docx</b>) по шаблону и формирование писем с вложениями в Outlook.
+              </div>
             </div>
-            <span class="btn btn-primary" style="align-self: flex-start;">Открыть Заявки &rarr;</span>
-          </div>
 
-          <div class="module-card" id="home-card-thermo" style="display: none;" onclick="openSection('thermo')">
-            <div>
-              <div class="module-icon">🌡️</div>
-              <h3>Температурные графики</h3>
-              <p>Автоматическая пакетная выгрузка температурных графиков из системы Advantum по списку маршрутных листов (МЛ) в PDF и ZIP-архивы.</p>
+            <div style="background: #f8fafc; border: 1px solid var(--border-light); border-radius: 10px; padding: 16px;">
+              <div style="font-weight: 700; font-size: 14px; color: var(--primary); margin-bottom: 6px;">
+                🌡️ Температурные графики
+              </div>
+              <div style="font-size: 13px; color: var(--text-muted); line-height: 1.5;">
+                Пакетная автоматическая выгрузка температурных графиков из системы <b>Advantum</b> по списку маршрутных листов (МЛ) за выбранный период в именные PDF-файлы и общий ZIP-архив.
+              </div>
             </div>
-            <span class="btn btn-primary" style="align-self: flex-start;">Открыть выгрузку графиков &rarr;</span>
-          </div>
-
-          <div class="module-card" id="home-card-admin" style="display: none;" onclick="openSection('admin')">
-            <div>
-              <div class="module-icon">⚙️</div>
-              <h3>Управление доступом</h3>
-              <p>Создание именных учетных записей сотрудников (формат s.khvostov), назначение PIN-кодов, блокировка доступа и разграничение прав по разделам.</p>
-            </div>
-            <span class="btn btn-outline" style="align-self: flex-start;">Открыть админ-панель &rarr;</span>
           </div>
         </div>
       </section>
@@ -1341,7 +1373,7 @@
       const pin = (pinInput?.value || '').trim();
 
       if (!login) {
-        showPinError('Введите логин сотрудника (например: s.khvostov)');
+        showPinError('Введите логин сотрудника (например: i.ivanov)');
         return;
       }
       if (pin.length !== 6) {
@@ -1392,20 +1424,22 @@
       document.getElementById('sidebar-user-login').innerText = user.login;
       document.getElementById('welcome-title').innerText = `Здравствуйте, ${user.full_name || user.login}!`;
 
+      const homeName = document.getElementById('home-user-fullname');
+      const homeLogin = document.getElementById('home-user-login');
+      const homeRole = document.getElementById('home-user-role');
+      if (homeName) homeName.innerText = user.full_name || user.login;
+      if (homeLogin) homeLogin.innerText = user.login;
+      if (homeRole) homeRole.innerText = user.role === 'admin' ? 'Администратор портала' : 'Сотрудник отдела';
+
       const hasOpt = user.role === 'admin' || (user.permissions || []).includes('opt');
       const hasThermo = user.role === 'admin' || (user.permissions || []).includes('thermo');
       const isAdmin = user.role === 'admin';
 
       document.getElementById('nav-opt').style.display = hasOpt ? 'flex' : 'none';
       document.getElementById('subnav-opt').style.display = hasOpt ? 'block' : 'none';
-      document.getElementById('home-card-opt-schedules').style.display = hasOpt ? 'flex' : 'none';
-      document.getElementById('home-card-opt-orders').style.display = hasOpt ? 'flex' : 'none';
 
       document.getElementById('nav-thermo').style.display = hasThermo ? 'flex' : 'none';
-      document.getElementById('home-card-thermo').style.display = hasThermo ? 'flex' : 'none';
-
       document.getElementById('admin-nav-group').style.display = isAdmin ? 'block' : 'none';
-      document.getElementById('home-card-admin').style.display = isAdmin ? 'flex' : 'none';
 
       openSection('home');
     }
