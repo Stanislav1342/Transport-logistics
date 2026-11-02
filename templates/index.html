@@ -773,7 +773,7 @@
             <p>Единый корпоративный портал автоматизации транспортной логистики ФК «ПУЛЬС» (РЦ Черная Грязь)</p>
           </div>
           <span class="badge" id="portal-version-badge">
-            <span class="badge-dot"></span> Версия 1.1
+            <span class="badge-dot"></span> Версия 1.2
           </span>
         </div>
 
@@ -1595,10 +1595,17 @@
       const u = directUserObj || (window.adminUsersList || []).find(item => item.login === login);
       if (!u) return;
 
-      document.getElementById('info-modal-name').innerText = u.full_name || '—';
-      document.getElementById('info-modal-position').innerText = u.position || 'Специалист отдела логистики';
-      document.getElementById('info-modal-login').innerText = u.login || '—';
-      document.getElementById('info-modal-pin').innerText = u.pin_plain || '••••••';
+      const nameEl = document.getElementById('info-user-name');
+      const posEl = document.getElementById('info-user-pos');
+      const loginEl = document.getElementById('info-user-login');
+      const pinEl = document.getElementById('info-user-pin');
+      const copyNotice = document.getElementById('copyUserInfoSuccess');
+
+      if (nameEl) nameEl.innerText = u.full_name || '—';
+      if (posEl) posEl.innerText = u.position || 'Специалист отдела логистики';
+      if (loginEl) loginEl.innerText = u.login || '—';
+      if (pinEl) pinEl.innerText = u.pin_plain || '••••••';
+      if (copyNotice) copyNotice.style.display = 'none';
 
       document.getElementById('userInfoModal').classList.add('active');
     }
@@ -1608,15 +1615,16 @@
     }
 
     async function copyUserInfoToClipboard() {
-      const name = document.getElementById('info-modal-name').innerText;
-      const pos = document.getElementById('info-modal-position').innerText;
-      const login = document.getElementById('info-modal-login').innerText;
-      const pin = document.getElementById('info-modal-pin').innerText;
+      const name = document.getElementById('info-user-name')?.innerText || '';
+      const pos = document.getElementById('info-user-pos')?.innerText || '';
+      const login = document.getElementById('info-user-login')?.innerText || '';
+      const pin = document.getElementById('info-user-pin')?.innerText || '';
 
       const text = `Данные для входа в портал «ПУЛЬС — Транспортная логистика»:\nФИО: ${name}\nДолжность: ${pos}\nЛогин: ${login}\nPIN-код: ${pin}`;
       try {
         await navigator.clipboard.writeText(text);
-        alert('✅ Данные сотрудника скопированы в буфер обмена!');
+        const copyNotice = document.getElementById('copyUserInfoSuccess');
+        if (copyNotice) copyNotice.style.display = 'block';
       } catch (e) {
         prompt('Скопируйте данные сотрудника:', text);
       }

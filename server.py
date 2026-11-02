@@ -73,7 +73,7 @@ except ImportError:
 
 # ─── Настройка FastAPI и CORS ─────────────────────────────────────────────────
 
-PORTAL_VERSION = "1.1"
+PORTAL_VERSION = "1.2"
 app = FastAPI(title="ПУЛЬС — Транспортная логистика", version=f"v{PORTAL_VERSION}")
 
 ALLOWED_ORIGIN_REGEX = (
@@ -161,8 +161,9 @@ def _verify_pin_hash(pin: str, salt: str, expected_hash: str) -> bool:
 
 
 def _load_users_db() -> dict[str, dict[str, Any]]:
-    """Загружает базу пользователей из users_db.json и синхронизирует мастер-админа из .env."""
+    """Загружает базу пользователей из users_db.json, восстанавливает неполные записи и синхронизирует мастер-админа из .env."""
     users: dict[str, dict[str, Any]] = {}
+    needs_resave = False
     if os.path.exists(USERS_DB_PATH):
         try:
             with open(USERS_DB_PATH, "r", encoding="utf-8") as f:
@@ -190,6 +191,63 @@ def _load_users_db() -> dict[str, dict[str, Any]]:
         "created_at": users.get(admin_login, {}).get("created_at")
         or datetime.datetime.now().strftime("%d.%m.%Y %H:%M"),
     }
+
+    # Автовосстановление неполных записей сотрудников (если нет salt/pin_hash/pin_plain)
+    existing_pins = {u.get("pin_plain") for u in users.values() if u.get("pin_plain")}
+    for login_key, u in list(users.items()):
+        if login_key == admin_login or not isinstance(u, dict):
+            continue
+        changed = False
+        if not u.get("login"):
+            u["login"] = login_key
+            changed = True
+        if not u.get("full_name"):
+            u["full_name"] = login_key
+            changed = True
+        if not u.get("position"):
+            u["position"] = "Специалист отдела логистики"
+            changed = True
+        if not u.get("role"):
+            u["role"] = "user"
+            changed = True
+        norm_perms = _normalize_permissions(u.get("permissions", []))
+        if u.get("permissions") != norm_perms:
+            u["permissions"] = norm_perms
+            changed = True
+        if "is_active" not in u:
+            u["is_active"] = True
+            changed = True
+        if "is_master" not in u:
+            u["is_master"] = False
+            changed = True
+        if not u.get("created_at"):
+            u["created_at"] = datetime.datetime.now().strftime("%d.%m.%Y %H:%M")
+            changed = True
+
+        # Если у сотрудника отсутствуют salt / pin_hash или pin_plain — генерируем рабочий 6-значный PIN
+        if not u.get("salt") or not u.get("pin_hash") or not u.get("pin_plain"):
+            pin_val = u.get("pin_plain", "")
+            if not pin_val or not re.match(r"^\d{6}$", str(pin_val)):
+                for _ in range(200):
+                    cand = f"{secrets.randbelow(900000) + 100000}"
+                    if cand not in existing_pins:
+                        pin_val = cand
+                        break
+                else:
+                    pin_val = f"{secrets.randbelow(900000) + 100000}"
+            existing_pins.add(pin_val)
+            salt_val = u.get("salt") or secrets.token_hex(16)
+            u["salt"] = salt_val
+            u["pin_hash"] = _hash_pin(pin_val, salt_val)
+            u["pin_plain"] = pin_val
+            changed = True
+
+        if changed:
+            needs_resave = True
+
+    if needs_resave:
+        _save_users_db(users)
+
     return users
 
 
@@ -521,7 +579,7 @@ async def admin_update_user(target_login: str, payload: UpdateUserRequest, reque
             if payload.position is not None and payload.position.strip():
                 user["position"] = payload.position.strip()
             _save_users_db(users)
-            return {"status": "success", "user": _sanitize_user_public(user)}
+            return {"status": "success", "user": _sanitize_user_public(user, include_pin=True)}
 
         if payload.full_name is not None and payload.full_name.strip():
             user["full_name"] = payload.full_name.strip()
