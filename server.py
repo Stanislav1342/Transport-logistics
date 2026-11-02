@@ -73,7 +73,7 @@ except ImportError:
 
 # ─── Настройка FastAPI и CORS ─────────────────────────────────────────────────
 
-PORTAL_VERSION = "1.3"
+PORTAL_VERSION = "1.4"
 app = FastAPI(title="ПУЛЬС — Транспортная логистика", version=f"v{PORTAL_VERSION}")
 
 ALLOWED_ORIGIN_REGEX = (
@@ -1269,7 +1269,7 @@ def _build_free_trips_email_packages(req: EmailRequest) -> dict[str, Any]:
             {
                 "carrier": car_name,
                 "to": clean_email,
-                "subject": f"Свободные рейсы РЦ Черная Грязь ({subj_dates})",
+                "subject": f"Актуальные рейсы РЦ Черная Грязь ({subj_dates})",
                 "html_body": core.generate_free_trips_html(car_name, sorted_free, start_d, end_d),
                 "attachments": [],
             }

@@ -1842,7 +1842,8 @@ def generate_free_trips_html(carrier_name, free_trips, start_date_str, end_date_
         </tr>
         """
 
-    count_word = "свободный актуальный рейс" if len(free_trips) == 1 else "свободные актуальные рейсы"
+    verb_word = "появился" if len(free_trips) == 1 else "появились"
+    count_word = "актуальный рейс" if len(free_trips) == 1 else "актуальные рейсы"
     html = f"""
     <!DOCTYPE html>
     <html>
@@ -1852,12 +1853,11 @@ def generate_free_trips_html(carrier_name, free_trips, start_date_str, end_date_
             body {{ font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.5; }}
             table {{ border-collapse: collapse; width: 100%; max-width: 720px; margin-top: 15px; margin-bottom: 20px; }}
             th {{ background-color: #c55a11; color: #ffffff; padding: 10px; border: 1px solid #c55a11; text-align: center; }}
-            .footer {{ font-size: 12px; color: #7f7f7f; margin-top: 25px; border-top: 1px solid #e0e0e0; padding-top: 10px; }}
         </style>
     </head>
     <body>
         <p>Добрый день!</p>
-        <p>Информируем вас о том, что с РЦ Черная Грязь появился <b>{count_word}</b> на отгрузку.<br>
+        <p>Информируем вас о том, что с РЦ Черная Грязь {verb_word} <b>{count_word}</b> на отгрузку.<br>
         Просим оперативно сообщить о вашей готовности забрать указанный объем:</p>
         
         <table>
@@ -1878,13 +1878,6 @@ def generate_free_trips_html(carrier_name, free_trips, start_date_str, end_date_
         </table>
         
         <p>При готовности взять рейс в работу, пожалуйста, ответьте на данное письмо с подтверждением.</p>
-        
-        <p>С уважением,<br>
-        Транспортный отдел ФК «ПУЛЬС»</p>
-        
-        <div class="footer">
-            Автоматическое уведомление о свободных рейсах РЦ Черная Грязь ({carrier_name}).
-        </div>
     </body>
     </html>
     """
