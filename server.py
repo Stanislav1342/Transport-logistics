@@ -126,6 +126,10 @@ def get_master_admin_name() -> str:
     return os.environ.get("ADMIN_NAME", "").strip() or "Хвостов Станислав"
 
 
+def get_master_admin_position() -> str:
+    return os.environ.get("ADMIN_POSITION", "").strip() or "Администратор системы"
+
+
 def _hash_pin(pin: str, salt: str) -> str:
     dk = hashlib.pbkdf2_hmac(
         "sha256",
@@ -160,6 +164,7 @@ def _load_users_db() -> dict[str, dict[str, Any]]:
     users[admin_login] = {
         "login": admin_login,
         "full_name": users.get(admin_login, {}).get("full_name") or get_master_admin_name(),
+        "position": users.get(admin_login, {}).get("position") or get_master_admin_position(),
         "role": "admin",
         "permissions": list(ALL_SECTIONS),
         "is_active": True,
@@ -232,6 +237,7 @@ def _sanitize_user_public(u: dict[str, Any]) -> dict[str, Any]:
     return {
         "login": u["login"],
         "full_name": u.get("full_name", u["login"]),
+        "position": u.get("position", "") or "Специалист отдела логистики",
         "role": u.get("role", "user"),
         "permissions": u.get("permissions", []),
         "is_active": bool(u.get("is_active", True)),
@@ -310,6 +316,7 @@ class LoginRequest(BaseModel):
 class CreateUserRequest(BaseModel):
     login: str = Field(..., min_length=3, max_length=35)
     full_name: str = Field(..., min_length=2, max_length=80)
+    position: str = Field(default="Специалист отдела логистики", max_length=100)
     pin: str = Field(..., pattern=r"^\d{6}$")
     permissions: list[str] = Field(default_factory=lambda: ["opt", "thermo"])
     role: str = Field(default="user")
@@ -317,6 +324,7 @@ class CreateUserRequest(BaseModel):
 
 class UpdateUserRequest(BaseModel):
     full_name: Optional[str] = None
+    position: Optional[str] = None
     pin: Optional[str] = None
     permissions: Optional[list[str]] = None
     is_active: Optional[bool] = None
@@ -428,6 +436,7 @@ async def admin_create_user(payload: CreateUserRequest, request: Request):
         new_user = {
             "login": login_clean,
             "full_name": payload.full_name.strip(),
+            "position": payload.position.strip() or "Специалист отдела логистики",
             "role": role,
             "permissions": valid_perms,
             "is_active": True,
@@ -458,11 +467,16 @@ async def admin_update_user(target_login: str, payload: UpdateUserRequest, reque
             # У мастер-админа нельзя забрать права или заблокировать его
             if payload.full_name is not None and payload.full_name.strip():
                 user["full_name"] = payload.full_name.strip()
+            if payload.position is not None and payload.position.strip():
+                user["position"] = payload.position.strip()
             _save_users_db(users)
             return {"status": "success", "user": _sanitize_user_public(user)}
 
         if payload.full_name is not None and payload.full_name.strip():
             user["full_name"] = payload.full_name.strip()
+
+        if payload.position is not None and payload.position.strip():
+            user["position"] = payload.position.strip()
 
         if payload.role is not None:
             user["role"] = "admin" if payload.role == "admin" else "user"

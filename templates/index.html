@@ -781,14 +781,14 @@
           <div class="card-title">📌 О корпоративном портале</div>
           <p style="font-size: 14.5px; color: var(--text); margin-bottom: 14px; line-height: 1.65;">
             Добро пожаловать в единую систему автоматизации транспортного отдела <b>ФК «ПУЛЬС»</b>.
-            Портал объединяет ключевые рабочие инструменты отдела в одном защищенном веб-интерфейсе с персональным разграничением прав доступа.
+            Портал объединяет рабочие инструменты и сервисы отдела для удобной, быстрой и централизованной ежедневной работы.
           </p>
           <div style="background: #f8fafc; border: 1px solid var(--border-light); border-left: 4px solid var(--primary); border-radius: 8px; padding: 14px 18px; margin-bottom: 18px;">
             <div style="font-size: 13.5px; font-weight: 700; color: var(--primary); margin-bottom: 6px;">
               👈 Навигация по сервису
             </div>
             <div style="font-size: 13.5px; color: #334155; line-height: 1.55;">
-              Для перехода к нужному рабочему инструменту используйте <b>боковое меню слева</b>. В меню отображаются только те разделы, к которым открыт доступ для вашей учетной записи.
+              Для перехода к нужному рабочему инструменту выберите соответствующий раздел в <b>боковом меню слева</b>.
             </div>
           </div>
 
@@ -802,44 +802,8 @@
               <div class="stat-value" id="home-user-login" style="font-size: 15px; font-family: ui-monospace, monospace;">—</div>
             </div>
             <div class="stat-box">
-              <div class="stat-label">Уровень доступа</div>
-              <div class="stat-value" id="home-user-role" style="font-size: 15px; color: #15803d;">—</div>
-            </div>
-            <div class="stat-box">
-              <div class="stat-label">Автоблокировка</div>
-              <div class="stat-value" style="font-size: 15px; color: #475569;">30 минут бездействия</div>
-            </div>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-title">📖 Краткая памятка по работе с разделами</div>
-          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px;">
-            <div style="background: #f8fafc; border: 1px solid var(--border-light); border-radius: 10px; padding: 16px;">
-              <div style="font-weight: 700; font-size: 14px; color: var(--primary); margin-bottom: 6px;">
-                📊 ОПТ &rarr; Графики РК
-              </div>
-              <div style="font-size: 13px; color: var(--text-muted); line-height: 1.5;">
-                Распределение недельных планов отгрузок филиалов по перевозчикам с учетом тарифов и исключений, сохранение готовых графиков на сетевой диск <b>L:</b> и рассылка таблиц рейсов в Outlook.
-              </div>
-            </div>
-
-            <div style="background: #f8fafc; border: 1px solid var(--border-light); border-radius: 10px; padding: 16px;">
-              <div style="font-weight: 700; font-size: 14px; color: var(--primary); margin-bottom: 6px;">
-                📝 ОПТ &rarr; Заявки перевозчикам
-              </div>
-              <div style="font-size: 13px; color: var(--text-muted); line-height: 1.5;">
-                Обработка суточного реестра отгрузок, автоматическая генерация файлов транспортных заявок Word (<b>.docx</b>) по шаблону и формирование писем с вложениями в Outlook.
-              </div>
-            </div>
-
-            <div style="background: #f8fafc; border: 1px solid var(--border-light); border-radius: 10px; padding: 16px;">
-              <div style="font-weight: 700; font-size: 14px; color: var(--primary); margin-bottom: 6px;">
-                🌡️ Температурные графики
-              </div>
-              <div style="font-size: 13px; color: var(--text-muted); line-height: 1.5;">
-                Пакетная автоматическая выгрузка температурных графиков из системы <b>Advantum</b> по списку маршрутных листов (МЛ) за выбранный период в именные PDF-файлы и общий ZIP-архив.
-              </div>
+              <div class="stat-label">Должность</div>
+              <div class="stat-value" id="home-user-position" style="font-size: 15px; color: #15803d;">—</div>
             </div>
           </div>
         </div>
@@ -1131,7 +1095,7 @@
         <div class="card">
           <div class="card-title">➕ Добавить нового сотрудника</div>
           <form onsubmit="event.preventDefault(); createNewUser();">
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-bottom: 14px;">
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: 14px; margin-bottom: 14px;">
               <div>
                 <label class="form-label">Логин (формат и.фамилия):</label>
                 <input type="text" id="new-user-login" placeholder="a.rozhkov" required>
@@ -1139,6 +1103,10 @@
               <div>
                 <label class="form-label">ФИО сотрудника:</label>
                 <input type="text" id="new-user-name" placeholder="Рожков Алексей" required>
+              </div>
+              <div>
+                <label class="form-label">Должность сотрудника:</label>
+                <input type="text" id="new-user-position" placeholder="Логист по транспорту" required>
               </div>
               <div>
                 <label class="form-label">PIN-код (6 цифр):</label>
@@ -1173,6 +1141,7 @@
                 <tr>
                   <th>Логин</th>
                   <th>ФИО сотрудника</th>
+                  <th>Должность</th>
                   <th>Доступ к разделам</th>
                   <th>Статус</th>
                   <th style="text-align: right;">Действия</th>
@@ -1426,10 +1395,10 @@
 
       const homeName = document.getElementById('home-user-fullname');
       const homeLogin = document.getElementById('home-user-login');
-      const homeRole = document.getElementById('home-user-role');
+      const homePos = document.getElementById('home-user-position');
       if (homeName) homeName.innerText = user.full_name || user.login;
       if (homeLogin) homeLogin.innerText = user.login;
-      if (homeRole) homeRole.innerText = user.role === 'admin' ? 'Администратор портала' : 'Сотрудник отдела';
+      if (homePos) homePos.innerText = user.position || 'Специалист отдела логистики';
 
       const hasOpt = user.role === 'admin' || (user.permissions || []).includes('opt');
       const hasThermo = user.role === 'admin' || (user.permissions || []).includes('thermo');
@@ -1565,6 +1534,10 @@
             </td>
             <td><b>${u.full_name}</b></td>
             <td>
+              <span style="font-size:13px; color:#334155;">${u.position || 'Специалист отдела логистики'}</span>
+              <button class="btn btn-outline btn-sm" style="margin-left:6px;padding:2px 7px;font-size:11px;" title="Изменить должность" onclick="promptChangePosition('${u.login}', '${(u.position || '').replace(/'/g, "\\'")}')">✏️</button>
+            </td>
+            <td>
               <div style="display:flex;gap:14px;flex-wrap:wrap;">
                 <label style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;cursor:pointer;">
                   <input type="checkbox" ${hasOpt ? 'checked' : ''} ${u.is_master ? 'disabled' : ''}
@@ -1605,6 +1578,7 @@
     async function createNewUser() {
       const login = document.getElementById('new-user-login').value.trim().toLowerCase();
       const full_name = document.getElementById('new-user-name').value.trim();
+      const position = document.getElementById('new-user-position').value.trim();
       const pin = document.getElementById('new-user-pin').value.trim();
       const perms = [];
       if (document.getElementById('new-perm-opt').checked) perms.push('opt');
@@ -1614,7 +1588,7 @@
         const resp = await fetch('/api/admin/users', {
           method: 'POST',
           headers: authHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify({ login, full_name, pin, permissions: perms })
+          body: JSON.stringify({ login, full_name, position, pin, permissions: perms })
         });
         const data = await resp.json();
         if (!resp.ok) {
@@ -1623,11 +1597,31 @@
         }
         document.getElementById('new-user-login').value = '';
         document.getElementById('new-user-name').value = '';
+        document.getElementById('new-user-position').value = '';
         document.getElementById('new-user-pin').value = '';
         loadAdminUsers();
         alert(`✅ Учетная запись '${login}' (${full_name}) успешно создана!`);
       } catch (e) {
         alert('Ошибка сети: ' + e);
+      }
+    }
+
+    async function promptChangePosition(login, currentPos) {
+      const newPos = prompt(`Введите должность для сотрудника '${login}':`, currentPos || '');
+      if (newPos === null || !newPos.trim()) return;
+      const resp = await fetch(`/api/admin/users/${encodeURIComponent(login)}/update`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ position: newPos.trim() })
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (window.currentUser && window.currentUser.login === login && data.user) {
+          window.currentUser.position = data.user.position;
+          const homePos = document.getElementById('home-user-position');
+          if (homePos) homePos.innerText = data.user.position;
+        }
+        loadAdminUsers();
       }
     }
 
