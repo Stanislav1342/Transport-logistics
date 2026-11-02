@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Virtual Environment
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Credentials & local user DB (НИКОГДА не коммитить!)
+.env
+users_db.json
+
+# WebDriver Manager cache
+.wdm/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Web service task exports
+web_exports/
+
+# Presentation notes & speech
+*РЕЧЬ*.md
+PROJECT_CONTEXT.md
+
+# Конфиденциальные справочники, тарифы и шаблоны компании (только локально)
+*.xlsx
+*.xlsm
+*.docx
+contacts_*.json
+carriers_contacts.json
