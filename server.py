@@ -77,7 +77,8 @@ app = FastAPI(title="ПУЛЬС — Транспортная логистика"
 
 ALLOWED_ORIGIN_REGEX = (
     r"^https?://(localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|"
-    r"192\.168\.\d{1,3}\.\d{1,3}|[a-z0-9\-]+\.[a-z0-9\-]+\.devtunnels\.ms)(:\d+)?$"
+    r"172\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|"
+    r"[a-z0-9\-]+\.[a-z0-9\-]+\.devtunnels\.ms)(:\d+)?$"
 )
 
 app.add_middleware(
@@ -1270,15 +1271,46 @@ def _cleanup_old_tasks(max_age_hours: int = 24) -> None:
 
 
 def get_local_ip() -> str:
+    """Возвращает реальный LAN IP компьютера в офисной сети, игнорируя виртуальные адаптеры VPN (198.18.x.x)."""
+    candidates: list[str] = []
+    try:
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+            ip = info[4][0]
+            if ip.startswith("127.") or ip.startswith("169.254.") or ip.startswith("198.18."):
+                continue
+            candidates.append(ip)
+    except Exception:
+        pass
+
+    # На macOS/Linux также проверяем вывод ifconfig на случай активного VPN-туннеля
+    if not candidates and sys.platform != "win32":
+        try:
+            import subprocess
+            out = subprocess.check_output(["ifconfig"], text=True, timeout=2)
+            for m in re.findall(r"inet\s+(\d+\.\d+\.\d+\.\d+)", out):
+                if not m.startswith("127.") and not m.startswith("169.254.") and not m.startswith("198.18."):
+                    candidates.append(m)
+        except Exception:
+            pass
+
+    # Также проверяем маршрут по умолчанию, если он не ведет в виртуальный туннель VPN (198.18.x.x)
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
+        route_ip = s.getsockname()[0]
+        if not route_ip.startswith("198.18.") and not route_ip.startswith("127."):
+            return route_ip
     except Exception:
-        ip = "127.0.0.1"
+        pass
     finally:
         s.close()
-    return ip
+
+    # Приоритет корпоративным подсетям 10.x.x.x, 192.168.x.x, 172.x.x.x
+    for ip in candidates:
+        if ip.startswith("10.") or ip.startswith("192.168.") or ip.startswith("172."):
+            return ip
+    return candidates[0] if candidates else "127.0.0.1"
 
 
 def _task_worker():

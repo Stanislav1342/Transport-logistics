@@ -714,17 +714,17 @@
           <span>Главная</span>
         </button>
 
-        <!-- Раздел ОПТ -->
-        <button class="nav-item" id="nav-opt" onclick="openSection('opt')" style="display: none;">
-          <span>🚛</span>
-          <span>ОПТ</span>
+        <!-- Раздел ОПТ (раскрывающаяся группа с отдельными окнами) -->
+        <button class="nav-item" id="nav-opt" onclick="toggleOptMenu()" style="display: none; justify-content: space-between;">
+          <span style="display:flex;align-items:center;gap:11px;"><span>🚛</span> <span>ОПТ</span></span>
+          <span id="opt-chevron" style="font-size: 11px; transition: transform 0.2s;">▼</span>
         </button>
-        <div class="nav-subitems" id="subnav-opt">
-          <button class="nav-subitem active" id="subnav-opt-schedules" onclick="openOptTab('schedules')">
+        <div class="nav-subitems open" id="subnav-opt" style="display: none;">
+          <button class="nav-subitem" id="subnav-opt-schedules" onclick="openSection('opt-schedules')">
             <span>📊</span> <span>Графики РК</span>
           </button>
-          <button class="nav-subitem" id="subnav-opt-orders" onclick="openOptTab('orders')">
-            <span>📝</span> <span>Заявки</span>
+          <button class="nav-subitem" id="subnav-opt-orders" onclick="openSection('opt-orders')">
+            <span>📝</span> <span>Заявки перевозчикам</span>
           </button>
         </div>
 
@@ -775,13 +775,22 @@
         </div>
 
         <div class="home-grid">
-          <div class="module-card" id="home-card-opt" style="display: none;" onclick="openSection('opt')">
+          <div class="module-card" id="home-card-opt-schedules" style="display: none;" onclick="openSection('opt-schedules')">
             <div>
-              <div class="module-icon">🚛</div>
-              <h3>Раздел «ОПТ»</h3>
-              <p>Формирование недельных графиков отгрузки филиалов (Графики РК), расчет тарифов, генерация транспортных заявок Word (.docx) и рассылка перевозчикам через Outlook.</p>
+              <div class="module-icon">📊</div>
+              <h3>ОПТ: Графики РК (Отгрузки филиалов)</h3>
+              <p>Формирование недельных графиков отгрузки филиалов, автоматическое распределение рейсов по перевозчикам с учетом тарифов и рассылка в Outlook.</p>
             </div>
-            <span class="btn btn-primary" style="align-self: flex-start;">Перейти в раздел ОПТ &rarr;</span>
+            <span class="btn btn-primary" style="align-self: flex-start;">Открыть Графики РК &rarr;</span>
+          </div>
+
+          <div class="module-card" id="home-card-opt-orders" style="display: none;" onclick="openSection('opt-orders')">
+            <div>
+              <div class="module-icon">📝</div>
+              <h3>ОПТ: Заявки перевозчикам</h3>
+              <p>Обработка суточного реестра отгрузок, группировка паллет, генерация индивидуальных транспортных заявок Word (.docx) и рассылка в Outlook.</p>
+            </div>
+            <span class="btn btn-primary" style="align-self: flex-start;">Открыть Заявки &rarr;</span>
           </div>
 
           <div class="module-card" id="home-card-thermo" style="display: none;" onclick="openSection('thermo')">
@@ -805,28 +814,17 @@
       </section>
 
       <!-- ===================================================== -->
-      <!-- СЕКЦИЯ: РАЗДЕЛ ОПТ (ГРАФИКИ РК + ЗАЯВКИ)              -->
+      <!-- СЕКЦИЯ: ОПТ — ГРАФИКИ РК (ОТГРУЗКИ ФИЛИАЛОВ)           -->
       <!-- ===================================================== -->
-      <section id="section-opt" class="section-view">
+      <section id="section-opt-schedules" class="section-view">
         <div class="page-header">
           <div>
-            <h2>🚛 Раздел «ОПТ» — РЦ Черная Грязь</h2>
-            <p>Автоматизированная подготовка недельных графиков РК, формирование транспортных заявок (.docx) и рассылка в Outlook</p>
+            <h2>📊 ОПТ: Графики РК (Отгрузки филиалов)</h2>
+            <p>Автоматизированная подготовка недельных графиков отгрузки филиалов с РЦ Черная Грязь и рассылка перевозчикам в Outlook</p>
           </div>
         </div>
 
-        <div class="tabs-nav">
-          <button class="tab-btn active" id="tabBtnSchedules" onclick="openOptTab('schedules')">
-            📊 Графики РК (Отгрузки филиалов)
-          </button>
-          <button class="tab-btn" id="tabBtnOrders" onclick="openOptTab('orders')">
-            📝 Заявки перевозчикам
-          </button>
-        </div>
-
-        <!-- Вкладка 1: Графики РК -->
-        <div id="tabContentSchedules" class="tab-content active">
-          <div class="card">
+        <div class="card">
             <div class="card-title">📁 1. Загрузите файл плана отгрузок (.xlsm / .xlsx)</div>
             <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
               <div class="dropzone-icon">📥</div>
@@ -907,11 +905,20 @@
               </button>
             </div>
           </div>
+      </section>
+
+      <!-- ===================================================== -->
+      <!-- СЕКЦИЯ: ОПТ — ЗАЯВКИ ПЕРЕВОЗЧИКАМ                     -->
+      <!-- ===================================================== -->
+      <section id="section-opt-orders" class="section-view">
+        <div class="page-header">
+          <div>
+            <h2>📝 ОПТ: Заявки перевозчикам</h2>
+            <p>Формирование индивидуальных транспортных заявок Word (.docx) из суточного реестра отгрузок и рассылка в Outlook</p>
+          </div>
         </div>
 
-        <!-- Вкладка 2: Заявки перевозчикам -->
-        <div id="tabContentOrders" class="tab-content">
-          <div class="card">
+        <div class="card">
             <div class="card-title">📝 Формирование транспортных заявок</div>
             <div class="dropzone" id="ordersDropzone" onclick="document.getElementById('ordersFileInput').click()">
               <div class="dropzone-icon">📋</div>
@@ -990,7 +997,6 @@
               </div>
             </div>
           </div>
-        </div>
       </section>
 
       <!-- ===================================================== -->
@@ -1305,12 +1311,18 @@
       setPreset('7days');
       initIdleTracker();
 
-      const savedLogin = localStorage.getItem('puls_last_login') || 's.khvostov';
+      const savedLogin = localStorage.getItem('puls_last_login') || '';
       const loginInput = document.getElementById('modal-login-input');
       const pinInput = document.getElementById('modal-pin-input');
-      if (loginInput) loginInput.value = savedLogin;
+      if (loginInput) {
+        loginInput.value = savedLogin;
+      }
       if (pinInput) {
-        pinInput.focus();
+        if (savedLogin) {
+          pinInput.focus();
+        } else if (loginInput) {
+          loginInput.focus();
+        }
         pinInput.addEventListener('input', () => {
           if (pinInput.value.trim().length === 6 && loginInput.value.trim().length >= 3) {
             submitPortalLogin();
@@ -1385,7 +1397,9 @@
       const isAdmin = user.role === 'admin';
 
       document.getElementById('nav-opt').style.display = hasOpt ? 'flex' : 'none';
-      document.getElementById('home-card-opt').style.display = hasOpt ? 'flex' : 'none';
+      document.getElementById('subnav-opt').style.display = hasOpt ? 'block' : 'none';
+      document.getElementById('home-card-opt-schedules').style.display = hasOpt ? 'flex' : 'none';
+      document.getElementById('home-card-opt-orders').style.display = hasOpt ? 'flex' : 'none';
 
       document.getElementById('nav-thermo').style.display = hasThermo ? 'flex' : 'none';
       document.getElementById('home-card-thermo').style.display = hasThermo ? 'flex' : 'none';
@@ -1439,41 +1453,56 @@
     }
 
     // ─── Навигация между разделами портала ──────────────────────────────────
-    function openSection(section) {
-      document.querySelectorAll('.section-view').forEach(el => el.classList.remove('active'));
-      document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-
+    function toggleOptMenu() {
       const subOpt = document.getElementById('subnav-opt');
-      if (section === 'opt') {
-        subOpt.classList.add('open');
-      } else {
+      const chevron = document.getElementById('opt-chevron');
+      if (subOpt.classList.contains('open')) {
         subOpt.classList.remove('open');
-      }
-
-      const targetSec = document.getElementById(`section-${section}`);
-      const targetNav = document.getElementById(`nav-${section}`);
-      if (targetSec) targetSec.classList.add('active');
-      if (targetNav) targetNav.classList.add('active');
-
-      if (section === 'admin') {
-        loadAdminUsers();
+        subOpt.style.display = 'none';
+        if (chevron) chevron.style.transform = 'rotate(-90deg)';
+      } else {
+        subOpt.classList.add('open');
+        subOpt.style.display = 'block';
+        if (chevron) chevron.style.transform = 'rotate(0deg)';
+        // Если мы еще не внутри ОПТ, открываем по умолчанию Графики РК
+        const isSchedulesActive = document.getElementById('section-opt-schedules').classList.contains('active');
+        const isOrdersActive = document.getElementById('section-opt-orders').classList.contains('active');
+        if (!isSchedulesActive && !isOrdersActive) {
+          openSection('opt-schedules');
+        }
       }
     }
 
-    function openOptTab(tabName) {
-      openSection('opt');
-      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-      document.querySelectorAll('.nav-subitem').forEach(s => s.classList.remove('active'));
+    function openSection(section) {
+      if (section === 'opt') section = 'opt-schedules';
 
-      if (tabName === 'schedules') {
-        document.getElementById('tabBtnSchedules').classList.add('active');
-        document.getElementById('tabContentSchedules').classList.add('active');
-        document.getElementById('subnav-opt-schedules').classList.add('active');
+      document.querySelectorAll('.section-view').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.nav-subitem').forEach(el => el.classList.remove('active'));
+
+      const targetSec = document.getElementById(`section-${section}`);
+      if (targetSec) targetSec.classList.add('active');
+
+      if (section === 'opt-schedules' || section === 'opt-orders') {
+        const navOpt = document.getElementById('nav-opt');
+        const subOpt = document.getElementById('subnav-opt');
+        const chevron = document.getElementById('opt-chevron');
+        if (navOpt) navOpt.classList.add('active');
+        if (subOpt) {
+          subOpt.classList.add('open');
+          subOpt.style.display = 'block';
+        }
+        if (chevron) chevron.style.transform = 'rotate(0deg)';
+
+        const subBtn = document.getElementById(`subnav-${section}`);
+        if (subBtn) subBtn.classList.add('active');
       } else {
-        document.getElementById('tabBtnOrders').classList.add('active');
-        document.getElementById('tabContentOrders').classList.add('active');
-        document.getElementById('subnav-opt-orders').classList.add('active');
+        const targetNav = document.getElementById(`nav-${section}`);
+        if (targetNav) targetNav.classList.add('active');
+      }
+
+      if (section === 'admin') {
+        loadAdminUsers();
       }
     }
 
