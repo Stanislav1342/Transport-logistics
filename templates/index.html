@@ -773,7 +773,7 @@
             <p>Единый корпоративный портал автоматизации транспортной логистики ФК «ПУЛЬС» (РЦ Черная Грязь)</p>
           </div>
           <span class="badge" id="portal-version-badge">
-            <span class="badge-dot"></span> Версия 1.2
+            <span class="badge-dot"></span> Версия 1.3
           </span>
         </div>
 
@@ -1282,6 +1282,41 @@
       <div class="modal-footer">
         <button class="btn btn-outline" onclick="closeFileSelectModal()">Отмена</button>
         <button class="btn btn-primary" id="confirmFileSelectBtn" onclick="confirmSelectedFile()" disabled>Выбрать и обновить данные</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── МОДАЛЬНОЕ ОКНО ПОДКЛЮЧЕНИЯ OUTLOOK НА ПК СОТРУДНИКА ────── -->
+  <div class="modal-backdrop" id="bridgeRequiredModal">
+    <div class="modal" style="max-width: 560px;">
+      <div class="modal-header">
+        <h3>✉️ Подключение к вашему личному Outlook</h3>
+        <button class="modal-close" onclick="closeBridgeRequiredModal()">&times;</button>
+      </div>
+      <div class="modal-body" style="font-size: 13.5px; line-height: 1.6; color: var(--text);">
+        <div style="background: #fffbeb; border: 1px solid #fde68a; border-left: 4px solid #f59e0b; border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; color: #92400e;">
+          <b>Почему появилось это окно:</b><br>
+          Портал открыт на вашем компьютере удаленно, а браузер не может управлять программой Microsoft Outlook напрямую без запущенного локального помощника.
+        </div>
+        <p style="margin-bottom: 10px;">
+          Чтобы черновики и письма создавались <b>именно в вашем личном Outlook на вашем компьютере</b> (а не на сервере):
+        </p>
+        <ol style="padding-left: 20px; margin-bottom: 16px;">
+          <li style="margin-bottom: 6px;">Скачайте на свой компьютер (например, на Рабочий стол) два маленьких файла по кнопкам ниже (это нужно сделать <b>только один раз</b>).</li>
+          <li style="margin-bottom: 6px;">Запустите скачанный файл <b><code>Start_Outlook_Bridge.bat</code></b> двойным кликом — откроется небольшое черное окно помощника Outlook.</li>
+          <li>Не закрывая его, вернитесь сюда и снова нажмите <b>«Подтвердить»</b> — все черновики мгновенно появятся в вашем личном Outlook!</li>
+        </ol>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap; background: #f8fafc; padding: 14px; border-radius: 10px; border: 1px solid var(--border);">
+          <a href="/api/outlook-bridge/download" download="outlook_bridge.py" class="btn btn-primary" style="text-decoration: none; flex: 1; justify-content: center;">
+            📥 1. Скачать outlook_bridge.py
+          </a>
+          <a href="/api/outlook-bridge/download-bat" download="Start_Outlook_Bridge.bat" class="btn btn-outline" style="text-decoration: none; flex: 1; justify-content: center;">
+            ⚙️ 2. Скачать Start_Outlook_Bridge.bat
+          </a>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" onclick="closeBridgeRequiredModal()">Понятно</button>
       </div>
     </div>
   </div>
@@ -2111,7 +2146,16 @@
       }
     }
 
-    // Умная отправка через локальный Outlook сотрудника (outlook_bridge.py) или сервер
+    function openBridgeRequiredModal() {
+      document.getElementById('bridgeRequiredModal').classList.add('active');
+    }
+
+    function closeBridgeRequiredModal() {
+      document.getElementById('bridgeRequiredModal').classList.remove('active');
+    }
+
+    // Умная отправка через локальный Outlook сотрудника (outlook_bridge.py)
+    // На чужих ПК НИКОГДА не отправляет через Outlook сервера!
     async function dispatchViaLocalOutlookOrServer(prepareUrl, fallbackUrl, payload) {
       // 1. Сначала пробуем подключиться к локальному мосту Outlook на компьютере сотрудника (127.0.0.1:8765)
       try {
@@ -2133,9 +2177,18 @@
           return await bridgeResp.json();
         }
       } catch (e) {
-        // Локальный мост не запущен — используем прямой вызов на сервере
+        // Локальный мост не запущен на этом ПК
       }
 
+      // 2. Если браузер открыт НЕ на самом ПК-сервере (например, коллега зашел по IP или через туннель),
+      // сразу блокируем отправку на сервере и показываем окно запуска локального помощника Outlook
+      const host = window.location.hostname;
+      const isOpenedDirectlyOnServerPC = (host === 'localhost' || host === '127.0.0.1');
+      if (!isOpenedDirectlyOnServerPC) {
+        return { status: 'bridge_required' };
+      }
+
+      // 3. Только если браузер открыт прямо на самом ПК-сервере (localhost)
       const resp = await fetch(fallbackUrl, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -2159,7 +2212,12 @@
           isFreeBroadcast ? '/api/send-free-trips-emails' : '/api/send-emails',
           isFreeBroadcast ? { mode } : { mode, carrier }
         );
-        if (res.status === 'success' || res.status === 'warning') {
+        if (res.status === 'bridge_required') {
+          confirmBtn.disabled = false;
+          document.getElementById('sendingStatus').style.display = 'none';
+          closeSendModal();
+          openBridgeRequiredModal();
+        } else if (res.status === 'success' || res.status === 'warning') {
           alert(res.message);
           closeSendModal();
         } else {
@@ -2330,7 +2388,12 @@
           '/api/orders/send-emails',
           { mode, carrier }
         );
-        if (res.status === 'success' || res.status === 'warning') {
+        if (res.status === 'bridge_required') {
+          confirmBtn.disabled = false;
+          document.getElementById('ordersSendingStatus').style.display = 'none';
+          closeOrdersSendModal();
+          openBridgeRequiredModal();
+        } else if (res.status === 'success' || res.status === 'warning') {
           alert(res.message);
           closeOrdersSendModal();
         } else {

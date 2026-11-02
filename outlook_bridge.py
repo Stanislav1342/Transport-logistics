@@ -107,16 +107,32 @@ class OutlookBridgeHandler(BaseHTTPRequestHandler):
                 ).encode("utf-8")
             )
         except ImportError:
-            self._send_cors_headers(200)
-            self.wfile.write(
-                json.dumps(
-                    {
-                        "status": "error",
-                        "message": "На этом компьютере не установлен pywin32 или Microsoft Outlook.",
-                    },
-                    ensure_ascii=False,
-                ).encode("utf-8")
-            )
+            import subprocess
+            import sys
+            print("⚙️ Первый запуск: автоматическая установка библиотеки pywin32 для связи с Outlook...")
+            try:
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "pywin32", "--quiet"])
+                self._send_cors_headers(200)
+                self.wfile.write(
+                    json.dumps(
+                        {
+                            "status": "warning",
+                            "message": "Библиотека связи с Outlook (pywin32) была автоматически установлена на ваш ПК! Нажмите «Подтвердить» еще раз.",
+                        },
+                        ensure_ascii=False,
+                    ).encode("utf-8")
+                )
+            except Exception:
+                self._send_cors_headers(200)
+                self.wfile.write(
+                    json.dumps(
+                        {
+                            "status": "error",
+                            "message": "На этом компьютере не установлен пакет pywin32. Выполните в терминале: pip install pywin32",
+                        },
+                        ensure_ascii=False,
+                    ).encode("utf-8")
+                )
         except Exception as e:
             self._send_cors_headers(200)
             self.wfile.write(

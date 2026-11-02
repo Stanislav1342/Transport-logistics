@@ -73,7 +73,7 @@ except ImportError:
 
 # ─── Настройка FastAPI и CORS ─────────────────────────────────────────────────
 
-PORTAL_VERSION = "1.2"
+PORTAL_VERSION = "1.3"
 app = FastAPI(title="ПУЛЬС — Транспортная логистика", version=f"v{PORTAL_VERSION}")
 
 ALLOWED_ORIGIN_REGEX = (
@@ -1081,6 +1081,63 @@ def _build_schedule_email_packages(req: EmailRequest) -> dict[str, Any]:
     }
 
 
+def _is_same_host_client(request: Request) -> bool:
+    """Проверяет, открыт ли браузер непосредственно на том же ПК, где запущен сервер."""
+    if not request.client:
+        return False
+    # Если запрос пришел через прокси/туннель (Dev Tunnels / ngrok), X-Forwarded-For указывает на внешний вызов
+    if request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip"):
+        return False
+    client_ip = (request.client.host or "").strip()
+    if client_ip in ("127.0.0.1", "::1", "localhost"):
+        return True
+    try:
+        if client_ip == get_local_ip():
+            return True
+    except Exception:
+        pass
+    return False
+
+
+@app.get("/api/orders/BridgeDownload")
+@app.get("/api/outlook-bridge/download")
+def download_outlook_bridge(request: Request):
+    """Позволяет сотруднику в 1 клик скачать легкий скрипт outlook_bridge.py на свой ПК."""
+    bridge_path = os.path.join(BASE_DIR, "outlook_bridge.py")
+    if not os.path.exists(bridge_path):
+        raise HTTPException(status_code=404, detail="Файл outlook_bridge.py не найден на сервере")
+    return FileResponse(
+        bridge_path,
+        filename="outlook_bridge.py",
+        media_type="text/x-python",
+    )
+
+
+@app.get("/api/outlook-bridge/download-bat")
+def download_outlook_bridge_bat(request: Request):
+    """Генерирует и отдает .bat файл для удобного запуска моста Outlook на ПК сотрудника в 2 клика."""
+    net_bridge = r"L:\ОТДЕЛЫ\ТРАНСПОРТНЫЙ ОТДЕЛ\Рожков\РК недельные графики + заявки\outlook_bridge.py"
+    bat_content = (
+        "@echo off\r\n"
+        "chcp 65001 >nul\r\n"
+        "title Мост Outlook — ПУЛЬС Транспортная логистика\r\n"
+        "if exist \"%~dp0outlook_bridge.py\" (\r\n"
+        "    python \"%~dp0outlook_bridge.py\"\r\n"
+        ") else if exist \"" + net_bridge + "\" (\r\n"
+        "    python \"" + net_bridge + "\"\r\n"
+        ") else (\r\n"
+        "    echo [ОШИБКА] Положите файл outlook_bridge.py рядом с этим файлом!\r\n"
+        "    pause\r\n"
+        ")\r\n"
+    )
+    from fastapi.responses import Response
+    return Response(
+        content=bat_content.encode("utf-8"),
+        media_type="application/bat",
+        headers={"Content-Disposition": 'attachment; filename="Start_Outlook_Bridge.bat"'},
+    )
+
+
 @app.post("/api/prepare-emails")
 def prepare_schedule_emails(req: EmailRequest, request: Request):
     """Возвращает сформированные письма для отправки через локальный Outlook сотрудника."""
@@ -1090,8 +1147,16 @@ def prepare_schedule_emails(req: EmailRequest, request: Request):
 
 @app.post("/api/send-emails")
 def send_emails(req: EmailRequest, request: Request):
-    """Отправка писем по графикам через локальный Outlook сервера (fallback)."""
+    """Отправка писем по графикам (ТОЛЬКО если браузер открыт непосредственно на самом ПК-сервере, иначе требует локальный мост на ПК сотрудника)."""
     check_auth(request, required_section="opt_schedules")
+    if not _is_same_host_client(request):
+        return {
+            "status": "bridge_required",
+            "message": (
+                "Чтобы черновики и письма создавались в вашем личном Outlook (на вашем компьютере), "
+                "запустите на своем ПК помощник «outlook_bridge.py»."
+            ),
+        }
     pkg = _build_schedule_email_packages(req)
     if pkg.get("status") != "success":
         return pkg
@@ -1228,6 +1293,14 @@ def prepare_free_trips_emails(req: EmailRequest, request: Request):
 @app.post("/api/send-free-trips-emails")
 def send_free_trips_emails(req: EmailRequest, request: Request):
     check_auth(request, required_section="opt_schedules")
+    if not _is_same_host_client(request):
+        return {
+            "status": "bridge_required",
+            "message": (
+                "Чтобы черновики и письма создавались в вашем личном Outlook (на вашем компьютере), "
+                "запустите на своем ПК помощник «outlook_bridge.py»."
+            ),
+        }
     pkg = _build_free_trips_email_packages(req)
     if pkg.get("status") != "success":
         return pkg
@@ -1425,8 +1498,16 @@ def prepare_orders_emails(req: EmailRequest, request: Request):
 
 @app.post("/api/orders/send-emails")
 def send_orders_emails(req: EmailRequest, request: Request):
-    """Отправка индивидуальных заявок перевозчикам с вложением .docx (локальный Outlook сервера)."""
+    """Отправка индивидуальных заявок перевозчикам с вложением .docx (ТОЛЬКО если браузер открыт непосредственно на ПК-сервере)."""
     check_auth(request, required_section="opt_orders")
+    if not _is_same_host_client(request):
+        return {
+            "status": "bridge_required",
+            "message": (
+                "Чтобы черновики и письма с заявками создавались в вашем личном Outlook (на вашем компьютере), "
+                "запустите на своем ПК помощник «outlook_bridge.py»."
+            ),
+        }
     pkg = _build_orders_email_packages(req, include_base64=False)
     if pkg.get("status") != "success":
         return pkg
