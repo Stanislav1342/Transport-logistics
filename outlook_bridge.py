@@ -70,6 +70,8 @@ class OutlookBridgeHandler(BaseHTTPRequestHandler):
             for item in emails:
                 mail = outlook.CreateItem(0)
                 mail.To = item.get("to", "")
+                if item.get("cc"):
+                    mail.CC = item.get("cc", "")
                 mail.Subject = item.get("subject", "")
                 mail.HTMLBody = item.get("html_body", "")
 

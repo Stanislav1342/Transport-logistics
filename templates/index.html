@@ -728,11 +728,19 @@
           </button>
         </div>
 
-        <!-- Раздел Температурные графики -->
-        <button class="nav-item" id="nav-thermo" onclick="openSection('thermo')" style="display: none;">
-          <span>🌡️</span>
-          <span>Температурные графики</span>
+        <!-- Раздел Мониторинг (раскрывающаяся группа: Температурные графики и ЭТРН) -->
+        <button class="nav-item" id="nav-monitoring" onclick="toggleMonitoringMenu()" style="display: none; justify-content: space-between;">
+          <span style="display:flex;align-items:center;gap:11px;"><span>📡</span> <span>Мониторинг</span></span>
+          <span id="monitoring-chevron" style="font-size: 11px; transition: transform 0.2s;">▼</span>
         </button>
+        <div class="nav-subitems open" id="subnav-monitoring" style="display: none;">
+          <button class="nav-subitem" id="subnav-monitoring-thermo" onclick="openSection('thermo')">
+            <span>🌡️</span> <span>Температурные графики</span>
+          </button>
+          <button class="nav-subitem" id="subnav-monitoring-etrn" onclick="openSection('etrn')">
+            <span>📑</span> <span>Отчеты ЭТРН</span>
+          </button>
+        </div>
 
         <!-- Админ-панель (только для администратора) -->
         <div id="admin-nav-group" style="display: none; margin-top: 14px;">
@@ -773,7 +781,7 @@
             <p>Единый корпоративный портал автоматизации транспортной логистики ФК «ПУЛЬС» (РЦ Черная Грязь)</p>
           </div>
           <span class="badge" id="portal-version-badge">
-            <span class="badge-dot"></span> Версия 1.4
+            <span class="badge-dot"></span> Версия 1.5
           </span>
         </div>
 
@@ -1095,6 +1103,125 @@
       </section>
 
       <!-- ===================================================== -->
+      <!-- СЕКЦИЯ: МОНИТОРИНГ — ОТЧЕТЫ ЭТРН                      -->
+      <!-- ===================================================== -->
+      <section id="section-etrn" class="section-view">
+        <div class="page-header">
+          <div>
+            <h2>📑 Мониторинг: Сводные отчеты по ЭТРН</h2>
+            <p>Автоматическое сведение реестров ЭТРН, расчет среднего времени подписания перевозчиками и рассылка отчетов в Outlook</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Параметры формирования отчета</div>
+
+          <!-- Вкладки режимов -->
+          <div style="display: flex; gap: 10px; margin-bottom: 18px; border-bottom: 1px solid var(--border-light); padding-bottom: 12px;">
+            <button type="button" class="btn btn-primary btn-sm" id="tab-etrn-auto" onclick="switchEtrnMode('auto')">
+              🚀 1. Автосбор из 1С (Фоновый режим)
+            </button>
+            <button type="button" class="btn btn-outline btn-sm" id="tab-etrn-manual" onclick="switchEtrnMode('manual')">
+              📁 2. Загрузка 3 файлов вручную
+            </button>
+          </div>
+
+          <!-- РЕЖИМ 1: Автосбор из 1С -->
+          <div id="etrn-pane-auto">
+            <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 12px 14px; margin-bottom: 16px; font-size: 13px; color: #166534;">
+              <b>ℹ️ Автосбор:</b> Сервер напрямую подключается к 1С:Предприятие, по навигационным ссылкам выгружает реестры МЛ, ЭТРН и контроль подписания, после чего сводит аналитику в готовый отчет.
+            </div>
+
+            <div class="form-group">
+              <label>Период отгрузок ЭТРН (включительно):</label>
+              <div class="date-row">
+                <div>
+                  <span style="font-size:12px;color:var(--text-muted);">Дата с:</span>
+                  <input type="date" id="etrn-date-from">
+                </div>
+                <div>
+                  <span style="font-size:12px;color:var(--text-muted);">Дата по:</span>
+                  <input type="date" id="etrn-date-to">
+                </div>
+              </div>
+              <div class="presets">
+                <button type="button" class="btn-chip" onclick="setEtrnPreset('today')">Сегодня</button>
+                <button type="button" class="btn-chip" onclick="setEtrnPreset('yesterday')">Вчера</button>
+                <button type="button" class="btn-chip" onclick="setEtrnPreset('3days')">Последние 3 дня</button>
+                <button type="button" class="btn-chip" onclick="setEtrnPreset('7days')">Последние 7 дней</button>
+                <button type="button" class="btn-chip" onclick="setEtrnPreset('current_month')">Текущий месяц</button>
+              </div>
+            </div>
+
+            <button id="btn-etrn-start-auto" class="btn btn-primary" style="width:100%;padding:13px;" onclick="startEtrnAutoTask()">
+              <span>⚡ Сформировать отчет из 1С</span>
+            </button>
+          </div>
+
+          <!-- РЕЖИМ 2: Ручная загрузка 3 файлов -->
+          <div id="etrn-pane-manual" style="display: none;">
+            <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 12px 14px; margin-bottom: 16px; font-size: 13px; color: #1e40af;">
+              <b>💡 Мгновенная сборка:</b> Если 3 таблицы уже выгружены из 1С на ваш компьютер, выберите их ниже. Отчет будет собран за 1 секунду без обращения к 1С.
+            </div>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-bottom: 16px;">
+              <div style="border: 1px dashed var(--border); padding: 12px; border-radius: 8px; background: #fafafa;">
+                <label style="font-weight: 700; font-size: 13px; display: block; margin-bottom: 6px;">1. «ЭТРН 1с.xlsx»</label>
+                <input type="file" id="etrn-file-1" accept=".xlsx,.csv" class="form-control" style="font-size: 12px;">
+              </div>
+              <div style="border: 1px dashed var(--border); padding: 12px; border-radius: 8px; background: #fafafa;">
+                <label style="font-weight: 700; font-size: 13px; display: block; margin-bottom: 6px;">2. «Модель расчетов.xlsx»</label>
+                <input type="file" id="etrn-file-2" accept=".xlsx" class="form-control" style="font-size: 12px;">
+              </div>
+              <div style="border: 1px dashed var(--border); padding: 12px; border-radius: 8px; background: #fafafa;">
+                <label style="font-weight: 700; font-size: 13px; display: block; margin-bottom: 6px;">3. «Процент.xlsx»</label>
+                <input type="file" id="etrn-file-3" accept=".xlsx" class="form-control" style="font-size: 12px;">
+              </div>
+            </div>
+
+            <div class="form-group" style="max-width: 280px; margin-bottom: 16px;">
+              <label>Метка даты для темы письма и отчета:</label>
+              <input type="date" id="etrn-manual-date" class="form-control">
+            </div>
+
+            <button id="btn-etrn-start-manual" class="btn btn-primary" style="width:100%;padding:13px;" onclick="submitEtrnFilesManual()">
+              <span>⚡ Собрать отчет из файлов</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Прогресс-бар -->
+        <div class="card" id="etrn-progress-card" style="display: none;">
+          <div class="card-title">
+            <span id="etrn-progress-title">Формирование отчета ЭТРН...</span>
+          </div>
+          <div id="etrn-progress-desc" style="font-size:14px;font-weight:500;">Инициализация задачи...</div>
+          <div class="progress-bar-container">
+            <div class="progress-bar" id="etrn-progress-bar"></div>
+          </div>
+        </div>
+
+        <!-- Блок готового результата -->
+        <div class="card" id="etrn-result-card" style="display: none;">
+          <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px 18px; margin-bottom: 16px;">
+            <div style="font-size: 15px; font-weight: 700; color: #166534; display: flex; align-items: center; gap: 8px;">
+              <span>✅</span> <span>Сводный отчет по ЭТРН успешно сформирован!</span>
+            </div>
+            <div style="font-size: 13px; color: #334155; margin-top: 6px;" id="etrnResultDetails">—</div>
+          </div>
+
+          <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+            <a id="btn-etrn-download" class="btn btn-primary" href="#" download style="text-decoration: none;">
+              📥 Скачать отчет (.xlsx)
+            </a>
+            <button class="btn btn-outline" style="border-color: #0284c7; color: #0284c7;" onclick="openEtrnSendModal()">
+              ✉️ Отправить отчет в Outlook
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================================================== -->
       <!-- СЕКЦИЯ: АДМИН-ПАНЕЛЬ УПРАВЛЕНИЯ УЧЕТКАМИ              -->
       <!-- ===================================================== -->
       <section id="section-admin" class="section-view">
@@ -1141,6 +1268,9 @@
                 </label>
                 <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
                   <input type="checkbox" id="new-perm-thermo" checked> 🌡️ Температурные графики
+                </label>
+                <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                  <input type="checkbox" id="new-perm-etrn" checked> 📑 Отчеты ЭТРН
                 </label>
               </div>
               <button type="submit" class="btn btn-primary">Создать учетную запись</button>
@@ -1351,6 +1481,58 @@
     </div>
   </div>
 
+  <!-- ─── МОДАЛЬНОЕ ОКНО ОТПРАВКИ ОТЧЕТА ЭТРН В OUTLOOK ────── -->
+  <div class="modal-backdrop" id="etrnSendModal">
+    <div class="modal" style="max-width: 520px;">
+      <div class="modal-header">
+        <h3>✉️ Отправка отчета ЭТРН через Outlook</h3>
+        <button class="modal-close" onclick="closeEtrnSendModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div style="background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 14px; font-size: 13px; line-height: 1.6; margin-bottom: 16px;">
+          <div><b>Кому:</b> <span style="color: #0369a1;">ab.smirnov@puls.ru; e.sokovnin@puls.ru; n.rozhkov@puls.ru</span></div>
+          <div style="margin-top: 4px;"><b>Копия:</b> <span style="color: #475569;">e.myalkin@puls.ru</span></div>
+          <div style="margin-top: 4px;"><b>Тема:</b> <b id="etrnModalSubject" style="color: var(--text);">ЭТРН отчет (...)</b></div>
+          <div style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border);">
+            <b>Текст письма:</b>
+            <div style="background: #ffffff; padding: 8px 10px; border-radius: 6px; border: 1px solid #e2e8f0; margin-top: 4px; font-size: 12.5px; color: #334155;">
+              Добрый день<br><br>Во вложении список с нарушениями
+            </div>
+          </div>
+          <div style="margin-top: 6px;">
+            <b>Вложение:</b> <span id="etrnModalAttachment" style="color: #15803d; font-weight: 600;">—</span>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Выберите режим отправки в Outlook:</label>
+          <label class="choice-box">
+            <input type="radio" name="etrnSendMode" value="draft" checked>
+            <div class="choice-text">
+              <b>📝 Создать черновик (Рекомендуется)</b>
+              <small>Письмо с вложенным файлом отчета (.xlsx) сохранится в папке «Черновики» вашего личного Outlook.</small>
+            </div>
+          </label>
+          <label class="choice-box">
+            <input type="radio" name="etrnSendMode" value="send">
+            <div class="choice-text">
+              <b>🚀 Отправить сразу</b>
+              <small>Письмо будет сразу отправлено адресатам с вашей личной почты через приложение Outlook.</small>
+            </div>
+          </label>
+        </div>
+
+        <div id="etrnSendingStatus" style="display:none; text-align:center; padding: 10px; color: var(--primary); font-weight:600;">
+          ⏳ Подключение к Outlook и прикрепление отчета...
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="closeEtrnSendModal()">Отмена</button>
+        <button class="btn btn-primary" id="confirmEtrnSendBtn" onclick="executeEtrnEmailSend()">Подтвердить</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     // ─── Глобальное состояние авторизации и сессии ──────────────────────────
     window.authToken = null;
@@ -1394,6 +1576,9 @@
 
     window.addEventListener('DOMContentLoaded', () => {
       setPreset('7days');
+      setEtrnPreset('yesterday');
+      const manualDateEl = document.getElementById('etrn-manual-date');
+      if (manualDateEl) manualDateEl.value = new Date().toISOString().split('T')[0];
       initIdleTracker();
 
       const savedLogin = localStorage.getItem('puls_last_login') || '';
@@ -1491,13 +1676,19 @@
       const hasOptOrders = isAdmin || perms.includes('opt_orders') || perms.includes('opt');
       const hasAnyOpt = hasOptSchedules || hasOptOrders;
       const hasThermo = isAdmin || perms.includes('thermo');
+      const hasEtrn = isAdmin || perms.includes('etrn');
+      const hasAnyMonitoring = hasThermo || hasEtrn;
 
       document.getElementById('nav-opt').style.display = hasAnyOpt ? 'flex' : 'none';
       document.getElementById('subnav-opt').style.display = hasAnyOpt ? 'block' : 'none';
       document.getElementById('subnav-opt-schedules').style.display = hasOptSchedules ? 'flex' : 'none';
       document.getElementById('subnav-opt-orders').style.display = hasOptOrders ? 'flex' : 'none';
 
-      document.getElementById('nav-thermo').style.display = hasThermo ? 'flex' : 'none';
+      document.getElementById('nav-monitoring').style.display = hasAnyMonitoring ? 'flex' : 'none';
+      document.getElementById('subnav-monitoring').style.display = hasAnyMonitoring ? 'block' : 'none';
+      document.getElementById('subnav-monitoring-thermo').style.display = hasThermo ? 'flex' : 'none';
+      document.getElementById('subnav-monitoring-etrn').style.display = hasEtrn ? 'flex' : 'none';
+
       document.getElementById('admin-nav-group').style.display = isAdmin ? 'block' : 'none';
 
       openSection('home');
@@ -1557,7 +1748,6 @@
         subOpt.classList.add('open');
         subOpt.style.display = 'block';
         if (chevron) chevron.style.transform = 'rotate(0deg)';
-        // Если мы еще не внутри ОПТ, открываем первый доступный подраздел
         const isSchedulesActive = document.getElementById('section-opt-schedules').classList.contains('active');
         const isOrdersActive = document.getElementById('section-opt-orders').classList.contains('active');
         if (!isSchedulesActive && !isOrdersActive) {
@@ -1567,8 +1757,29 @@
       }
     }
 
+    function toggleMonitoringMenu() {
+      const subMon = document.getElementById('subnav-monitoring');
+      const chevron = document.getElementById('monitoring-chevron');
+      if (subMon.classList.contains('open')) {
+        subMon.classList.remove('open');
+        subMon.style.display = 'none';
+        if (chevron) chevron.style.transform = 'rotate(-90deg)';
+      } else {
+        subMon.classList.add('open');
+        subMon.style.display = 'block';
+        if (chevron) chevron.style.transform = 'rotate(0deg)';
+        const isThermoActive = document.getElementById('section-thermo').classList.contains('active');
+        const isEtrnActive = document.getElementById('section-etrn').classList.contains('active');
+        if (!isThermoActive && !isEtrnActive) {
+          const canThermo = document.getElementById('subnav-monitoring-thermo').style.display !== 'none';
+          openSection(canThermo ? 'thermo' : 'etrn');
+        }
+      }
+    }
+
     function openSection(section) {
       if (section === 'opt') section = 'opt-schedules';
+      if (section === 'monitoring') section = 'thermo';
 
       document.querySelectorAll('.section-view').forEach(el => el.classList.remove('active'));
       document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
@@ -1589,6 +1800,19 @@
         if (chevron) chevron.style.transform = 'rotate(0deg)';
 
         const subBtn = document.getElementById(`subnav-${section}`);
+        if (subBtn) subBtn.classList.add('active');
+      } else if (section === 'thermo' || section === 'etrn') {
+        const navMon = document.getElementById('nav-monitoring');
+        const subMon = document.getElementById('subnav-monitoring');
+        const chevron = document.getElementById('monitoring-chevron');
+        if (navMon) navMon.classList.add('active');
+        if (subMon) {
+          subMon.classList.add('open');
+          subMon.style.display = 'block';
+        }
+        if (chevron) chevron.style.transform = 'rotate(0deg)';
+
+        const subBtn = document.getElementById(`subnav-monitoring-${section}`);
         if (subBtn) subBtn.classList.add('active');
       } else {
         const targetNav = document.getElementById(`nav-${section}`);
@@ -1681,6 +1905,7 @@
           const hasOptSch = u.role === 'admin' || perms.includes('opt_schedules') || perms.includes('opt');
           const hasOptOrd = u.role === 'admin' || perms.includes('opt_orders') || perms.includes('opt');
           const hasThermo = u.role === 'admin' || perms.includes('thermo');
+          const hasEtrn = u.role === 'admin' || perms.includes('etrn');
 
           const tr = document.createElement('tr');
           tr.innerHTML = `
@@ -1709,6 +1934,11 @@
                   <input type="checkbox" class="perm-cb-${u.login}" value="thermo" ${hasThermo ? 'checked' : ''} ${u.is_master ? 'disabled' : ''}
                     onchange="saveUserPermissions('${u.login}')">
                   🌡️ Термографики
+                </label>
+                <label style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;cursor:pointer;">
+                  <input type="checkbox" class="perm-cb-${u.login}" value="etrn" ${hasEtrn ? 'checked' : ''} ${u.is_master ? 'disabled' : ''}
+                    onchange="saveUserPermissions('${u.login}')">
+                  📑 ЭТРН
                 </label>
               </div>
             </td>
@@ -1746,6 +1976,7 @@
       if (document.getElementById('new-perm-opt-schedules').checked) perms.push('opt_schedules');
       if (document.getElementById('new-perm-opt-orders').checked) perms.push('opt_orders');
       if (document.getElementById('new-perm-thermo').checked) perms.push('thermo');
+      if (document.getElementById('new-perm-etrn').checked) perms.push('etrn');
 
       try {
         const resp = await fetch('/api/admin/users', {
@@ -2689,6 +2920,261 @@
       } else {
         document.getElementById('progress-title').innerText = 'Ошибка выполнения';
         document.getElementById('progress-desc').innerText = job.error_message || 'Непредвиденный сбой';
+      }
+    }
+
+    // =========================================================================
+    // РАЗДЕЛ: МОНИТОРИНГ — ОТЧЕТЫ ЭТРН
+    // =========================================================================
+    let currentEtrnTaskId = null;
+    let currentEtrnFilename = '';
+    let currentEtrnDateLabel = '';
+    let etrnPollInterval = null;
+
+    function switchEtrnMode(mode) {
+      document.getElementById('etrn-pane-auto').style.display = (mode === 'auto') ? 'block' : 'none';
+      document.getElementById('etrn-pane-manual').style.display = (mode === 'manual') ? 'block' : 'none';
+      const btnAuto = document.getElementById('tab-etrn-auto');
+      const btnMan = document.getElementById('tab-etrn-manual');
+      if (mode === 'auto') {
+        btnAuto.className = 'btn btn-primary btn-sm';
+        btnMan.className = 'btn btn-outline btn-sm';
+      } else {
+        btnAuto.className = 'btn btn-outline btn-sm';
+        btnMan.className = 'btn btn-primary btn-sm';
+      }
+    }
+
+    function setEtrnPreset(preset) {
+      const today = new Date();
+      const formatDate = d => d.toISOString().split('T')[0];
+      const fromEl = document.getElementById('etrn-date-from');
+      const toEl = document.getElementById('etrn-date-to');
+      if (!fromEl || !toEl) return;
+
+      if (preset === 'today') {
+        fromEl.value = formatDate(today);
+        toEl.value = formatDate(today);
+      } else if (preset === 'yesterday') {
+        const y = new Date(today);
+        y.setDate(y.getDate() - 1);
+        fromEl.value = formatDate(y);
+        toEl.value = formatDate(y);
+      } else if (preset === '3days') {
+        const past = new Date(today);
+        past.setDate(past.getDate() - 2);
+        fromEl.value = formatDate(past);
+        toEl.value = formatDate(today);
+      } else if (preset === '7days') {
+        const past = new Date(today);
+        past.setDate(past.getDate() - 6);
+        fromEl.value = formatDate(past);
+        toEl.value = formatDate(today);
+      } else if (preset === 'current_month') {
+        const first = new Date(today.getFullYear(), today.getMonth(), 1);
+        fromEl.value = formatDate(first);
+        toEl.value = formatDate(today);
+      }
+    }
+
+    function formatIsoToRu(isoStr) {
+      if (!isoStr) return '';
+      const parts = isoStr.split('-');
+      if (parts.length === 3) return `${parts[2]}.${parts[1]}.${parts[0]}`;
+      return isoStr;
+    }
+
+    async function startEtrnAutoTask() {
+      const dFromRaw = document.getElementById('etrn-date-from').value;
+      const dToRaw = document.getElementById('etrn-date-to').value;
+      if (!dFromRaw) {
+        alert('Пожалуйста, выберите дату начала!');
+        return;
+      }
+      const date_from = formatIsoToRu(dFromRaw);
+      const date_to = dToRaw ? formatIsoToRu(dToRaw) : date_from;
+
+      const pCard = document.getElementById('etrn-progress-card');
+      const rCard = document.getElementById('etrn-result-card');
+      const pBar = document.getElementById('etrn-progress-bar');
+      const pDesc = document.getElementById('etrn-progress-desc');
+      const btn = document.getElementById('btn-etrn-start-auto');
+
+      pCard.style.display = 'block';
+      rCard.style.display = 'none';
+      pBar.style.width = '10%';
+      pDesc.innerText = 'Запуск задачи сбора из 1С...';
+      btn.disabled = true;
+
+      try {
+        const resp = await fetch('/api/etrn/generate-task', {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ date_from, date_to })
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          throw new Error(data.detail || 'Ошибка запуска задачи');
+        }
+        currentEtrnTaskId = data.task_id;
+        currentEtrnDateLabel = (date_from === date_to) ? date_from : `${date_from} - ${date_to}`;
+        pollEtrnTaskStatus(data.task_id);
+      } catch (e) {
+        alert('Ошибка: ' + e.message);
+        pCard.style.display = 'none';
+        btn.disabled = false;
+      }
+    }
+
+    function pollEtrnTaskStatus(taskId) {
+      if (etrnPollInterval) clearInterval(etrnPollInterval);
+      etrnPollInterval = setInterval(async () => {
+        try {
+          const resp = await fetch(`/api/etrn/task-status/${encodeURIComponent(taskId)}`, {
+            headers: authHeaders()
+          });
+          if (!resp.ok) return;
+          const task = await resp.json();
+
+          const pBar = document.getElementById('etrn-progress-bar');
+          const pDesc = document.getElementById('etrn-progress-desc');
+          pBar.style.width = Math.max(10, task.progress || 0) + '%';
+          pDesc.innerText = task.message || 'Формирование отчета...';
+
+          if (task.status === 'completed') {
+            clearInterval(etrnPollInterval);
+            etrnPollInterval = null;
+            document.getElementById('btn-etrn-start-auto').disabled = false;
+            document.getElementById('etrn-progress-card').style.display = 'none';
+
+            currentEtrnTaskId = taskId;
+            currentEtrnFilename = task.filename || 'ЭТРН_Отчет.xlsx';
+            currentEtrnDateLabel = task.date_label || currentEtrnDateLabel;
+
+            const rCard = document.getElementById('etrn-result-card');
+            const details = document.getElementById('etrnResultDetails');
+            const dlBtn = document.getElementById('btn-etrn-download');
+
+            details.innerHTML = `Файл: <b>${currentEtrnFilename}</b> &bull; Период: <b>${currentEtrnDateLabel}</b> &bull; Время готовности: <b>${new Date().toLocaleTimeString()}</b>`;
+            dlBtn.href = `/api/etrn/download/${encodeURIComponent(taskId)}`;
+            dlBtn.setAttribute('download', currentEtrnFilename);
+            rCard.style.display = 'block';
+          } else if (task.status === 'failed') {
+            clearInterval(etrnPollInterval);
+            etrnPollInterval = null;
+            document.getElementById('btn-etrn-start-auto').disabled = false;
+            alert('Сбой формирования: ' + (task.error || task.message));
+            document.getElementById('etrn-progress-card').style.display = 'none';
+          }
+        } catch (e) {
+          // ignore transient poll error
+        }
+      }, 1500);
+    }
+
+    async function submitEtrnFilesManual() {
+      const f1 = document.getElementById('etrn-file-1').files[0];
+      const f2 = document.getElementById('etrn-file-2').files[0];
+      const f3 = document.getElementById('etrn-file-3').files[0];
+      if (!f1 || !f2 || !f3) {
+        alert('Пожалуйста, выберите все 3 файла: «ЭТРН», «Модель расчетов» и «Процент»!');
+        return;
+      }
+      const rawDate = document.getElementById('etrn-manual-date').value;
+      const date_label = rawDate ? formatIsoToRu(rawDate) : formatIsoToRu(new Date().toISOString().split('T')[0]);
+
+      const btn = document.getElementById('btn-etrn-start-manual');
+      btn.disabled = true;
+      btn.innerText = '⏳ Обработка файлов...';
+
+      const formData = new FormData();
+      formData.append('etrn_file', f1);
+      formData.append('model_file', f2);
+      formData.append('percent_file', f3);
+      formData.append('date_label', date_label);
+      formData.append('as_json', 'true');
+
+      try {
+        const resp = await fetch('/api/etrn/process-files', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: formData
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          throw new Error(data.detail || 'Ошибка при обработке файлов');
+        }
+
+        currentEtrnTaskId = data.task_id;
+        currentEtrnFilename = data.filename;
+        currentEtrnDateLabel = data.date_label || date_label;
+
+        const rCard = document.getElementById('etrn-result-card');
+        const details = document.getElementById('etrnResultDetails');
+        const dlBtn = document.getElementById('btn-etrn-download');
+
+        details.innerHTML = `Файл: <b>${currentEtrnFilename}</b> &bull; Метка даты: <b>${currentEtrnDateLabel}</b> &bull; Сформирован мгновенно из 3 файлов`;
+        dlBtn.href = `/api/etrn/download/${encodeURIComponent(data.task_id)}`;
+        dlBtn.setAttribute('download', currentEtrnFilename);
+        rCard.style.display = 'block';
+
+        alert('✅ Отчет ЭТРН успешно собран!');
+      } catch (err) {
+        alert('Ошибка: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerText = '⚡ Собрать отчет из файлов';
+      }
+    }
+
+    function openEtrnSendModal() {
+      if (!currentEtrnTaskId) {
+        alert('Сначала сформируйте отчет ЭТРН!');
+        return;
+      }
+      const subjEl = document.getElementById('etrnModalSubject');
+      const attEl = document.getElementById('etrnModalAttachment');
+      if (subjEl) subjEl.innerText = `ЭТРН отчет (${currentEtrnDateLabel || 'Актуальный'})`;
+      if (attEl) attEl.innerText = currentEtrnFilename || 'ЭТРН_Отчет.xlsx';
+
+      document.getElementById('etrnSendingStatus').style.display = 'none';
+      document.getElementById('confirmEtrnSendBtn').disabled = false;
+      document.getElementById('etrnSendModal').classList.add('active');
+    }
+
+    function closeEtrnSendModal() {
+      document.getElementById('etrnSendModal').classList.remove('active');
+    }
+
+    async function executeEtrnEmailSend() {
+      const mode = document.querySelector('input[name="etrnSendMode"]:checked').value;
+      const confirmBtn = document.getElementById('confirmEtrnSendBtn');
+      confirmBtn.disabled = true;
+      document.getElementById('etrnSendingStatus').style.display = 'block';
+
+      try {
+        const res = await dispatchViaLocalOutlookOrServer(
+          '/api/etrn/prepare-email',
+          '/api/etrn/send-email',
+          { task_id: currentEtrnTaskId, mode }
+        );
+        if (res.status === 'bridge_required') {
+          confirmBtn.disabled = false;
+          document.getElementById('etrnSendingStatus').style.display = 'none';
+          closeEtrnSendModal();
+          openBridgeRequiredModal();
+        } else if (res.status === 'success' || res.status === 'warning') {
+          alert(res.message);
+          closeEtrnSendModal();
+        } else {
+          alert('Ошибка при отправке: ' + res.message);
+          confirmBtn.disabled = false;
+          document.getElementById('etrnSendingStatus').style.display = 'none';
+        }
+      } catch (e) {
+        alert('Ошибка связи с сервером: ' + e);
+        confirmBtn.disabled = false;
+        document.getElementById('etrnSendingStatus').style.display = 'none';
       }
     }
   </script>

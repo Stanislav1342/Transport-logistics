@@ -34,7 +34,7 @@ import webbrowser
 import zipfile
 from typing import Any, Optional
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile, status
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -73,7 +73,7 @@ except ImportError:
 
 # ─── Настройка FastAPI и CORS ─────────────────────────────────────────────────
 
-PORTAL_VERSION = "1.4"
+PORTAL_VERSION = "1.5"
 app = FastAPI(title="ПУЛЬС — Транспортная логистика", version=f"v{PORTAL_VERSION}")
 
 ALLOWED_ORIGIN_REGEX = (
@@ -98,7 +98,7 @@ if os.path.exists(STATIC_DIR):
 DEFAULT_AUTH_PIN = "123456"
 DEFAULT_ADMIN_LOGIN = "s.khvostov"
 LOGIN_REGEX = re.compile(r"^[a-z]\.[a-z0-9_-]{2,30}$")
-ALL_SECTIONS = ["opt_schedules", "opt_orders", "thermo"]
+ALL_SECTIONS = ["opt_schedules", "opt_orders", "thermo", "etrn"]
 
 
 def _normalize_permissions(perms: list[str] | None) -> list[str]:
@@ -375,6 +375,8 @@ def check_auth(
         perms = _normalize_permissions(user.get("permissions", []))
         if required_section == "opt_any":
             allowed = ("opt_schedules" in perms) or ("opt_orders" in perms)
+        elif required_section == "monitoring_any":
+            allowed = ("thermo" in perms) or ("etrn" in perms)
         else:
             allowed = required_section in perms
         if not allowed:
@@ -399,7 +401,7 @@ class CreateUserRequest(BaseModel):
     full_name: str = Field(..., min_length=2, max_length=80)
     position: str = Field(default="Специалист отдела логистики", max_length=100)
     pin: Optional[str] = Field(default=None)
-    permissions: list[str] = Field(default_factory=lambda: ["opt_schedules", "opt_orders", "thermo"])
+    permissions: list[str] = Field(default_factory=lambda: ["opt_schedules", "opt_orders", "thermo", "etrn"])
     role: str = Field(default="user")
 
 
@@ -1943,6 +1945,21 @@ async def server_status():
         "queue_size": job_queue.qsize(),
         "total_jobs": len(jobs_db),
     }
+
+
+# ==============================================================================
+# РАЗДЕЛ 3: МОНИТОРИНГ — ОТЧЕТЫ ЭТРН
+# ==============================================================================
+try:
+    from etrn.api_router import router as etrn_router
+
+    def check_etrn_auth(req: Request):
+        return check_auth(req, required_section="etrn")
+
+    app.include_router(etrn_router, dependencies=[Depends(check_etrn_auth)])
+    logger.info("Модуль ЭТРН успешно подключен к серверу (/api/etrn)")
+except Exception as e:
+    logger.error("Ошибка подключения модуля ЭТРН: %s", e)
 
 
 def main():
