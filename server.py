@@ -73,7 +73,7 @@ except ImportError:
 
 # ─── Настройка FastAPI и CORS ─────────────────────────────────────────────────
 
-PORTAL_VERSION = "1.5"
+PORTAL_VERSION = "1.6"
 app = FastAPI(title="ПУЛЬС — Транспортная логистика", version=f"v{PORTAL_VERSION}")
 
 ALLOWED_ORIGIN_REGEX = (
@@ -1935,6 +1935,139 @@ async def download_single_pdf(task_id: str, filename: str, request: Request):
         filename=safe_filename,
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"},
     )
+
+
+THERMO_EMAIL_TO = "v.muratova@puls.ru; transport_opt@puls.ru; priem_mow@puls.ru"
+THERMO_EMAIL_CC = "n.lazutina@puls.ru"
+
+
+class ThermoEmailRequest(BaseModel):
+    mode: str = "draft"
+
+
+@app.post("/api/tasks/{task_id}/prepare-email")
+async def prepare_thermo_email(task_id: str, req: ThermoEmailRequest, request: Request):
+    check_auth(request, required_section="thermo")
+    _validate_task_id(task_id)
+    job = jobs_db.get(task_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    if job.get("status") != "completed":
+        raise HTTPException(status_code=400, detail="Выгрузка графиков еще не завершена")
+
+    task_dir = os.path.join(TASK_OUTPUT_DIR, f"task_{task_id}")
+    attachments = []
+
+    success_results = [r for r in job.get("results", []) if r.get("success") and r.get("filename")]
+    for r in success_results:
+        fname = os.path.basename(r["filename"])
+        fpath = os.path.join(task_dir, fname)
+        if os.path.exists(fpath):
+            with open(fpath, "rb") as f:
+                content_b64 = base64.b64encode(f.read()).decode("ascii")
+            attachments.append({
+                "filename": fname,
+                "network_path": os.path.abspath(fpath),
+                "content_b64": content_b64,
+            })
+
+    if not attachments and os.path.isdir(task_dir):
+        for fname in sorted(os.listdir(task_dir)):
+            if fname.lower().endswith(".pdf"):
+                fpath = os.path.join(task_dir, fname)
+                with open(fpath, "rb") as f:
+                    content_b64 = base64.b64encode(f.read()).decode("ascii")
+                attachments.append({
+                    "filename": fname,
+                    "network_path": os.path.abspath(fpath),
+                    "content_b64": content_b64,
+                })
+
+    if not attachments:
+        raise HTTPException(
+            status_code=400,
+            detail="Нет сформированных PDF-файлов графиков для отправки",
+        )
+
+    is_single = (len(attachments) == 1)
+    subject = "Температурный график" if is_single else "Температурные графики"
+    body_text = "График по рейсу" if is_single else "Графики по рейсам"
+    html_body = f"<p>Добрый день,</p><p>{body_text}</p>"
+
+    email_item = {
+        "to": THERMO_EMAIL_TO,
+        "cc": THERMO_EMAIL_CC,
+        "subject": subject,
+        "html_body": html_body,
+        "attachments": attachments,
+    }
+
+    return {
+        "status": "success",
+        "mode": req.mode,
+        "subject": subject,
+        "body_text": f"Добрый день,\n\n{body_text}",
+        "attachments_count": len(attachments),
+        "attachments_names": [a["filename"] for a in attachments],
+        "emails": [email_item],
+    }
+
+
+@app.post("/api/tasks/{task_id}/send-email")
+async def send_thermo_email(task_id: str, req: ThermoEmailRequest, request: Request):
+    check_auth(request, required_section="thermo")
+    _validate_task_id(task_id)
+
+    if not _is_same_host_client(request):
+        return {
+            "status": "bridge_required",
+            "message": (
+                "Чтобы черновики и письма создавались в вашем личном Outlook (на вашем компьютере), "
+                "запустите на своем ПК помощник «outlook_bridge.py»."
+            ),
+        }
+
+    prep = await prepare_thermo_email(task_id, req, request)
+    if prep.get("status") != "success":
+        return prep
+
+    emails = prep.get("emails", [])
+    draft_mode = (req.mode == "draft")
+
+    try:
+        import pythoncom
+        import win32com.client as win32
+
+        pythoncom.CoInitialize()
+        outlook = win32.Dispatch("outlook.application")
+
+        for item in emails:
+            mail = outlook.CreateItem(0)
+            mail.To = item["to"]
+            if item.get("cc"):
+                mail.CC = item["cc"]
+            mail.Subject = item["subject"]
+            mail.HTMLBody = item["html_body"]
+            for att in item.get("attachments", []):
+                fpath = att.get("network_path")
+                if fpath and os.path.exists(fpath):
+                    mail.Attachments.Add(os.path.abspath(fpath))
+            if draft_mode:
+                mail.Save()
+            else:
+                mail.Send()
+
+        action_text = (
+            "сохранены в Черновиках вашего Outlook"
+            if draft_mode
+            else "отправлены с вашей почты Outlook"
+        )
+        return {
+            "status": "success",
+            "message": f"Температурные графики успешно {action_text}!",
+        }
+    except Exception as e:
+        return {"status": "error", "message": f"Ошибка Outlook: {str(e)}"}
 
 
 @app.get("/api/status")

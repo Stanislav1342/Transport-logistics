@@ -781,7 +781,7 @@
             <p>Единый корпоративный портал автоматизации транспортной логистики ФК «ПУЛЬС» (РЦ Черная Грязь)</p>
           </div>
           <span class="badge" id="portal-version-badge">
-            <span class="badge-dot"></span> Версия 1.5
+            <span class="badge-dot"></span> Версия 1.6
           </span>
         </div>
 
@@ -1070,12 +1070,15 @@
         </div>
 
         <div class="card" id="progress-card" style="display: none;">
-          <div class="card-title" style="justify-content: space-between;">
+          <div class="card-title" style="justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
             <span id="progress-title">Выполнение выгрузки...</span>
-            <div id="zip-download-container" style="display: none;">
+            <div id="zip-download-container" style="display: none; align-items: center; gap: 8px; flex-wrap: wrap;">
               <a id="btn-zip-download" class="btn btn-success" href="#">
                 <span>Скачать все графики (ZIP)</span>
               </a>
+              <button type="button" id="btn-thermo-send-email" class="btn btn-primary" onclick="openThermoSendModal()">
+                <span>✉️ Отправить на приемку</span>
+              </button>
             </div>
           </div>
 
@@ -1108,7 +1111,7 @@
       <section id="section-etrn" class="section-view">
         <div class="page-header">
           <div>
-            <h2>📑 Мониторинг: Сводные отчеты по ЭТРН</h2>
+            <h2>📑 Отчет по подписанию ЭТРН</h2>
             <p>Автоматическое сведение реестров ЭТРН, расчет среднего времени подписания перевозчиками и рассылка отчетов в Outlook</p>
           </div>
         </div>
@@ -1119,19 +1122,15 @@
           <!-- Вкладки режимов -->
           <div style="display: flex; gap: 10px; margin-bottom: 18px; border-bottom: 1px solid var(--border-light); padding-bottom: 12px;">
             <button type="button" class="btn btn-primary btn-sm" id="tab-etrn-auto" onclick="switchEtrnMode('auto')">
-              🚀 1. Автосбор из 1С (Фоновый режим)
+              Полный автосбор отчета
             </button>
             <button type="button" class="btn btn-outline btn-sm" id="tab-etrn-manual" onclick="switchEtrnMode('manual')">
-              📁 2. Загрузка 3 файлов вручную
+              Загрузка файлов вручную
             </button>
           </div>
 
           <!-- РЕЖИМ 1: Автосбор из 1С -->
           <div id="etrn-pane-auto">
-            <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 12px 14px; margin-bottom: 16px; font-size: 13px; color: #166534;">
-              <b>ℹ️ Автосбор:</b> Сервер напрямую подключается к 1С:Предприятие, по навигационным ссылкам выгружает реестры МЛ, ЭТРН и контроль подписания, после чего сводит аналитику в готовый отчет.
-            </div>
-
             <div class="form-group">
               <label>Период отгрузок ЭТРН (включительно):</label>
               <div class="date-row">
@@ -1160,10 +1159,6 @@
 
           <!-- РЕЖИМ 2: Ручная загрузка 3 файлов -->
           <div id="etrn-pane-manual" style="display: none;">
-            <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 12px 14px; margin-bottom: 16px; font-size: 13px; color: #1e40af;">
-              <b>💡 Мгновенная сборка:</b> Если 3 таблицы уже выгружены из 1С на ваш компьютер, выберите их ниже. Отчет будет собран за 1 секунду без обращения к 1С.
-            </div>
-
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-bottom: 16px;">
               <div style="border: 1px dashed var(--border); padding: 12px; border-radius: 8px; background: #fafafa;">
                 <label style="font-weight: 700; font-size: 13px; display: block; margin-bottom: 6px;">1. «ЭТРН 1с.xlsx»</label>
@@ -1529,6 +1524,58 @@
       <div class="modal-footer">
         <button class="btn btn-outline" onclick="closeEtrnSendModal()">Отмена</button>
         <button class="btn btn-primary" id="confirmEtrnSendBtn" onclick="executeEtrnEmailSend()">Подтвердить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── МОДАЛЬНОЕ ОКНО ОТПРАВКИ ТЕМПЕРАТУРНЫХ ГРАФИКОВ НА ПРИЕМКУ В OUTLOOK ────── -->
+  <div class="modal-backdrop" id="thermoSendModal">
+    <div class="modal" style="max-width: 520px;">
+      <div class="modal-header">
+        <h3>✉️ Отправить на приемку через Outlook</h3>
+        <button class="modal-close" onclick="closeThermoSendModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div style="background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 14px; font-size: 13px; line-height: 1.6; margin-bottom: 16px;">
+          <div><b>Кому:</b> <span style="color: #0369a1;">v.muratova@puls.ru; transport_opt@puls.ru; priem_mow@puls.ru</span></div>
+          <div style="margin-top: 4px;"><b>Копия:</b> <span style="color: #475569;">n.lazutina@puls.ru</span></div>
+          <div style="margin-top: 4px;"><b>Тема:</b> <b id="thermoModalSubject" style="color: var(--text);">Температурные графики</b></div>
+          <div style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border);">
+            <b>Текст письма:</b>
+            <div id="thermoModalBody" style="background: #ffffff; padding: 8px 10px; border-radius: 6px; border: 1px solid #e2e8f0; margin-top: 4px; font-size: 12.5px; color: #334155;">
+              Добрый день,<br><br>Графики по рейсам
+            </div>
+          </div>
+          <div style="margin-top: 6px;">
+            <b>Вложения:</b> <span id="thermoModalAttachment" style="color: #15803d; font-weight: 600;">—</span>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Выберите режим отправки в Outlook:</label>
+          <label class="choice-box">
+            <input type="radio" name="thermoSendMode" value="draft" checked>
+            <div class="choice-text">
+              <b>📝 Создать черновик (Рекомендуется)</b>
+              <small>Письмо с вложенными PDF-файлами графиков сохранится в папке «Черновики» вашего личного Outlook.</small>
+            </div>
+          </label>
+          <label class="choice-box">
+            <input type="radio" name="thermoSendMode" value="send">
+            <div class="choice-text">
+              <b>🚀 Отправить сразу</b>
+              <small>Письмо будет сразу отправлено на приемку с вашей личной почты через приложение Outlook.</small>
+            </div>
+          </label>
+        </div>
+
+        <div id="thermoSendingStatus" style="display:none; text-align:center; padding: 10px; color: var(--primary); font-weight:600;">
+          ⏳ Подключение к Outlook и прикрепление графиков...
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="closeThermoSendModal()">Отмена</button>
+        <button class="btn btn-primary" id="confirmThermoSendBtn" onclick="executeThermoEmailSend()">Подтвердить</button>
       </div>
     </div>
   </div>
@@ -2896,7 +2943,10 @@
       }
     }
 
+    let latestThermoJob = null;
+
     function finishTask(job) {
+      latestThermoJob = job;
       const btnStart = document.getElementById('btn-start');
       btnStart.disabled = false;
       btnStart.innerHTML = `<span>Запустить выгрузку</span>`;
@@ -2906,20 +2956,104 @@
         document.getElementById('progress-desc').innerText = `Готово. Успешно: ${job.success_count || 0}, не выгружено: ${job.fail_count || 0}`;
         document.getElementById('progress-bar').style.width = '100%';
 
-        if (job.has_zip) {
-          const zipContainer = document.getElementById('zip-download-container');
-          const zipBtn = document.getElementById('btn-zip-download');
-          const zipUrl = `/api/tasks/${job.id}/download`;
-          const zipName = job.zip_filename || `advantum_charts_${job.id.slice(0, 8)}.zip`;
-          zipBtn.onclick = (e) => {
-            e.preventDefault();
-            downloadProtectedFile(zipUrl, zipName);
-          };
-          zipContainer.style.display = 'block';
+        const zipContainer = document.getElementById('zip-download-container');
+        const zipBtn = document.getElementById('btn-zip-download');
+        const emailBtn = document.getElementById('btn-thermo-send-email');
+
+        if (job.success_count > 0) {
+          if (job.has_zip) {
+            zipBtn.style.display = 'inline-flex';
+            const zipUrl = `/api/tasks/${job.id}/download`;
+            const zipName = job.zip_filename || `advantum_charts_${job.id.slice(0, 8)}.zip`;
+            zipBtn.onclick = (e) => {
+              e.preventDefault();
+              downloadProtectedFile(zipUrl, zipName);
+            };
+          } else {
+            zipBtn.style.display = 'none';
+          }
+          if (emailBtn) emailBtn.style.display = 'inline-flex';
+          zipContainer.style.display = 'flex';
+        } else {
+          zipContainer.style.display = 'none';
         }
       } else {
         document.getElementById('progress-title').innerText = 'Ошибка выполнения';
         document.getElementById('progress-desc').innerText = job.error_message || 'Непредвиденный сбой';
+      }
+    }
+
+    function openThermoSendModal() {
+      if (!activeTaskId) {
+        alert('Сначала выполните выгрузку графиков!');
+        return;
+      }
+      const successCount = (latestThermoJob && latestThermoJob.success_count) ? latestThermoJob.success_count : 1;
+      const isSingle = (successCount === 1);
+
+      const subjEl = document.getElementById('thermoModalSubject');
+      const bodyEl = document.getElementById('thermoModalBody');
+      const attEl = document.getElementById('thermoModalAttachment');
+
+      if (subjEl) subjEl.innerText = isSingle ? 'Температурный график' : 'Температурные графики';
+      if (bodyEl) bodyEl.innerHTML = isSingle ? 'Добрый день,<br><br>График по рейсу' : 'Добрый день,<br><br>Графики по рейсам';
+      if (attEl) {
+        if (latestThermoJob && latestThermoJob.results) {
+          const files = latestThermoJob.results.filter(r => r.success && r.filename).map(r => r.filename);
+          if (files.length === 1) {
+            attEl.innerText = files[0];
+          } else if (files.length > 1) {
+            attEl.innerText = `${files.length} шт. (${files.slice(0, 3).join(', ')}${files.length > 3 ? '...' : ''})`;
+          } else {
+            attEl.innerText = `${successCount} файл(ов)`;
+          }
+        } else {
+          attEl.innerText = `${successCount} файл(ов)`;
+        }
+      }
+
+      document.getElementById('thermoSendingStatus').style.display = 'none';
+      document.getElementById('confirmThermoSendBtn').disabled = false;
+      document.getElementById('thermoSendModal').classList.add('active');
+    }
+
+    function closeThermoSendModal() {
+      document.getElementById('thermoSendModal').classList.remove('active');
+    }
+
+    async function executeThermoEmailSend() {
+      if (!activeTaskId) {
+        alert('Нет активной задачи выгрузки графиков!');
+        return;
+      }
+      const mode = document.querySelector('input[name="thermoSendMode"]:checked').value;
+      const confirmBtn = document.getElementById('confirmThermoSendBtn');
+      confirmBtn.disabled = true;
+      document.getElementById('thermoSendingStatus').style.display = 'block';
+
+      try {
+        const res = await dispatchViaLocalOutlookOrServer(
+          `/api/tasks/${activeTaskId}/prepare-email`,
+          `/api/tasks/${activeTaskId}/send-email`,
+          { mode }
+        );
+        if (res.status === 'bridge_required') {
+          confirmBtn.disabled = false;
+          document.getElementById('thermoSendingStatus').style.display = 'none';
+          closeThermoSendModal();
+          openBridgeRequiredModal();
+        } else if (res.status === 'success' || res.status === 'warning') {
+          alert(res.message);
+          closeThermoSendModal();
+        } else {
+          alert('Ошибка при отправке: ' + (res.message || res.detail || JSON.stringify(res)));
+          confirmBtn.disabled = false;
+          document.getElementById('thermoSendingStatus').style.display = 'none';
+        }
+      } catch (e) {
+        alert('Сетевая ошибка: ' + e.message);
+        confirmBtn.disabled = false;
+        document.getElementById('thermoSendingStatus').style.display = 'none';
       }
     }
 
