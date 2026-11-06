@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import os
 import threading
+import urllib.parse
 import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -73,6 +74,8 @@ async def process_files(
     etrn_file: UploadFile = File(..., description="Файл «ЭТРН 1с.xlsx»"),
     model_file: UploadFile = File(..., description="Файл «Модель расчетов.xlsx»"),
     percent_file: UploadFile = File(..., description="Файл «Процент.xlsx»"),
+    date_from: Optional[str] = Form(None, description="Дата начала периода (ДД.ММ.ГГГГ)"),
+    date_to: Optional[str] = Form(None, description="Дата окончания периода (ДД.ММ.ГГГГ)"),
     date_label: Optional[str] = Form(None, description="Метка даты для имени файла (напр. '04.11.2026')"),
     as_json: Optional[bool] = Form(False, description="Вернуть JSON с task_id вместо бинарного потока"),
 ):
@@ -88,12 +91,34 @@ async def process_files(
             percent_source=percent_bytes,
         )
 
-        # Имя файла для сохранения и скачивания
-        label = (date_label or "").strip()
-        if not label:
-            label = datetime.now().strftime("%d.%m.%Y")
-        clean_label = label.replace(" ", "_")
-        out_filename = f"ЭТРН_{clean_label}.xlsx"
+        # Определение меток дат и имени файла
+        s_from = (date_from or "").strip()
+        s_to = (date_to or "").strip()
+
+        if not s_from and not s_to:
+            raw_label = (date_label or "").strip()
+            if " - " in raw_label:
+                parts = raw_label.split(" - ")
+                s_from, s_to = parts[0].strip(), parts[1].strip()
+            elif "_" in raw_label:
+                parts = raw_label.split("_")
+                s_from, s_to = parts[0].strip(), parts[1].strip()
+            else:
+                s_from = raw_label
+                s_to = raw_label
+
+        if not s_from:
+            s_from = datetime.now().strftime("%d.%m.%Y")
+        if not s_to:
+            s_to = s_from
+
+        # Если даты совпадают — в названии файла и теме ставится только одна дата!
+        if s_from == s_to:
+            label = s_from
+            out_filename = f"ЭТРН_{s_from}.xlsx"
+        else:
+            label = f"{s_from} - {s_to}"
+            out_filename = f"ЭТРН_{s_from}_{s_to}.xlsx"
 
         task_id = str(uuid.uuid4())
         out_dir = service.cfg.output_dir
@@ -112,8 +137,8 @@ async def process_files(
                 "filename": out_filename,
                 "file_path": out_filepath,
                 "date_label": label,
-                "date_from": label,
-                "date_to": label,
+                "date_from": s_from,
+                "date_to": s_to,
                 "completed_at": datetime.now().isoformat(),
             }
 
@@ -128,11 +153,12 @@ async def process_files(
                 "download_url": f"/api/etrn/download/{task_id}",
             }
 
+        encoded_filename = urllib.parse.quote(out_filename)
         return Response(
             content=report_bytes,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={
-                "Content-Disposition": f'attachment; filename="{out_filename}"',
+                "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
                 "Access-Control-Expose-Headers": "Content-Disposition",
             },
         )

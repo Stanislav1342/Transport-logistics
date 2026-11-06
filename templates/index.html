@@ -738,7 +738,7 @@
             <span>🌡️</span> <span>Температурные графики</span>
           </button>
           <button class="nav-subitem" id="subnav-monitoring-etrn" onclick="openSection('etrn')">
-            <span>📑</span> <span>Отчеты ЭТРН</span>
+            <span>📑</span> <span>Отчет по ЭТРН</span>
           </button>
         </div>
 
@@ -781,7 +781,7 @@
             <p>Единый корпоративный портал автоматизации транспортной логистики ФК «ПУЛЬС» (РЦ Черная Грязь)</p>
           </div>
           <span class="badge" id="portal-version-badge">
-            <span class="badge-dot"></span> Версия 1.6
+            <span class="badge-dot"></span> Версия 1.7
           </span>
         </div>
 
@@ -1174,9 +1174,25 @@
               </div>
             </div>
 
-            <div class="form-group" style="max-width: 280px; margin-bottom: 16px;">
-              <label>Метка даты для темы письма и отчета:</label>
-              <input type="date" id="etrn-manual-date" class="form-control">
+            <div class="form-group" style="margin-bottom: 16px;">
+              <label>Выберите период отчета:</label>
+              <div class="date-row">
+                <div>
+                  <span style="font-size:12px;color:var(--text-muted);">Дата с:</span>
+                  <input type="date" id="etrn-manual-date-from">
+                </div>
+                <div>
+                  <span style="font-size:12px;color:var(--text-muted);">Дата по:</span>
+                  <input type="date" id="etrn-manual-date-to">
+                </div>
+              </div>
+              <div class="presets">
+                <button type="button" class="btn-chip" onclick="setEtrnManualPreset('today')">Сегодня</button>
+                <button type="button" class="btn-chip" onclick="setEtrnManualPreset('yesterday')">Вчера</button>
+                <button type="button" class="btn-chip" onclick="setEtrnManualPreset('3days')">Последние 3 дня</button>
+                <button type="button" class="btn-chip" onclick="setEtrnManualPreset('7days')">Последние 7 дней</button>
+                <button type="button" class="btn-chip" onclick="setEtrnManualPreset('current_month')">Текущий месяц</button>
+              </div>
             </div>
 
             <button id="btn-etrn-start-manual" class="btn btn-primary" style="width:100%;padding:13px;" onclick="submitEtrnFilesManual()">
@@ -1265,7 +1281,7 @@
                   <input type="checkbox" id="new-perm-thermo" checked> 🌡️ Температурные графики
                 </label>
                 <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
-                  <input type="checkbox" id="new-perm-etrn" checked> 📑 Отчеты ЭТРН
+                  <input type="checkbox" id="new-perm-etrn" checked> 📑 Отчет по ЭТРН
                 </label>
               </div>
               <button type="submit" class="btn btn-primary">Создать учетную запись</button>
@@ -1624,8 +1640,7 @@
     window.addEventListener('DOMContentLoaded', () => {
       setPreset('7days');
       setEtrnPreset('yesterday');
-      const manualDateEl = document.getElementById('etrn-manual-date');
-      if (manualDateEl) manualDateEl.value = new Date().toISOString().split('T')[0];
+      setEtrnManualPreset('yesterday');
       initIdleTracker();
 
       const savedLogin = localStorage.getItem('puls_last_login') || '';
@@ -3111,6 +3126,38 @@
       }
     }
 
+    function setEtrnManualPreset(preset) {
+      const today = new Date();
+      const formatDate = d => d.toISOString().split('T')[0];
+      const fromEl = document.getElementById('etrn-manual-date-from');
+      const toEl = document.getElementById('etrn-manual-date-to');
+      if (!fromEl || !toEl) return;
+
+      if (preset === 'today') {
+        fromEl.value = formatDate(today);
+        toEl.value = formatDate(today);
+      } else if (preset === 'yesterday') {
+        const y = new Date(today);
+        y.setDate(y.getDate() - 1);
+        fromEl.value = formatDate(y);
+        toEl.value = formatDate(y);
+      } else if (preset === '3days') {
+        const past = new Date(today);
+        past.setDate(past.getDate() - 2);
+        fromEl.value = formatDate(past);
+        toEl.value = formatDate(today);
+      } else if (preset === '7days') {
+        const past = new Date(today);
+        past.setDate(past.getDate() - 6);
+        fromEl.value = formatDate(past);
+        toEl.value = formatDate(today);
+      } else if (preset === 'current_month') {
+        const first = new Date(today.getFullYear(), today.getMonth(), 1);
+        fromEl.value = formatDate(first);
+        toEl.value = formatDate(today);
+      }
+    }
+
     function formatIsoToRu(isoStr) {
       if (!isoStr) return '';
       const parts = isoStr.split('-');
@@ -3214,8 +3261,15 @@
         alert('Пожалуйста, выберите все 3 файла: «ЭТРН», «Модель расчетов» и «Процент»!');
         return;
       }
-      const rawDate = document.getElementById('etrn-manual-date').value;
-      const date_label = rawDate ? formatIsoToRu(rawDate) : formatIsoToRu(new Date().toISOString().split('T')[0]);
+      const dFromRaw = document.getElementById('etrn-manual-date-from').value;
+      const dToRaw = document.getElementById('etrn-manual-date-to').value;
+      if (!dFromRaw) {
+        alert('Пожалуйста, выберите дату начала периода!');
+        return;
+      }
+      const date_from = formatIsoToRu(dFromRaw);
+      const date_to = dToRaw ? formatIsoToRu(dToRaw) : date_from;
+      const date_label = (date_from === date_to) ? date_from : `${date_from} - ${date_to}`;
 
       const btn = document.getElementById('btn-etrn-start-manual');
       btn.disabled = true;
@@ -3225,6 +3279,8 @@
       formData.append('etrn_file', f1);
       formData.append('model_file', f2);
       formData.append('percent_file', f3);
+      formData.append('date_from', date_from);
+      formData.append('date_to', date_to);
       formData.append('date_label', date_label);
       formData.append('as_json', 'true');
 
@@ -3247,7 +3303,7 @@
         const details = document.getElementById('etrnResultDetails');
         const dlBtn = document.getElementById('btn-etrn-download');
 
-        details.innerHTML = `Файл: <b>${currentEtrnFilename}</b> &bull; Метка даты: <b>${currentEtrnDateLabel}</b> &bull; Сформирован мгновенно из 3 файлов`;
+        details.innerHTML = `Файл: <b>${currentEtrnFilename}</b> &bull; Период: <b>${currentEtrnDateLabel}</b> &bull; Сформирован мгновенно из 3 файлов`;
         dlBtn.href = `/api/etrn/download/${encodeURIComponent(data.task_id)}`;
         dlBtn.setAttribute('download', currentEtrnFilename);
         rCard.style.display = 'block';
