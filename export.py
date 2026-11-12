@@ -504,6 +504,62 @@ def _clear_search_input(driver: WebDriver) -> None:
         pass
 
 
+def fetch_shipments_api_by_interval(
+    driver: WebDriver,
+    date_from: datetime.date,
+    date_to: datetime.date,
+) -> dict[str, dict[str, Any]]:
+    """
+    Запрашивает данные о рейсах за выбранный интервал дат через нативный REST API Advantum.
+    Возвращает словарь { normalized_route_num: shipment_data } для быстрой валидации.
+    Если период превышает 7 дней, выполняет запросы последовательными чанками по 7 дней.
+    """
+    try:
+        cur_from = date_from
+        index: dict[str, dict[str, Any]] = {}
+
+        while cur_from <= date_to:
+            cur_to = min(cur_from + datetime.timedelta(days=6), date_to)
+            from_str = f"{cur_from.isoformat()}T00:00:00.000Z"
+            to_str = f"{cur_to.isoformat()}T23:59:59.999Z"
+
+            js_code = f"""
+            return (async function() {{
+                var authStr = localStorage.getItem('auth_data');
+                if (!authStr) return null;
+                var token = '';
+                try {{
+                    var parsed = JSON.parse(authStr);
+                    token = parsed.authData ? parsed.authData.access_token : '';
+                }} catch(e) {{ return null; }}
+                if (!token) return null;
+                
+                var headers = {{ 'Authorization': 'Bearer ' + token, 'Accept': 'application/json' }};
+                var url = '/api/v1/shipments?scheduledStartInstantFrom={from_str}&scheduledStartInstantTo={to_str}';
+                var resp = await fetch(url, {{ headers: headers }});
+                if (!resp.ok) return null;
+                return await resp.json();
+            }})();
+            """
+            raw_items = driver.execute_script(js_code)
+            if raw_items and isinstance(raw_items, list):
+                for item in raw_items:
+                    r_num = item.get("routeNum")
+                    if r_num:
+                        norm = normalize_ml_number(r_num)
+                        index[norm] = item
+                        digits = "".join(re.findall(r"\d+", norm))
+                        if digits and digits not in index:
+                            index[digits] = item
+
+            cur_from = cur_to + datetime.timedelta(days=1)
+
+        return index
+    except Exception as e:
+        logger.warning("Не удалось выполнить предварительный опрос API Advantum: %s", e)
+        return {}
+
+
 def ensure_table_view(
     driver: WebDriver,
     wait: WebDriverWait,
@@ -554,6 +610,7 @@ def export_single_ml(
     config: Config,
     date_filter: tuple[datetime.date, datetime.date] | None = None,
     printer: PdfPrinterSession | None = None,
+    shipment_info: dict[str, Any] | None = None,
 ) -> ExportResult:
     """
     Экспортирует термографик одного маршрутного листа в PDF.
@@ -606,8 +663,16 @@ def export_single_ml(
 
         # Ожидаем применения поиска: либо появление рейса в строке / счетчике '| 1 /', либо '0 /'
         target_row = None
-        driver_name = "НеизвестныйВодитель"
-        tc_number = "НеизвестноеТС"
+        driver_name = (
+            shipment_info.get("driverFio")
+            if shipment_info and shipment_info.get("driverFio")
+            else "НеизвестныйВодитель"
+        )
+        tc_number = (
+            shipment_info.get("vehicleGosNum")
+            if shipment_info and shipment_info.get("vehicleGosNum")
+            else "НеизвестноеТС"
+        )
         poll_start = time.time()
         fallback_tried = False
 
@@ -742,7 +807,7 @@ def export_single_ml(
         """)
 
         print("[Шаг 6] Нажимаем кнопку 'Версия для печати'...")
-        wait_overlays_gone(driver, timeout=5)
+        time.sleep(0.5)
         print_btn = wait.until(
             EC.element_to_be_clickable(
                 (
@@ -752,10 +817,10 @@ def export_single_ml(
             )
         )
         driver.execute_script("arguments[0].click();", print_btn)
-        time.sleep(1)
+        time.sleep(0.8)
 
         print("[Шаг 6.1] Нажимаем 'Простая'...")
-        wait_overlays_gone(driver, timeout=5)
+        time.sleep(0.3)
         simple_btn = wait.until(
             EC.element_to_be_clickable(
                 (
@@ -953,6 +1018,17 @@ def export_thermographs(
     # 1. Единоразовая подготовка таблицы 'Рейсы' и установка фильтра дат
     ensure_table_view(driver, wait, config, date_filter=date_filter)
 
+    # 1.1. Предварительная быстрая валидация рейсов через нативный REST API Advantum
+    api_shipments: dict[str, dict[str, Any]] = {}
+    if date_filter:
+        print("[API] Предварительная валидация списка МЛ через API Advantum...")
+        try:
+            api_shipments = fetch_shipments_api_by_interval(driver, date_filter[0], date_filter[1])
+            if api_shipments:
+                print(f"[API] Загружено {len(api_shipments)} записей рейсов за выбранный период.")
+        except Exception as e:
+            logger.warning("[API] Ошибка предварительного опроса: %s", e)
+
     # 2. Пакетная обработка в рамках единой сессии PdfPrinterSession
     with PdfPrinterSession(config) as printer:
         for idx, ml in enumerate(ml_numbers, 1):
@@ -963,8 +1039,37 @@ def export_thermographs(
                 except Exception:
                     pass
 
+            norm_ml = normalize_ml_number(ml)
+            digits_ml = "".join(re.findall(r"\d+", norm_ml))
+            shipment_info = api_shipments.get(norm_ml) or (api_shipments.get(digits_ml) if digits_ml else None)
+
+            # Если по API точно известно, что датчики отсутствуют — не тратим время на долгие клики в UI
+            if shipment_info and shipment_info.get("hasTelematicEquipment") is False:
+                print(f"[API] У автомобиля {shipment_info.get('vehicleGosNum', '')} нет телематики (датчиков). Пропуск.")
+                result = ExportResult(
+                    ml_number=ml,
+                    success=False,
+                    filepath="",
+                    error="Телематическое оборудование (датчики) отсутствует",
+                    driver_name=shipment_info.get("driverFio", ""),
+                    tc_number=shipment_info.get("vehicleGosNum", ""),
+                )
+                results.append(result)
+                if on_progress:
+                    try:
+                        on_progress(idx, len(ml_numbers), ml, result)
+                    except Exception:
+                        pass
+                continue
+
             result = export_single_ml(
-                driver, wait, ml, config, date_filter=date_filter, printer=printer
+                driver,
+                wait,
+                ml,
+                config,
+                date_filter=date_filter,
+                printer=printer,
+                shipment_info=shipment_info,
             )
             results.append(result)
 
