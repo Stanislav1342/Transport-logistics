@@ -402,22 +402,189 @@
     }
 
     /* ─── Элементы управления ────────────────────────────────── */
+    .visually-hidden {
+      position: absolute;
+      clip-path: inset(50%);
+      overflow: hidden;
+      width: 1px;
+      height: 1px;
+      margin: -1px;
+      padding: 0;
+      border: 0;
+      white-space: nowrap;
+    }
+
+    .dropzone-wrapper {
+      position: relative;
+    }
+
     .dropzone {
+      display: block;
       border: 2px dashed var(--border);
       border-radius: var(--radius);
-      padding: 32px 20px;
+      padding: 28px 20px;
       text-align: center;
       cursor: pointer;
       transition: all 0.2s;
-      background: #fafafa;
+      background: #f8fafc;
     }
     .dropzone:hover, .dropzone.dragover {
       border-color: var(--primary);
       background: var(--primary-light);
     }
+    .dropzone-icon-wrap {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: var(--primary-light);
+      color: var(--primary);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 10px;
+      transition: transform 0.2s ease, background-color 0.2s ease;
+    }
+    .dropzone:hover .dropzone-icon-wrap,
+    .dropzone.dragover .dropzone-icon-wrap {
+      transform: translateY(-2px);
+      background: #dbeafe;
+    }
     .dropzone-icon { font-size: 38px; margin-bottom: 8px; }
     .dropzone-text { font-size: 15px; font-weight: 600; color: var(--text); }
     .dropzone-subtext { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+    .dropzone-loaded {
+      border: 2px solid #86efac;
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      background: linear-gradient(180deg, #f0fdf4 0%, #f8fffb 100%);
+      box-shadow: var(--shadow-sm);
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      transition: all 0.2s ease;
+    }
+    .dropzone-loaded.dragover {
+      border-color: var(--primary);
+      border-style: dashed;
+      background: var(--primary-light);
+    }
+    .dropzone-loaded.is-processed {
+      border-color: #22c55e;
+      box-shadow: 0 2px 10px rgba(21, 128, 61, 0.08);
+    }
+    .dropzone[hidden], .dropzone-loaded[hidden] {
+      display: none;
+    }
+
+    .dropzone-file-badge {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      background: #dcfce7;
+      border: 1px solid #bbf7d0;
+      color: #15803d;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      gap: 1px;
+    }
+    .dropzone-file-ext {
+      font-size: 9px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      line-height: 1;
+      text-transform: uppercase;
+    }
+
+    .dropzone-file-info {
+      flex: 1;
+      min-width: 220px;
+    }
+    .dropzone-file-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #15803d;
+      margin-bottom: 4px;
+    }
+    .dropzone-file-name {
+      font-size: 15.5px;
+      font-weight: 700;
+      color: var(--text);
+      line-height: 1.35;
+      word-break: break-word;
+    }
+    .dropzone-file-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 6px;
+    }
+    .dropzone-file-chip {
+      display: inline-flex;
+      align-items: center;
+      font-size: 11.5px;
+      font-weight: 600;
+      color: #166534;
+      background: #ffffff;
+      border: 1px solid #bbf7d0;
+      border-radius: 999px;
+      padding: 2px 10px;
+    }
+
+    .dropzone-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+      margin-left: auto;
+    }
+    .dropzone-actions .dropzone-replace-btn {
+      background: #ffffff;
+      min-height: 36px;
+      padding: 7px 14px;
+      font-size: 13px;
+      margin-bottom: 0;
+    }
+    .dropzone-actions .dropzone-replace-btn:hover {
+      background: #f1f5f9;
+      border-color: #94a3b8;
+    }
+    .dropzone-clear-btn {
+      width: 36px;
+      height: 36px;
+      min-width: 36px;
+      min-height: 36px;
+      border-radius: 8px;
+      border: 1px solid #fecaca;
+      background: #fff5f5;
+      color: #b91c1c;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+    }
+    .dropzone-clear-btn:hover {
+      background: #fee2e2;
+      border-color: #f87171;
+    }
+
+    .dropzone-wrapper input[type="file"]:focus-visible ~ .dropzone,
+    .dropzone-wrapper input[type="file"]:focus-visible ~ .dropzone-loaded .dropzone-replace-btn,
+    .dropzone-clear-btn:focus-visible {
+      outline: 3px solid var(--primary);
+      outline-offset: 2px;
+    }
 
     .path-badge {
       background: #f8fafc;
@@ -781,7 +948,7 @@
             <p>Единый корпоративный портал автоматизации транспортной логистики ФК «ПУЛЬС» (РЦ Черная Грязь)</p>
           </div>
           <span class="badge" id="portal-version-badge">
-            <span class="badge-dot"></span> Версия 1.11
+            <span class="badge-dot"></span> Версия 1.12
           </span>
         </div>
 
@@ -830,12 +997,40 @@
 
         <div class="card">
             <div class="card-title">📁 1. Загрузите файл плана отгрузок (.xlsx / .xlsm)</div>
-            <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
-              <div class="dropzone-icon">📥</div>
-              <div class="dropzone-text" id="dropzoneText">Нажмите или перетащите сюда файл плана (.xlsx / .xlsm)</div>
-              <div class="dropzone-subtext">Поддерживается новый формат 'График отгрузки филиалов неделя_финальная версия!.xlsx' (лист «График») и прежний формат .xlsm</div>
+            <div class="dropzone-wrapper">
+              <input type="file" id="fileInput" class="visually-hidden" accept=".xlsm,.xlsx" onchange="handleFileSelected(event)">
+              <label for="fileInput" class="dropzone" id="dropzone">
+                <div class="dropzone-icon-wrap" aria-hidden="true">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="17 8 12 3 7 8"></polyline>
+                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                  </svg>
+                </div>
+                <div class="dropzone-text" id="dropzoneText">Нажмите или перетащите сюда файл плана (.xlsx / .xlsm)</div>
+              </label>
+
+              <div class="dropzone-loaded" id="dropzoneLoaded" role="status" aria-live="polite" hidden>
+                <div class="dropzone-file-badge" aria-hidden="true">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="8" y1="13" x2="16" y2="13"></line>
+                    <line x1="8" y1="17" x2="16" y2="17"></line>
+                  </svg>
+                  <span class="dropzone-file-ext" id="dropzoneExtBadge">XLSX</span>
+                </div>
+                <div class="dropzone-file-info">
+                  <div class="dropzone-file-status" id="dropzoneStatusText">✓ Файл выбран — готов к обработке</div>
+                  <div class="dropzone-file-name" id="dropzoneFileName"></div>
+                  <div class="dropzone-file-meta" id="dropzoneFileMeta"></div>
+                </div>
+                <div class="dropzone-actions">
+                  <label for="fileInput" class="btn btn-outline dropzone-replace-btn">🔄 Заменить файл</label>
+                  <button type="button" class="dropzone-clear-btn" aria-label="Убрать выбранный файл плана" onclick="clearDropzoneFile('schedule')">✕</button>
+                </div>
+              </div>
             </div>
-            <input type="file" id="fileInput" accept=".xlsm,.xlsx" style="display:none" onchange="handleFileSelected(event)">
 
             <div style="display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; margin-top: 14px; background: #f8fafc; border: 1px solid var(--border-light); border-radius: 8px; padding: 12px 14px;">
               <div style="flex: 1; min-width: 170px;">
@@ -947,12 +1142,40 @@
 
         <div class="card">
             <div class="card-title">📝 Формирование транспортных заявок</div>
-            <div class="dropzone" id="ordersDropzone" onclick="document.getElementById('ordersFileInput').click()">
-              <div class="dropzone-icon">📋</div>
-              <div class="dropzone-text" id="ordersDropzoneText">Нажмите или перетащите сюда суточный реестр отгрузок (.xlsx)</div>
-              <div class="dropzone-subtext">Файл со столбцами: Адрес ссылка, Адрес, Количество паллет, Режим термоперевозки, Дата отгрузки, Перевозчик</div>
+            <div class="dropzone-wrapper">
+              <input type="file" id="ordersFileInput" class="visually-hidden" accept=".xlsx,.xlsm" onchange="handleOrdersFileSelected(event)">
+              <label for="ordersFileInput" class="dropzone" id="ordersDropzone">
+                <div class="dropzone-icon-wrap" aria-hidden="true">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="17 8 12 3 7 8"></polyline>
+                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                  </svg>
+                </div>
+                <div class="dropzone-text" id="ordersDropzoneText">Нажмите или перетащите сюда суточный реестр отгрузок (.xlsx)</div>
+              </label>
+
+              <div class="dropzone-loaded" id="ordersDropzoneLoaded" role="status" aria-live="polite" hidden>
+                <div class="dropzone-file-badge" aria-hidden="true">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="8" y1="13" x2="16" y2="13"></line>
+                    <line x1="8" y1="17" x2="16" y2="17"></line>
+                  </svg>
+                  <span class="dropzone-file-ext" id="ordersDropzoneExtBadge">XLSX</span>
+                </div>
+                <div class="dropzone-file-info">
+                  <div class="dropzone-file-status" id="ordersDropzoneStatusText">✓ Файл выбран — готов к обработке</div>
+                  <div class="dropzone-file-name" id="ordersDropzoneFileName"></div>
+                  <div class="dropzone-file-meta" id="ordersDropzoneFileMeta"></div>
+                </div>
+                <div class="dropzone-actions">
+                  <label for="ordersFileInput" class="btn btn-outline dropzone-replace-btn">🔄 Заменить файл</label>
+                  <button type="button" class="dropzone-clear-btn" aria-label="Убрать выбранный файл реестра" onclick="clearDropzoneFile('orders')">✕</button>
+                </div>
+              </div>
             </div>
-            <input type="file" id="ordersFileInput" accept=".xlsx,.xlsm" style="display:none" onchange="handleOrdersFileSelected(event)">
 
             <div class="path-badge" id="ordersPathBadge">
               <span>📁 Папка сохранения заявок:</span> <b id="ordersPathText">Загрузка...</b>
@@ -2304,26 +2527,149 @@
       }
     }
 
-    function handleFileSelected(event) {
-      if (event.target.files && event.target.files[0]) {
-        selectedFile = event.target.files[0];
-        document.getElementById('dropzoneText').innerText = 'Выбран: ' + selectedFile.name;
-        document.getElementById('processBtn').style.display = 'inline-flex';
+    function formatFileSize(bytes) {
+      if (!bytes || bytes <= 0) return '0 Б';
+      if (bytes < 1024) return bytes + ' Б';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' КБ';
+      return (bytes / (1024 * 1024)).toFixed(2) + ' МБ';
+    }
+
+    function getDropzoneConfig(kind) {
+      if (kind === 'orders') {
+        return {
+          inputId: 'ordersFileInput',
+          emptyId: 'ordersDropzone',
+          loadedId: 'ordersDropzoneLoaded',
+          extId: 'ordersDropzoneExtBadge',
+          statusId: 'ordersDropzoneStatusText',
+          nameId: 'ordersDropzoneFileName',
+          metaId: 'ordersDropzoneFileMeta',
+          btnId: 'processOrdersBtn',
+          defaultBtnText: '⚡ Сформировать заявки',
+          setFile: (f) => { selectedOrdersFile = f; }
+        };
+      }
+      return {
+        inputId: 'fileInput',
+        emptyId: 'dropzone',
+        loadedId: 'dropzoneLoaded',
+        extId: 'dropzoneExtBadge',
+        statusId: 'dropzoneStatusText',
+        nameId: 'dropzoneFileName',
+        metaId: 'dropzoneFileMeta',
+        btnId: 'processBtn',
+        defaultBtnText: '⚡ Обработать файл',
+        setFile: (f) => { selectedFile = f; }
+      };
+    }
+
+    function setDropzoneFile(kind, file) {
+      if (!file) return;
+      const cfg = getDropzoneConfig(kind);
+      cfg.setFile(file);
+
+      const parts = (file.name || '').split('.');
+      const ext = parts.length > 1 ? parts.pop().toUpperCase() : 'EXCEL';
+
+      const extEl = document.getElementById(cfg.extId);
+      const statusEl = document.getElementById(cfg.statusId);
+      const nameEl = document.getElementById(cfg.nameId);
+      const metaEl = document.getElementById(cfg.metaId);
+      const emptyEl = document.getElementById(cfg.emptyId);
+      const loadedEl = document.getElementById(cfg.loadedId);
+      const btn = document.getElementById(cfg.btnId);
+
+      if (extEl) extEl.textContent = ext.slice(0, 4);
+      if (statusEl) statusEl.textContent = '✓ Файл выбран — готов к обработке';
+      if (nameEl) nameEl.textContent = file.name;
+      if (metaEl) {
+        metaEl.innerHTML = '';
+        const extChip = document.createElement('span');
+        extChip.className = 'dropzone-file-chip';
+        extChip.textContent = `Формат: ${ext}`;
+        const sizeChip = document.createElement('span');
+        sizeChip.className = 'dropzone-file-chip';
+        sizeChip.textContent = `Размер: ${formatFileSize(file.size)}`;
+        metaEl.appendChild(extChip);
+        metaEl.appendChild(sizeChip);
+      }
+      if (loadedEl) {
+        loadedEl.classList.remove('is-processed');
+        loadedEl.hidden = false;
+      }
+      if (emptyEl) emptyEl.hidden = true;
+
+      if (btn) {
+        btn.style.display = 'inline-flex';
+        btn.disabled = false;
+        btn.innerText = cfg.defaultBtnText;
       }
     }
 
-    const dropzone = document.getElementById('dropzone');
-    dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('dragover'); });
-    dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
-    dropzone.addEventListener('drop', (e) => {
-      e.preventDefault();
-      dropzone.classList.remove('dragover');
-      if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-        selectedFile = e.dataTransfer.files[0];
-        document.getElementById('dropzoneText').innerText = 'Выбран: ' + selectedFile.name;
-        document.getElementById('processBtn').style.display = 'inline-flex';
+    function markDropzoneProcessed(kind, statusLabel) {
+      const cfg = getDropzoneConfig(kind);
+      const statusEl = document.getElementById(cfg.statusId);
+      const loadedEl = document.getElementById(cfg.loadedId);
+      if (statusEl) statusEl.textContent = statusLabel;
+      if (loadedEl) loadedEl.classList.add('is-processed');
+    }
+
+    function clearDropzoneFile(kind) {
+      const cfg = getDropzoneConfig(kind);
+      cfg.setFile(null);
+
+      const inputEl = document.getElementById(cfg.inputId);
+      const emptyEl = document.getElementById(cfg.emptyId);
+      const loadedEl = document.getElementById(cfg.loadedId);
+      const btn = document.getElementById(cfg.btnId);
+
+      if (inputEl) inputEl.value = '';
+      if (loadedEl) {
+        loadedEl.classList.remove('is-processed');
+        loadedEl.hidden = true;
       }
-    });
+      if (emptyEl) emptyEl.hidden = false;
+      if (btn) {
+        btn.style.display = 'none';
+        btn.disabled = false;
+        btn.innerText = cfg.defaultBtnText;
+      }
+    }
+
+    function bindDropzoneDragEvents(kind) {
+      const cfg = getDropzoneConfig(kind);
+      const inputEl = document.getElementById(cfg.inputId);
+      if (inputEl) {
+        inputEl.addEventListener('click', () => { inputEl.value = ''; });
+      }
+      [cfg.emptyId, cfg.loadedId].forEach((zoneId) => {
+        const zoneEl = document.getElementById(zoneId);
+        if (!zoneEl) return;
+        zoneEl.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          zoneEl.classList.add('dragover');
+        });
+        zoneEl.addEventListener('dragleave', () => {
+          zoneEl.classList.remove('dragover');
+        });
+        zoneEl.addEventListener('drop', (e) => {
+          e.preventDefault();
+          zoneEl.classList.remove('dragover');
+          if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+            setDropzoneFile(kind, e.dataTransfer.files[0]);
+          }
+        });
+      });
+    }
+
+    function handleFileSelected(event) {
+      if (event.target.files && event.target.files[0]) {
+        setDropzoneFile('schedule', event.target.files[0]);
+      }
+    }
+
+    bindDropzoneDragEvents('schedule');
+    bindDropzoneDragEvents('orders');
 
     async function uploadAndProcess() {
       if (!selectedFile) return;
@@ -2347,6 +2693,7 @@
         const data = await resp.json();
         if (data.status === 'success') {
           updateScheduleUIWithData(data);
+          markDropzoneProcessed('schedule', '✓ Файл успешно обработан');
           processBtn.innerText = '✅ Обработано';
         } else {
           alert('Ошибка: ' + (data.message || 'Не удалось обработать'));
@@ -2578,24 +2925,9 @@
     // Заявки перевозчикам
     function handleOrdersFileSelected(event) {
       if (event.target.files && event.target.files[0]) {
-        selectedOrdersFile = event.target.files[0];
-        document.getElementById('ordersDropzoneText').innerText = 'Выбран: ' + selectedOrdersFile.name;
-        document.getElementById('processOrdersBtn').style.display = 'inline-flex';
+        setDropzoneFile('orders', event.target.files[0]);
       }
     }
-
-    const ordersDropzone = document.getElementById('ordersDropzone');
-    ordersDropzone.addEventListener('dragover', (e) => { e.preventDefault(); ordersDropzone.classList.add('dragover'); });
-    ordersDropzone.addEventListener('dragleave', () => ordersDropzone.classList.remove('dragover'));
-    ordersDropzone.addEventListener('drop', (e) => {
-      e.preventDefault();
-      ordersDropzone.classList.remove('dragover');
-      if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-        selectedOrdersFile = e.dataTransfer.files[0];
-        document.getElementById('ordersDropzoneText').innerText = 'Выбран: ' + selectedOrdersFile.name;
-        document.getElementById('processOrdersBtn').style.display = 'inline-flex';
-      }
-    });
 
     async function uploadAndProcessOrders() {
       if (!selectedOrdersFile) return;
@@ -2660,6 +2992,7 @@
 
           document.getElementById('ordersResultCard').style.display = 'block';
           document.getElementById('ordersEmailCard').style.display = 'block';
+          markDropzoneProcessed('orders', '✓ Заявки успешно сформированы');
           btn.innerText = '✅ Заявки сформированы';
         } else {
           alert('Ошибка формирования заявок: ' + (data.message || 'Сбой'));
