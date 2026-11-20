@@ -41,7 +41,6 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import uvicorn
 
-from browser import create_driver, login_to_advantum
 from config import Config, load_config
 from export import ExportResult, export_thermographs
 import generate_orders as orders_core
@@ -73,7 +72,7 @@ except ImportError:
 
 # ─── Настройка FastAPI и CORS ─────────────────────────────────────────────────
 
-PORTAL_VERSION = "1.14"
+PORTAL_VERSION = "1.15"
 app = FastAPI(title="ПУЛЬС — Транспортная логистика", version=f"v{PORTAL_VERSION}")
 
 ALLOWED_ORIGIN_REGEX = (
@@ -758,24 +757,64 @@ def get_order_carrier_email(carrier_name: str, fallback_email: str = "") -> str:
     return find_email_in_dict(carrier_name, load_orders_contacts(), fallback_email)
 
 
-CURRENT_STATE: dict[str, Any] = {
-    "all_trips": [],
-    "week_range": "",
-    "total_trips": 0,
-    "carriers": [],
-    "last_output_path": None,
-    "last_output_filename": None,
-}
+_STATE_LOCK = threading.Lock()
+USER_SCHEDULE_STATES: dict[str, dict[str, Any]] = {}
+USER_ORDERS_STATES: dict[str, dict[str, Any]] = {}
 
-CURRENT_ORDERS_STATE: dict[str, Any] = {
-    "output_dir": None,
-    "summary_excel": None,
-    "zip_file": None,
-    "orders": [],
-    "total_carriers": 0,
-    "total_pallets": "0",
-    "date_tag": "",
-}
+
+def _default_schedule_state() -> dict[str, Any]:
+    return {
+        "all_trips": [],
+        "week_range": "",
+        "total_trips": 0,
+        "carriers": [],
+        "last_output_path": None,
+        "last_output_filename": None,
+    }
+
+
+def _default_orders_state() -> dict[str, Any]:
+    return {
+        "output_dir": None,
+        "summary_excel": None,
+        "zip_file": None,
+        "orders": [],
+        "total_carriers": 0,
+        "total_pallets": "0",
+        "date_tag": "",
+    }
+
+
+def _get_user_schedule_state(user_login: str) -> dict[str, Any]:
+    with _STATE_LOCK:
+        st = USER_SCHEDULE_STATES.get(user_login)
+        if st is None:
+            st = _default_schedule_state()
+            USER_SCHEDULE_STATES[user_login] = st
+        return dict(st)
+
+
+def _set_user_schedule_state(user_login: str, updates: dict[str, Any]) -> dict[str, Any]:
+    with _STATE_LOCK:
+        st = USER_SCHEDULE_STATES.setdefault(user_login, _default_schedule_state())
+        st.update(updates)
+        return dict(st)
+
+
+def _get_user_orders_state(user_login: str) -> dict[str, Any]:
+    with _STATE_LOCK:
+        st = USER_ORDERS_STATES.get(user_login)
+        if st is None:
+            st = _default_orders_state()
+            USER_ORDERS_STATES[user_login] = st
+        return dict(st)
+
+
+def _set_user_orders_state(user_login: str, updates: dict[str, Any]) -> dict[str, Any]:
+    with _STATE_LOCK:
+        st = USER_ORDERS_STATES.setdefault(user_login, _default_orders_state())
+        st.update(updates)
+        return dict(st)
 
 
 class SelectFileRequest(BaseModel):
@@ -802,17 +841,17 @@ def get_storage_info(request: Request):
 
 
 @app.post("/api/upload")
-async def upload_file(
+def upload_file(
     request: Request,
     file: UploadFile = File(...),
     start_date: Optional[str] = Form(None),
     end_date: Optional[str] = Form(None),
 ):
-    check_auth(request, required_section="opt_schedules")
+    user = check_auth(request, required_section="opt_schedules")
+    req_temp_dir = tempfile.mkdtemp(prefix="puls_sched_")
     try:
-        temp_dir = tempfile.gettempdir()
         safe_name = os.path.basename(file.filename or "plan.xlsx")
-        temp_path = os.path.join(temp_dir, safe_name)
+        temp_path = os.path.join(req_temp_dir, safe_name)
         with open(temp_path, "wb") as f:
             shutil.copyfileobj(file.file, f)
 
@@ -875,7 +914,9 @@ async def upload_file(
                     plan_trips, final_start, target_path, tpl_trips=tpl_trips, end_date=final_end
                 )
             except PermissionError:
-                out_filename = f"{clean_name} ({date_range_str})_{int(time.time())}.xlsx"
+                out_filename = (
+                    f"{clean_name} ({date_range_str})_{int(time.time())}_{uuid.uuid4().hex[:4]}.xlsx"
+                )
                 target_path = os.path.join(schedules_dir, out_filename)
                 all_trips = core.build_schedule_from_plan(
                     plan_trips, final_start, target_path, tpl_trips=tpl_trips, end_date=final_end
@@ -894,12 +935,17 @@ async def upload_file(
         tpl_trips_count = sum(1 for t in all_trips if t.get("is_3pl"))
         free_trips_count = sum(1 for t in all_trips if str(t.get("carrier", "")).strip() == "?")
 
-        CURRENT_STATE["all_trips"] = all_trips
-        CURRENT_STATE["week_range"] = week_range
-        CURRENT_STATE["total_trips"] = len(all_trips)
-        CURRENT_STATE["carriers"] = carriers_list
-        CURRENT_STATE["last_output_path"] = target_path
-        CURRENT_STATE["last_output_filename"] = out_filename
+        _set_user_schedule_state(
+            user["login"],
+            {
+                "all_trips": all_trips,
+                "week_range": week_range,
+                "total_trips": len(all_trips),
+                "carriers": carriers_list,
+                "last_output_path": target_path,
+                "last_output_filename": out_filename,
+            },
+        )
 
         return {
             "status": "success",
@@ -914,18 +960,20 @@ async def upload_file(
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+    finally:
+        shutil.rmtree(req_temp_dir, ignore_errors=True)
 
 
 @app.get("/api/list-ready-files")
 def list_ready_files(request: Request):
-    check_auth(request, required_section="opt_schedules")
+    user = check_auth(request, required_section="opt_schedules")
     try:
         schedules_dir = get_schedules_dir()
         if not os.path.exists(schedules_dir):
             return {"status": "success", "files": []}
 
         files_info = []
-        current_path = CURRENT_STATE.get("last_output_path")
+        current_path = _get_user_schedule_state(user["login"]).get("last_output_path")
 
         for fname in os.listdir(schedules_dir):
             if fname.startswith("~$") or not fname.endswith((".xlsx", ".xlsm")):
@@ -967,7 +1015,7 @@ def list_ready_files(request: Request):
 
 @app.post("/api/select-file")
 def select_file(req: SelectFileRequest, request: Request):
-    check_auth(request, required_section="opt_schedules")
+    user = check_auth(request, required_section="opt_schedules")
     try:
         schedules_dir = get_schedules_dir()
         safe_name = os.path.basename(req.filename)
@@ -993,12 +1041,17 @@ def select_file(req: SelectFileRequest, request: Request):
         tpl_trips_count = sum(1 for t in trips if t.get("is_3pl"))
         free_trips_count = sum(1 for t in trips if str(t.get("carrier", "")).strip() == "?")
 
-        CURRENT_STATE["all_trips"] = trips
-        CURRENT_STATE["week_range"] = week_range
-        CURRENT_STATE["total_trips"] = len(trips)
-        CURRENT_STATE["carriers"] = carriers_list
-        CURRENT_STATE["last_output_path"] = target_path
-        CURRENT_STATE["last_output_filename"] = safe_name
+        _set_user_schedule_state(
+            user["login"],
+            {
+                "all_trips": trips,
+                "week_range": week_range,
+                "total_trips": len(trips),
+                "carriers": carriers_list,
+                "last_output_path": target_path,
+                "last_output_filename": safe_name,
+            },
+        )
 
         return {
             "status": "success",
@@ -1014,18 +1067,19 @@ def select_file(req: SelectFileRequest, request: Request):
         return {"status": "error", "message": f"Ошибка чтения файла: {str(e)}"}
 
 
-def _build_schedule_email_packages(req: EmailRequest) -> dict[str, Any]:
+def _build_schedule_email_packages(req: EmailRequest, user_login: str) -> dict[str, Any]:
     """Формирует готовые пакеты писем для Графиков РК."""
-    target_file = CURRENT_STATE.get("last_output_path")
+    state = _get_user_schedule_state(user_login)
+    target_file = state.get("last_output_path")
     if target_file and os.path.exists(target_file):
         try:
             disk_trips = core.parse_final_schedule_file(target_file)
             if disk_trips:
-                CURRENT_STATE["all_trips"] = disk_trips
+                state = _set_user_schedule_state(user_login, {"all_trips": disk_trips})
         except Exception:
             pass
 
-    trips_to_send = CURRENT_STATE.get("all_trips", [])
+    trips_to_send = state.get("all_trips", [])
     if not trips_to_send:
         return {
             "status": "error",
@@ -1141,14 +1195,14 @@ def download_outlook_bridge_bat(request: Request):
 @app.post("/api/prepare-emails")
 def prepare_schedule_emails(req: EmailRequest, request: Request):
     """Возвращает сформированные письма для отправки через локальный Outlook сотрудника."""
-    check_auth(request, required_section="opt_schedules")
-    return _build_schedule_email_packages(req)
+    user = check_auth(request, required_section="opt_schedules")
+    return _build_schedule_email_packages(req, user["login"])
 
 
 @app.post("/api/send-emails")
 def send_emails(req: EmailRequest, request: Request):
     """Отправка писем по графикам (ТОЛЬКО если браузер открыт непосредственно на самом ПК-сервере, иначе требует локальный мост на ПК сотрудника)."""
-    check_auth(request, required_section="opt_schedules")
+    user = check_auth(request, required_section="opt_schedules")
     if not _is_same_host_client(request):
         return {
             "status": "bridge_required",
@@ -1157,7 +1211,7 @@ def send_emails(req: EmailRequest, request: Request):
                 "запустите на своем ПК помощник «outlook_bridge.py»."
             ),
         }
-    pkg = _build_schedule_email_packages(req)
+    pkg = _build_schedule_email_packages(req, user["login"])
     if pkg.get("status") != "success":
         return pkg
 
@@ -1215,18 +1269,19 @@ def send_emails(req: EmailRequest, request: Request):
         return {"status": "error", "message": f"Ошибка Outlook: {str(e)}"}
 
 
-def _build_free_trips_email_packages(req: EmailRequest) -> dict[str, Any]:
+def _build_free_trips_email_packages(req: EmailRequest, user_login: str) -> dict[str, Any]:
     """Формирует рассылку свободных рейсов (со знаком '?' в столбце Перевозчик) всем перевозчикам из базы."""
-    target_file = CURRENT_STATE.get("last_output_path")
+    state = _get_user_schedule_state(user_login)
+    target_file = state.get("last_output_path")
     if target_file and os.path.exists(target_file):
         try:
             disk_trips = core.parse_final_schedule_file(target_file)
             if disk_trips:
-                CURRENT_STATE["all_trips"] = disk_trips
+                state = _set_user_schedule_state(user_login, {"all_trips": disk_trips})
         except Exception:
             pass
 
-    all_trips = CURRENT_STATE.get("all_trips", [])
+    all_trips = state.get("all_trips", [])
     free_trips = [t for t in all_trips if str(t.get("carrier", "")).strip() == "?"]
     if not free_trips:
         return {
@@ -1286,13 +1341,13 @@ def _build_free_trips_email_packages(req: EmailRequest) -> dict[str, Any]:
 
 @app.post("/api/prepare-free-trips-emails")
 def prepare_free_trips_emails(req: EmailRequest, request: Request):
-    check_auth(request, required_section="opt_schedules")
-    return _build_free_trips_email_packages(req)
+    user = check_auth(request, required_section="opt_schedules")
+    return _build_free_trips_email_packages(req, user["login"])
 
 
 @app.post("/api/send-free-trips-emails")
 def send_free_trips_emails(req: EmailRequest, request: Request):
-    check_auth(request, required_section="opt_schedules")
+    user = check_auth(request, required_section="opt_schedules")
     if not _is_same_host_client(request):
         return {
             "status": "bridge_required",
@@ -1301,7 +1356,7 @@ def send_free_trips_emails(req: EmailRequest, request: Request):
                 "запустите на своем ПК помощник «outlook_bridge.py»."
             ),
         }
-    pkg = _build_free_trips_email_packages(req)
+    pkg = _build_free_trips_email_packages(req, user["login"])
     if pkg.get("status") != "success":
         return pkg
 
@@ -1346,12 +1401,12 @@ def send_free_trips_emails(req: EmailRequest, request: Request):
 
 
 @app.post("/api/orders/generate")
-async def generate_orders_api(request: Request, file: UploadFile = File(...)):
-    check_auth(request, required_section="opt_orders")
+def generate_orders_api(request: Request, file: UploadFile = File(...)):
+    user = check_auth(request, required_section="opt_orders")
+    req_temp_dir = tempfile.mkdtemp(prefix="puls_orders_")
     try:
-        temp_dir = tempfile.gettempdir()
         safe_name = os.path.basename(file.filename or "orders.xlsx")
-        temp_path = os.path.join(temp_dir, safe_name)
+        temp_path = os.path.join(req_temp_dir, safe_name)
         with open(temp_path, "wb") as f:
             shutil.copyfileobj(file.file, f)
 
@@ -1371,10 +1426,12 @@ async def generate_orders_api(request: Request, file: UploadFile = File(...)):
             template_docx_path=template_path,
             output_dir=get_orders_dir(),
         )
-        CURRENT_ORDERS_STATE.update(res)
+        _set_user_orders_state(user["login"], res)
         return res
     except Exception as e:
         return {"status": "error", "message": str(e)}
+    finally:
+        shutil.rmtree(req_temp_dir, ignore_errors=True)
 
 
 @app.get("/api/orders/download-file")
@@ -1420,8 +1477,11 @@ def list_orders_files(request: Request):
         return {"status": "error", "message": str(e), "files": []}
 
 
-def _build_orders_email_packages(req: EmailRequest, include_base64: bool = False) -> dict[str, Any]:
-    orders_to_send = CURRENT_ORDERS_STATE.get("orders", [])
+def _build_orders_email_packages(
+    req: EmailRequest, user_login: str, include_base64: bool = False
+) -> dict[str, Any]:
+    state = _get_user_orders_state(user_login)
+    orders_to_send = state.get("orders", [])
     if not orders_to_send:
         return {
             "status": "error",
@@ -1452,7 +1512,7 @@ def _build_orders_email_packages(req: EmailRequest, include_base64: bool = False
 
         date_str = (
             c_orders[0].get("date")
-            or CURRENT_ORDERS_STATE.get("date_tag")
+            or state.get("date_tag")
             or datetime.datetime.now().strftime("%d.%m.%Y")
         )
 
@@ -1492,14 +1552,14 @@ def _build_orders_email_packages(req: EmailRequest, include_base64: bool = False
 @app.post("/api/orders/prepare-emails")
 def prepare_orders_emails(req: EmailRequest, request: Request):
     """Возвращает пакет писем с вложениями .docx для отправки через локальный Outlook сотрудника."""
-    check_auth(request, required_section="opt_orders")
-    return _build_orders_email_packages(req, include_base64=True)
+    user = check_auth(request, required_section="opt_orders")
+    return _build_orders_email_packages(req, user["login"], include_base64=True)
 
 
 @app.post("/api/orders/send-emails")
 def send_orders_emails(req: EmailRequest, request: Request):
     """Отправка индивидуальных заявок перевозчикам с вложением .docx (ТОЛЬКО если браузер открыт непосредственно на ПК-сервере)."""
-    check_auth(request, required_section="opt_orders")
+    user = check_auth(request, required_section="opt_orders")
     if not _is_same_host_client(request):
         return {
             "status": "bridge_required",
@@ -1508,7 +1568,7 @@ def send_orders_emails(req: EmailRequest, request: Request):
                 "запустите на своем ПК помощник «outlook_bridge.py»."
             ),
         }
-    pkg = _build_orders_email_packages(req, include_base64=False)
+    pkg = _build_orders_email_packages(req, user["login"], include_base64=False)
     if pkg.get("status") != "success":
         return pkg
 
@@ -1594,22 +1654,27 @@ class ExportRequest(BaseModel):
     )
 
 
+_JOBS_LOCK = threading.Lock()
 jobs_db: dict[str, dict[str, Any]] = {}
 job_queue: queue.Queue[str] = queue.Queue(maxsize=50)
+THERMO_WORKERS = max(1, min(4, int(os.environ.get("THERMO_WORKERS", "2"))))
 
 
 def _cleanup_old_tasks(max_age_hours: int = 24) -> None:
     cutoff = datetime.datetime.now() - datetime.timedelta(hours=max_age_hours)
-    expired = []
-    for tid, job in list(jobs_db.items()):
-        try:
-            created = datetime.datetime.fromisoformat(job.get("created_at", ""))
-            if created < cutoff:
-                expired.append(tid)
-        except Exception:
-            pass
-    for tid in expired:
-        jobs_db.pop(tid, None)
+    with _JOBS_LOCK:
+        expired = []
+        for tid, job in list(jobs_db.items()):
+            try:
+                if job.get("status") not in ("completed", "failed"):
+                    continue
+                created = datetime.datetime.fromisoformat(job.get("created_at", ""))
+                if created < cutoff:
+                    expired.append(tid)
+            except Exception:
+                pass
+        for tid in expired:
+            jobs_db.pop(tid, None)
 
     try:
         if os.path.exists(TASK_OUTPUT_DIR):
@@ -1667,8 +1732,8 @@ def get_local_ip() -> str:
     return candidates[0] if candidates else "127.0.0.1"
 
 
-def _task_worker():
-    logger.info("Фоновый воркер задач Advantum запущен.")
+def _task_worker(worker_id: int = 1):
+    logger.info("Фоновый воркер задач Advantum #%d запущен.", worker_id)
     while True:
         try:
             _cleanup_old_tasks(max_age_hours=24)
@@ -1676,11 +1741,12 @@ def _task_worker():
             pass
 
         task_id = job_queue.get()
-        if not task_id or task_id not in jobs_db:
+        with _JOBS_LOCK:
+            job = jobs_db.get(task_id) if task_id else None
+        if not task_id or job is None:
             job_queue.task_done()
             continue
 
-        job = jobs_db[task_id]
         job["status"] = "running"
         task_dir = os.path.join(TASK_OUTPUT_DIR, f"task_{task_id}")
         os.makedirs(task_dir, exist_ok=True)
@@ -1689,25 +1755,18 @@ def _task_worker():
             ts = datetime.datetime.now().strftime("%H:%M:%S")
             entry = f"[{ts}] {msg}"
             job["logs"].append(entry)
-            logger.info("[%s] %s", task_id[:8], msg)
+            logger.info("[%s/W%d] %s", task_id[:8], worker_id, msg)
 
         base_config = load_config()
         task_config = dataclasses.replace(base_config, download_dir=task_dir, headless=True)
 
-        driver = None
         try:
-            log_msg("Подготовка к запуску...")
+            log_msg(f"Подготовка к запуску (воркер #{worker_id})...")
             date_filter = None
             if job.get("date_from") and job.get("date_to"):
                 d_from = datetime.date.fromisoformat(job["date_from"])
                 d_to = datetime.date.fromisoformat(job["date_to"])
                 date_filter = (d_from, d_to)
-
-            log_msg("Запуск браузера через Direct CDP (в фоновом режиме)...")
-            driver = create_driver(task_config, headless=True)
-
-            log_msg("Авторизация в системе Advantum...")
-            wait = login_to_advantum(driver, task_config)
 
             def on_progress(idx: int, total: int, ml: str, result: ExportResult | None):
                 job["total_count"] = total
@@ -1735,8 +1794,8 @@ def _task_worker():
 
             log_msg("Поиск рейсов через API Advantum и выгрузка графиков...")
             export_thermographs(
-                driver,
-                wait,
+                None,
+                None,
                 job["ml_numbers"],
                 task_config,
                 date_filter=date_filter,
@@ -1781,11 +1840,6 @@ def _task_worker():
             )
             log_msg("Критический сбой выполнения задачи.")
         finally:
-            if driver:
-                try:
-                    driver.quit()
-                except Exception:
-                    pass
             job_queue.task_done()
 
 
@@ -1798,8 +1852,13 @@ def _validate_task_id(task_id: str) -> None:
         )
 
 
-worker_thread = threading.Thread(target=_task_worker, daemon=True)
-worker_thread.start()
+worker_threads: list[threading.Thread] = []
+for _w_idx in range(1, THERMO_WORKERS + 1):
+    _th = threading.Thread(
+        target=_task_worker, args=(_w_idx,), name=f"thermo-worker-{_w_idx}", daemon=True
+    )
+    _th.start()
+    worker_threads.append(_th)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1871,7 +1930,8 @@ async def create_export_task(req: ExportRequest, request: Request):
         "error_message": None,
     }
 
-    jobs_db[task_id] = job_data
+    with _JOBS_LOCK:
+        jobs_db[task_id] = job_data
     job_queue.put(task_id)
     return {"task_id": task_id, "status": "queued"}
 
@@ -1880,7 +1940,8 @@ async def create_export_task(req: ExportRequest, request: Request):
 async def get_task_status(task_id: str, request: Request):
     check_auth(request, required_section="thermo")
     _validate_task_id(task_id)
-    job = jobs_db.get(task_id)
+    with _JOBS_LOCK:
+        job = jobs_db.get(task_id)
     if not job:
         raise HTTPException(status_code=404, detail="Задача не найдена")
 
@@ -2090,11 +2151,14 @@ async def send_thermo_email(task_id: str, req: ThermoEmailRequest, request: Requ
 
 @app.get("/api/status")
 async def server_status():
+    with _JOBS_LOCK:
+        total_jobs = len(jobs_db)
     return {
         "status": "online",
         "version": PORTAL_VERSION,
         "queue_size": job_queue.qsize(),
-        "total_jobs": len(jobs_db),
+        "total_jobs": total_jobs,
+        "thermo_workers": THERMO_WORKERS,
     }
 
 

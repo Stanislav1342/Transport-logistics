@@ -18,6 +18,7 @@ import re
 import glob
 import json
 import argparse
+import threading
 from datetime import datetime, timedelta, time
 from collections import Counter, defaultdict
 import openpyxl
@@ -978,6 +979,7 @@ def create_schedule_copy_without_tariffs(excel_path):
 
 
 BASELINE_STORE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schedule_baselines.json')
+_BASELINE_LOCK = threading.RLock()
 
 
 def _get_baseline_store_path(excel_path=None):
@@ -991,21 +993,34 @@ def _get_legacy_baseline_store_path(excel_path):
 
 def _save_schedule_baseline(excel_path, sheets_baseline):
     """Сохраняет эталонный состав рейсов при первичной генерации графика для точного определения ручных добавлений"""
+    tmp_path = None
     try:
         store_path = _get_baseline_store_path(excel_path)
-        data = {}
-        if os.path.exists(store_path):
-            try:
-                with open(store_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-            except Exception:
-                data = {}
-        key = os.path.basename(excel_path)
-        data[key] = sheets_baseline
-        with open(store_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        store_dir = os.path.dirname(os.path.abspath(store_path))
+        os.makedirs(store_dir, exist_ok=True)
+        with _BASELINE_LOCK:
+            data = {}
+            if os.path.exists(store_path):
+                try:
+                    with open(store_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                except Exception:
+                    data = {}
+            key = os.path.basename(excel_path)
+            data[key] = sheets_baseline
+            tmp_path = f"{store_path}.{os.getpid()}.{threading.get_ident()}.tmp"
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, store_path)
+            tmp_path = None
     except Exception as e:
         print(f"Не удалось сохранить baseline для {excel_path}: {e}")
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
 
 
 def _load_schedule_baseline(excel_path):
@@ -1013,26 +1028,27 @@ def _load_schedule_baseline(excel_path):
     try:
         key = os.path.basename(excel_path)
         store_path = _get_baseline_store_path(excel_path)
-        if os.path.exists(store_path):
-            try:
-                with open(store_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                if key in data:
-                    return data[key]
-            except Exception:
-                pass
+        with _BASELINE_LOCK:
+            if os.path.exists(store_path):
+                try:
+                    with open(store_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    if key in data:
+                        return data[key]
+                except Exception:
+                    pass
 
-        legacy_path = _get_legacy_baseline_store_path(excel_path)
-        if os.path.exists(legacy_path):
-            try:
-                with open(legacy_path, 'r', encoding='utf-8') as f:
-                    legacy_data = json.load(f)
-                entry = legacy_data.get(key)
-                if entry is not None:
-                    _save_schedule_baseline(excel_path, entry)
-                    return entry
-            except Exception:
-                pass
+            legacy_path = _get_legacy_baseline_store_path(excel_path)
+            if os.path.exists(legacy_path):
+                try:
+                    with open(legacy_path, 'r', encoding='utf-8') as f:
+                        legacy_data = json.load(f)
+                    entry = legacy_data.get(key)
+                    if entry is not None:
+                        _save_schedule_baseline(excel_path, entry)
+                        return entry
+                except Exception:
+                    pass
         return None
     except Exception:
         return None

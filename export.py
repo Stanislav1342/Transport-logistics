@@ -16,10 +16,14 @@ import logging
 import math
 import os
 import re
+import sqlite3
 import ssl
+import statistics
 import sys
+import threading
 import time
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import NamedTuple, Dict, Any
 
 import requests
@@ -159,11 +163,16 @@ class PdfPrinterSession:
     для всех МЛ, исключая оверхед на многократный перезапуск браузера.
     """
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, lazy: bool = False):
         self.config = config
+        self.lazy = lazy
         self.driver: DirectCDPDriver | None = None
+        self._init_attempted = False
 
-    def __enter__(self):
+    def _ensure_driver(self) -> None:
+        if self.driver is not None or self._init_attempted:
+            return
+        self._init_attempted = True
         try:
             browser_path = _resolve_browser_path(self.config)
             self.driver = DirectCDPDriver(
@@ -178,10 +187,16 @@ class PdfPrinterSession:
                 e,
             )
             self.driver = None
+
+    def __enter__(self):
+        if not self.lazy:
+            self._ensure_driver()
         return self
 
     def print_html_to_pdf(self, html_path: str, output_pdf: str) -> bool:
         """Печатает локальный HTML-файл в PDF через открытую сессию."""
+        if self.driver is None and self.lazy:
+            self._ensure_driver()
         if not self.driver:
             print_html_to_pdf_headless(html_path, output_pdf, self.config)
             return True
@@ -218,7 +233,7 @@ class PdfPrinterSession:
         os.makedirs(os.path.dirname(os.path.abspath(output_pdf)), exist_ok=True)
         temp_html_path = os.path.join(
             os.path.dirname(os.path.abspath(output_pdf)),
-            f".tmp_render_{os.getpid()}_{int(time.time() * 1000)}.html",
+            f".tmp_render_{os.getpid()}_{threading.get_ident()}_{int(time.time() * 1000)}.html",
         )
         try:
             with open(temp_html_path, "w", encoding="utf-8") as f:
@@ -577,6 +592,517 @@ def _lookup_indexed_shipment(ml: str, index: dict[str, dict[str, Any]]) -> dict[
     return None
 
 
+# ─── Глобальное ограничение конкурентности API, SQLite-кэш и JWT-менеджер ──────
+
+_GLOBAL_ADVANTUM_API_SEMAPHORE = threading.Semaphore(4)
+SHIPMENTS_CACHE_DB_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "advantum_shipments_cache.db"
+)
+DEFAULT_ML_RATE_PER_DAY = 160.0
+
+
+def _extract_shipment_date(item: dict[str, Any]) -> str | None:
+    """Извлекает дату рейса YYYY-MM-DD из полей API ответа."""
+    for field in ("scheduledStartInstant", "factStartInstant", "startDate", "createdDate"):
+        raw = item.get(field)
+        if isinstance(raw, str) and len(raw.strip()) >= 10:
+            cand = raw.strip()[:10]
+            try:
+                datetime.date.fromisoformat(cand)
+                return cand
+            except Exception:
+                continue
+    return None
+
+
+def _extract_ml_prefix_num(ml_norm: str) -> tuple[str, int] | None:
+    """Разбирает нормализованный номер МЛ вида 'МСК548799' -> ('МСК', 548799)."""
+    m = re.fullmatch(r"([А-ЯЁA-Z]{2,6})(\d{4,9})", (ml_norm or "").strip())
+    if not m:
+        return None
+    return m.group(1), int(m.group(2))
+
+
+class _ShipmentsCache:
+    """
+    Пассивный потокобезопасный SQLite WAL-кэш поискового индекса рейсов Advantum.
+    Хранит метаданные рейсов (номер МЛ -> id, водитель, ТС, флаг телематики) и
+    список полностью закрытых прошлых дней, но НИКОГДА не закрывает последние 3 дня
+    (сегодня, вчера, позавчера) и всегда требует живой загрузки данных датчиков.
+    """
+
+    def __init__(self, db_path: str = SHIPMENTS_CACHE_DB_PATH):
+        self.db_path = db_path
+        self._lock = threading.Lock()
+        self._last_prune_ts = 0.0
+        try:
+            with self._lock:
+                self._init_db()
+        except Exception as e:
+            logger.warning("[Кэш] Не удалось инициализировать %s: %s", self.db_path, e)
+
+    def _connect(self) -> sqlite3.Connection:
+        parent = os.path.dirname(os.path.abspath(self.db_path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        conn = sqlite3.connect(self.db_path, timeout=10.0)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA busy_timeout=10000;")
+        return conn
+
+    def _reset_corrupt_db(self) -> None:
+        logger.warning("[Кэш] Обнаружено повреждение БД %s, пересоздаем...", self.db_path)
+        for suffix in ("", "-wal", "-shm"):
+            p = f"{self.db_path}{suffix}"
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
+        try:
+            self._init_db(allow_reset=False)
+        except Exception as e:
+            logger.warning("[Кэш] Повторная инициализация не удалась: %s", e)
+
+    def _init_db(self, allow_reset: bool = True) -> None:
+        conn = None
+        try:
+            conn = self._connect()
+            with conn:
+                conn.executescript(
+                    """
+                    CREATE TABLE IF NOT EXISTS shipments (
+                        ml_norm TEXT PRIMARY KEY,
+                        digits TEXT,
+                        shipment_id TEXT NOT NULL,
+                        route_num TEXT,
+                        ship_date TEXT,
+                        driver_fio TEXT,
+                        vehicle_gos_num TEXT,
+                        has_telematic INTEGER,
+                        payload_json TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_shipments_digits ON shipments(digits);
+                    CREATE INDEX IF NOT EXISTS idx_shipments_sid ON shipments(shipment_id);
+                    CREATE INDEX IF NOT EXISTS idx_shipments_date ON shipments(ship_date);
+                    CREATE TABLE IF NOT EXISTS indexed_days (
+                        day_iso TEXT PRIMARY KEY,
+                        items_count INTEGER NOT NULL DEFAULT 0,
+                        indexed_at TEXT NOT NULL
+                    );
+                    """
+                )
+        except sqlite3.DatabaseError:
+            if allow_reset:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    conn = None
+                self._reset_corrupt_db()
+            else:
+                raise
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    def lookup(self, ml_numbers: list[str]) -> dict[str, dict[str, Any]]:
+        result: dict[str, dict[str, Any]] = {}
+        if not ml_numbers:
+            return result
+        with self._lock:
+            conn = None
+            try:
+                conn = self._connect()
+                cur = conn.cursor()
+                for ml in ml_numbers:
+                    norm = normalize_ml_number(ml)
+                    if not norm:
+                        continue
+                    row = cur.execute(
+                        "SELECT payload_json FROM shipments WHERE ml_norm = ? LIMIT 1",
+                        (norm,),
+                    ).fetchone()
+                    if row is None and _is_pure_shipment_id(norm):
+                        row = cur.execute(
+                            "SELECT payload_json FROM shipments WHERE shipment_id = ? "
+                            "ORDER BY COALESCE(has_telematic, 0) DESC, updated_at DESC LIMIT 1",
+                            (norm,),
+                        ).fetchone()
+                    if row is None:
+                        digits = "".join(re.findall(r"\d+", norm))
+                        if digits:
+                            row = cur.execute(
+                                "SELECT payload_json FROM shipments WHERE digits = ? "
+                                "ORDER BY COALESCE(has_telematic, 0) DESC, updated_at DESC LIMIT 1",
+                                (digits,),
+                            ).fetchone()
+                    if row and row[0]:
+                        try:
+                            payload = json.loads(row[0])
+                            if isinstance(payload, dict):
+                                rec = dict(payload)
+                                rec["_from_cache"] = True
+                                result[norm] = rec
+                        except Exception:
+                            pass
+            except sqlite3.DatabaseError:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    conn = None
+                self._reset_corrupt_db()
+                return {}
+            except Exception as e:
+                logger.debug("[Кэш] Ошибка lookup: %s", e)
+                return {}
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+        return result
+
+    def upsert_shipments(self, items: list[dict[str, Any]], fallback_day: str | None = None) -> int:
+        if not items:
+            return 0
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        rows: list[tuple[Any, ...]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            sid = item.get("id")
+            if sid is None:
+                continue
+            sid_str = str(sid).strip()
+            if not sid_str:
+                continue
+            raw_route = str(item.get("routeNum") or "").strip()
+            norm = normalize_ml_number(raw_route) if raw_route else f"ID:{sid_str}"
+            digits = "".join(re.findall(r"\d+", norm)) if raw_route else ""
+            ship_date = _extract_shipment_date(item) or fallback_day
+            driver_fio = str(item.get("driverFio") or "").strip()
+            vehicle_gos_num = str(
+                item.get("vehicleGosNums") or item.get("vehicleGosNum") or ""
+            ).strip()
+            has_tel_raw = item.get("hasTelematicEquipment")
+            has_tel = None if has_tel_raw is None else (1 if has_tel_raw else 0)
+            clean_item = {k: v for k, v in item.items() if k != "_from_cache"}
+            payload_json = json.dumps(clean_item, ensure_ascii=False)
+            rows.append(
+                (
+                    norm,
+                    digits,
+                    sid_str,
+                    raw_route,
+                    ship_date,
+                    driver_fio,
+                    vehicle_gos_num,
+                    has_tel,
+                    payload_json,
+                    now_iso,
+                )
+            )
+        if not rows:
+            return 0
+
+        with self._lock:
+            conn = None
+            try:
+                conn = self._connect()
+                with conn:
+                    conn.executemany(
+                        """
+                        INSERT OR REPLACE INTO shipments (
+                            ml_norm, digits, shipment_id, route_num, ship_date,
+                            driver_fio, vehicle_gos_num, has_telematic, payload_json, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        rows,
+                    )
+                return len(rows)
+            except sqlite3.DatabaseError:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    conn = None
+                self._reset_corrupt_db()
+                return 0
+            except Exception as e:
+                logger.debug("[Кэш] Ошибка upsert_shipments: %s", e)
+                return 0
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+    def mark_days_indexed(
+        self, days: set[datetime.date] | list[datetime.date], items_count: int = 0
+    ) -> None:
+        """Фиксирует в кэше полностью опрошенные прошлые дни (строго старше последних 3 дней)."""
+        cutoff_safe = datetime.date.today() - datetime.timedelta(days=3)
+        safe_days = sorted({d for d in days if isinstance(d, datetime.date) and d <= cutoff_safe})
+        if not safe_days:
+            return
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        rows = [(d.isoformat(), int(items_count), now_iso) for d in safe_days]
+        with self._lock:
+            conn = None
+            try:
+                conn = self._connect()
+                with conn:
+                    conn.executemany(
+                        "INSERT OR REPLACE INTO indexed_days (day_iso, items_count, indexed_at) VALUES (?, ?, ?)",
+                        rows,
+                    )
+            except sqlite3.DatabaseError:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    conn = None
+                self._reset_corrupt_db()
+            except Exception as e:
+                logger.debug("[Кэш] Ошибка mark_days_indexed: %s", e)
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+    def get_indexed_days(self) -> set[str]:
+        cutoff_safe_iso = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()
+        with self._lock:
+            conn = None
+            try:
+                conn = self._connect()
+                rows = conn.execute(
+                    "SELECT day_iso FROM indexed_days WHERE day_iso <= ?",
+                    (cutoff_safe_iso,),
+                ).fetchall()
+                return {r[0] for r in rows if r and r[0]}
+            except sqlite3.DatabaseError:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    conn = None
+                self._reset_corrupt_db()
+                return set()
+            except Exception as e:
+                logger.debug("[Кэш] Ошибка get_indexed_days: %s", e)
+                return set()
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+    def get_ml_anchors(
+        self, prefixes: set[str] | None = None, limit: int = 1000
+    ) -> list[tuple[str, int, datetime.date]]:
+        """Возвращает калибровочные пары (префикс, число, дата) с покрытием разных дат."""
+        anchors: list[tuple[str, int, datetime.date]] = []
+        with self._lock:
+            conn = None
+            try:
+                conn = self._connect()
+                cur = conn.cursor()
+                date_rows = cur.execute(
+                    "SELECT DISTINCT ship_date FROM shipments "
+                    "WHERE ship_date IS NOT NULL AND ship_date != '' AND ml_norm NOT LIKE 'ID:%' "
+                    "ORDER BY ship_date DESC LIMIT 60"
+                ).fetchall()
+                dates_list = [r[0] for r in date_rows if r and r[0]]
+                per_day_limit = max(20, min(60, limit // max(1, len(dates_list))))
+                for d_iso in dates_list:
+                    try:
+                        d_obj = datetime.date.fromisoformat(d_iso)
+                    except Exception:
+                        continue
+                    ml_rows = cur.execute(
+                        "SELECT ml_norm FROM shipments "
+                        "WHERE ship_date = ? AND ml_norm NOT LIKE 'ID:%' LIMIT ?",
+                        (d_iso, per_day_limit),
+                    ).fetchall()
+                    for (ml_norm,) in ml_rows:
+                        parsed = _extract_ml_prefix_num(ml_norm)
+                        if parsed is None:
+                            continue
+                        p, num = parsed
+                        if prefixes is not None and p not in prefixes:
+                            continue
+                        anchors.append((p, num, d_obj))
+            except sqlite3.DatabaseError:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    conn = None
+                self._reset_corrupt_db()
+                return []
+            except Exception as e:
+                logger.debug("[Кэш] Ошибка get_ml_anchors: %s", e)
+                return []
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+        return anchors
+
+    def prune_old(self, max_age_days: int = 90, force: bool = False) -> None:
+        now = time.time()
+        if not force and (now - self._last_prune_ts) < 3600.0:
+            return
+        cutoff_iso = (datetime.date.today() - datetime.timedelta(days=max_age_days)).isoformat()
+        with self._lock:
+            self._last_prune_ts = now
+            conn = None
+            try:
+                conn = self._connect()
+                with conn:
+                    conn.execute(
+                        "DELETE FROM shipments "
+                        "WHERE (ship_date IS NOT NULL AND ship_date != '' AND ship_date < ?) "
+                        "OR ((ship_date IS NULL OR ship_date = '') AND updated_at < ?)",
+                        (cutoff_iso, cutoff_iso),
+                    )
+                    conn.execute(
+                        "DELETE FROM indexed_days WHERE day_iso < ?",
+                        (cutoff_iso,),
+                    )
+            except sqlite3.DatabaseError:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    conn = None
+                self._reset_corrupt_db()
+            except Exception as e:
+                logger.debug("[Кэш] Ошибка prune_old: %s", e)
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+
+_SHIPMENTS_CACHE = _ShipmentsCache()
+
+
+def _parse_jwt_exp(token: str) -> float | None:
+    """Извлекает timestamp истечения (exp) из payload JWT без проверки подписи."""
+    try:
+        parts = (token or "").split(".")
+        if len(parts) < 2:
+            return None
+        payload_b64 = parts[1]
+        payload_b64 += "=" * (-len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64).decode("utf-8"))
+        exp = payload.get("exp")
+        if exp is not None:
+            return float(exp)
+    except Exception:
+        pass
+    return None
+
+
+class AdvantumTokenManager:
+    """
+    Потокобезопасный менеджер общего Bearer JWT-токена Advantum.
+    Исключает лишние параллельные логины через браузер и сразу закрывает браузер
+    авторизации после получения токена.
+    """
+
+    def __init__(self, safety_margin_sec: float = 120.0):
+        self._lock = threading.Lock()
+        self._token: str = ""
+        self._exp_ts: float = 0.0
+        self._safety_margin_sec = float(safety_margin_sec)
+
+    def _is_valid_unlocked(self) -> bool:
+        return bool(self._token and time.time() < (self._exp_ts - self._safety_margin_sec))
+
+    def is_valid(self) -> bool:
+        with self._lock:
+            return self._is_valid_unlocked()
+
+    def set_token(self, token: str) -> None:
+        if not token:
+            return
+        exp = _parse_jwt_exp(token)
+        with self._lock:
+            self._token = token
+            self._exp_ts = exp if exp is not None else (time.time() + 1800.0)
+
+    def invalidate(self, bad_token: str | None = None) -> None:
+        with self._lock:
+            if bad_token is None or self._token == bad_token:
+                self._token = ""
+                self._exp_ts = 0.0
+
+    def get_token(
+        self,
+        config: Config,
+        force_refresh: bool = False,
+        login_fn: Any | None = None,
+    ) -> str:
+        with self._lock:
+            if not force_refresh and self._is_valid_unlocked():
+                return self._token
+
+            if login_fn is not None:
+                tok = str(login_fn(config) or "")
+            else:
+                from browser import create_driver, login_to_advantum
+
+                drv = None
+                try:
+                    logger.info("[Auth] Получение свежего JWT-токена Advantum через браузер...")
+                    drv = create_driver(config, headless=True)
+                    login_to_advantum(drv, config)
+                    tok = get_advantum_bearer_token(drv)
+                finally:
+                    if drv is not None:
+                        try:
+                            drv.quit()
+                        except Exception:
+                            pass
+
+            if not tok:
+                raise RuntimeError("Не удалось получить access_token Advantum")
+
+            exp = _parse_jwt_exp(tok)
+            self._token = tok
+            self._exp_ts = exp if exp is not None else (time.time() + 1800.0)
+            return tok
+
+
+ADVANTUM_TOKEN_MANAGER = AdvantumTokenManager()
+
+
 def _build_os_ssl_context() -> ssl.SSLContext:
     """
     Создает SSLContext на базе системного хранилища сертификатов ОС (включая корневые
@@ -631,10 +1157,13 @@ class _SystemSSLContextAdapter(requests.adapters.HTTPAdapter):
 
 class _AdvantumApiClient:
     """
-    Единый HTTP-клиент Advantum API:
-    1. Сначала выполняет запросы через requests.Session с системным хранилищем сертификатов ОС.
-    2. Если корпоративный прокси/антивирус блокирует TLS на уровне Python (SSLError/ProxyError),
-       мгновенно переключается на same-origin fetch() внутри уже авторизованного браузера.
+    Потокобезопасный HTTP-клиент Advantum API:
+    1. Каждый рабочий поток получает собственный requests.Session с системным хранилищем
+       сертификатов ОС; общее число одновременных запросов ограничено _GLOBAL_ADVANTUM_API_SEMAPHORE.
+    2. Автоматически обновляет протухший токен при HTTP 401 (через token_manager) и делает
+       вежливый retry с backoff при HTTP 429/503.
+    3. Если корпоративный прокси/антивирус блокирует TLS на уровне Python (SSLError/ProxyError),
+       переключается на same-origin fetch() внутри браузера (с ленивым запуском при необходимости).
     """
 
     def __init__(
@@ -642,165 +1171,287 @@ class _AdvantumApiClient:
         token: str,
         base_url: str = "https://atms.advantum.ru",
         driver: WebDriver | None = None,
+        config: Config | None = None,
+        token_manager: AdvantumTokenManager | None = None,
     ):
         self.token = token
         self.base_url = base_url.rstrip("/")
         self.driver = driver
+        self.config = config
+        self.token_manager = token_manager
         self._use_browser_fetch = False
 
-        self.session = requests.Session()
-        self.session.mount("https://", _SystemSSLContextAdapter())
-        self.session.headers.update(
-            {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-        )
+        self._ssl_context = _build_os_ssl_context()
+        self._tls = threading.local()
+        self._token_lock = threading.Lock()
+        self._browser_lock = threading.Lock()
+        self._owned_driver: WebDriver | None = None
+
+    def _get_session(self) -> requests.Session:
+        sess = getattr(self._tls, "session", None)
+        if sess is None:
+            sess = requests.Session()
+            sess.mount("https://", _SystemSSLContextAdapter(ssl_context=self._ssl_context))
+            sess.headers.update({"Accept": "application/json"})
+            self._tls.session = sess
+        return sess
+
+    @property
+    def session(self) -> requests.Session:
+        return self._get_session()
+
+    def _current_token(self) -> str:
+        with self._token_lock:
+            return self.token
+
+    def _ensure_browser_driver(self) -> WebDriver | None:
+        with self._browser_lock:
+            if self.driver is not None:
+                return self.driver
+            if self.config is None:
+                return None
+            try:
+                from browser import create_driver, login_to_advantum
+
+                drv = create_driver(self.config, headless=True)
+                login_to_advantum(drv, self.config)
+                try:
+                    fresh_tok = get_advantum_bearer_token(drv)
+                    if fresh_tok:
+                        with self._token_lock:
+                            self.token = fresh_tok
+                        if self.token_manager is not None:
+                            self.token_manager.set_token(fresh_tok)
+                except Exception:
+                    pass
+                self.driver = drv
+                self._owned_driver = drv
+                return self.driver
+            except Exception as e:
+                logger.warning("[API] Не удалось лениво запустить браузер для fallback fetch(): %s", e)
+                return None
+
+    def close(self) -> None:
+        with self._browser_lock:
+            if self._owned_driver is not None:
+                try:
+                    self._owned_driver.quit()
+                except Exception:
+                    pass
+                if self.driver is self._owned_driver:
+                    self.driver = None
+                self._owned_driver = None
 
     def _browser_fetch_json(
-        self, path: str, params: dict[str, Any] | None = None, timeout: int = 25
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+        timeout: int = 25,
+        token: str | None = None,
     ) -> tuple[bool, int, Any, bool, str | None]:
-        if not self.driver:
-            return False, 0, None, False, "Браузер недоступен для fallback fetch()"
+        active_token = token if token is not None else self._current_token()
+        with self._browser_lock:
+            if not self.driver:
+                return False, 0, None, False, "Браузер недоступен для fallback fetch()"
 
-        rel_path = path if path.startswith("/") else f"/{path}"
-        if params:
-            qs = urllib.parse.urlencode(params)
-            sep = "&" if "?" in rel_path else "?"
-            rel_path = f"{rel_path}{sep}{qs}"
+            rel_path = path if path.startswith("/") else f"/{path}"
+            if params:
+                qs = urllib.parse.urlencode(params)
+                sep = "&" if "?" in rel_path else "?"
+                rel_path = f"{rel_path}{sep}{qs}"
 
-        timeout_ms = min(max(int(timeout * 1000), 1000), 22000)
+            timeout_ms = min(max(int(timeout * 1000), 1000), 22000)
 
-        try:
-            cur_url = str(getattr(self.driver, "current_url", "") or "")
-            if not cur_url.startswith(self.base_url):
-                self.driver.get(f"{self.base_url}/pre-load.js")
-        except Exception:
-            pass
+            try:
+                cur_url = str(getattr(self.driver, "current_url", "") or "")
+                if not cur_url.startswith(self.base_url):
+                    self.driver.get(f"{self.base_url}/pre-load.js")
+            except Exception:
+                pass
 
-        async_core = """
-            const url = arguments[0];
-            const token = arguments[1];
-            const timeoutMs = arguments[2];
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), timeoutMs);
-            try {
-                const resp = await fetch(url, {
-                    method: 'GET',
-                    headers: {
-                        'Authorization': 'Bearer ' + token,
-                        'Accept': 'application/json'
-                    },
-                    signal: controller.signal
-                });
-                const text = await resp.text();
-                let data = null;
-                try { data = text ? JSON.parse(text) : null; } catch (e) {}
-                return {
-                    ok: !!resp.ok,
-                    status: Number(resp.status || 0),
-                    data: data,
-                    timeout: false,
-                    error: resp.ok ? null : ('HTTP ' + resp.status)
-                };
-            } catch (e) {
-                const msg = String(e || 'Fetch failed');
-                const isTimeout = Boolean(e && (e.name === 'AbortError' || msg.includes('AbortError')));
-                return {
-                    ok: false,
-                    status: 0,
-                    data: null,
-                    timeout: isTimeout,
-                    error: msg
-                };
-            } finally {
-                clearTimeout(timer);
-            }
-        """
+            async_core = """
+                const url = arguments[0];
+                const token = arguments[1];
+                const timeoutMs = arguments[2];
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), timeoutMs);
+                try {
+                    const resp = await fetch(url, {
+                        method: 'GET',
+                        headers: {
+                            'Authorization': 'Bearer ' + token,
+                            'Accept': 'application/json'
+                        },
+                        signal: controller.signal
+                    });
+                    const text = await resp.text();
+                    let data = null;
+                    try { data = text ? JSON.parse(text) : null; } catch (e) {}
+                    return {
+                        ok: !!resp.ok,
+                        status: Number(resp.status || 0),
+                        data: data,
+                        timeout: false,
+                        error: resp.ok ? null : ('HTTP ' + resp.status)
+                    };
+                } catch (e) {
+                    const msg = String(e || 'Fetch failed');
+                    const isTimeout = Boolean(e && (e.name === 'AbortError' || msg.includes('AbortError')));
+                    return {
+                        ok: false,
+                        status: 0,
+                        data: null,
+                        timeout: isTimeout,
+                        error: msg
+                    };
+                } finally {
+                    clearTimeout(timer);
+                }
+            """
 
-        try:
-            if isinstance(self.driver, DirectCDPDriver) or not hasattr(
-                self.driver, "execute_async_script"
-            ):
-                script = f"return (async function() {{ {async_core} }})();"
-                res = self.driver.execute_script(script, rel_path, self.token, timeout_ms)
-            else:
-                script = (
-                    "const done = arguments[arguments.length - 1];\n"
-                    f"(async function() {{ {async_core} }})().then(done).catch(err => "
-                    "done({ok: false, status: 0, data: null, timeout: false, error: String(err)}));"
+            try:
+                if isinstance(self.driver, DirectCDPDriver) or not hasattr(
+                    self.driver, "execute_async_script"
+                ):
+                    script = f"return (async function() {{ {async_core} }})();"
+                    res = self.driver.execute_script(script, rel_path, active_token, timeout_ms)
+                else:
+                    script = (
+                        "const done = arguments[arguments.length - 1];\n"
+                        f"(async function() {{ {async_core} }})().then(done).catch(err => "
+                        "done({ok: false, status: 0, data: null, timeout: false, error: String(err)}));"
+                    )
+                    res = self.driver.execute_async_script(script, rel_path, active_token, timeout_ms)
+
+                if not isinstance(res, dict):
+                    return False, 0, None, False, f"Некорректный ответ browser fetch: {type(res).__name__}"
+                return (
+                    bool(res.get("ok")),
+                    int(res.get("status") or 0),
+                    res.get("data"),
+                    bool(res.get("timeout")),
+                    res.get("error"),
                 )
-                res = self.driver.execute_async_script(script, rel_path, self.token, timeout_ms)
-
-            if not isinstance(res, dict):
-                return False, 0, None, False, f"Некорректный ответ browser fetch: {type(res).__name__}"
-            return (
-                bool(res.get("ok")),
-                int(res.get("status") or 0),
-                res.get("data"),
-                bool(res.get("timeout")),
-                res.get("error"),
-            )
-        except Exception as e:
-            err_str = str(e)
-            is_to = "timed out" in err_str.lower() or "timeout" in err_str.lower()
-            return False, 0, None, is_to, err_str
+            except Exception as e:
+                err_str = str(e)
+                is_to = "timed out" in err_str.lower() or "timeout" in err_str.lower()
+                return False, 0, None, is_to, err_str
 
     def get_json(
         self, path: str, params: dict[str, Any] | None = None, timeout: int = 30
     ) -> tuple[bool, int, Any, bool, str | None]:
         """Возвращает кортеж (ok, status_code, json_data, is_timeout, error_msg)."""
-        if self._use_browser_fetch:
-            return self._browser_fetch_json(path, params=params, timeout=timeout)
-
         rel_path = path if path.startswith("/") else f"/{path}"
         url = f"{self.base_url}{rel_path}"
-        try:
-            resp = self.session.get(url, params=params, timeout=timeout)
-            if resp.ok:
+        refreshed_401 = False
+        rate_retries = 0
+
+        while True:
+            cur_token = self._current_token()
+            resp = None
+
+            if self._use_browser_fetch:
+                if self.driver is None and self._ensure_browser_driver() is None:
+                    return False, 0, None, False, "Браузер недоступен для fallback fetch()"
+                cur_token = self._current_token()
+                with _GLOBAL_ADVANTUM_API_SEMAPHORE:
+                    ok, status_code, data, is_timeout, err_msg = self._browser_fetch_json(
+                        path, params=params, timeout=timeout, token=cur_token
+                    )
+            else:
+                sess = self._get_session()
+                headers = {"Authorization": f"Bearer {cur_token}", "Accept": "application/json"}
                 try:
-                    return True, resp.status_code, resp.json(), False, None
-                except Exception as e:
-                    return False, resp.status_code, None, False, f"Ошибка JSON: {e}"
-            return False, resp.status_code, None, False, f"HTTP {resp.status_code}"
-        except requests.exceptions.Timeout as exc:
-            return False, 0, None, True, str(exc)
-        except (requests.exceptions.SSLError, requests.exceptions.ProxyError) as exc:
-            if self.driver is not None:
-                logger.warning(
-                    "[API] Прямой Python-запрос к Advantum заблокирован TLS/прокси (%s). Переключаемся на browser fetch().",
-                    exc,
-                )
-                print("[API] Корпоративный прокси/TLS: переключение запросов на браузерный fetch()...")
-                self._use_browser_fetch = True
-                return self._browser_fetch_json(path, params=params, timeout=timeout)
-            return False, 0, None, False, str(exc)
-        except requests.exceptions.RequestException as exc:
-            return False, 0, None, False, str(exc)
+                    with _GLOBAL_ADVANTUM_API_SEMAPHORE:
+                        resp = sess.get(url, params=params, headers=headers, timeout=timeout)
+                    status_code = resp.status_code
+                    if resp.ok:
+                        try:
+                            return True, status_code, resp.json(), False, None
+                        except Exception as e:
+                            return False, status_code, None, False, f"Ошибка JSON: {e}"
+                    ok, data, is_timeout, err_msg = False, None, False, f"HTTP {status_code}"
+                except requests.exceptions.Timeout as exc:
+                    return False, 0, None, True, str(exc)
+                except (requests.exceptions.SSLError, requests.exceptions.ProxyError) as exc:
+                    if self.driver is not None or self.config is not None:
+                        logger.warning(
+                            "[API] Прямой Python-запрос к Advantum заблокирован TLS/прокси (%s). Переключаемся на browser fetch().",
+                            exc,
+                        )
+                        print("[API] Корпоративный прокси/TLS: переключение запросов на браузерный fetch()...")
+                        if self._ensure_browser_driver() is not None:
+                            self._use_browser_fetch = True
+                            continue
+                    return False, 0, None, False, str(exc)
+                except requests.exceptions.RequestException as exc:
+                    return False, 0, None, False, str(exc)
+
+            if ok:
+                return True, status_code, data, False, None
+
+            if (
+                status_code == 401
+                and not refreshed_401
+                and self.token_manager is not None
+                and self.config is not None
+            ):
+                refreshed_401 = True
+                try:
+                    self.token_manager.invalidate(cur_token)
+                    new_tok = self.token_manager.get_token(self.config)
+                    with self._token_lock:
+                        self.token = new_tok
+                    continue
+                except Exception as tok_err:
+                    logger.warning("[API] Не удалось обновить токен после HTTP 401: %s", tok_err)
+                    return False, 401, None, False, err_msg or "HTTP 401"
+
+            if status_code in (429, 503) and rate_retries < 2:
+                rate_retries += 1
+                backoff = 1.5 * rate_retries
+                if resp is not None:
+                    try:
+                        ra = resp.headers.get("Retry-After")
+                        if ra:
+                            backoff = min(5.0, max(0.5, float(ra)))
+                    except Exception:
+                        pass
+                time.sleep(backoff)
+                continue
+
+            return False, status_code, data, is_timeout, err_msg
 
 
-def _fetch_shipments_chunk_http(
+def _fetch_shipments_chunk_detailed(
     api_client: _AdvantumApiClient | requests.Session,
     chunk_from: datetime.date,
     chunk_to: datetime.date,
     base_url: str = "https://atms.advantum.ru",
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], set[datetime.date]]:
     """
     Запрашивает список рейсов через GET /api/v1/shipments за интервал chunk_from..chunk_to.
-    При таймауте или серверной перегрузке многодневного интервала дробит окно пополам (до 1 дня).
+    Возвращает (items, succeeded_days). Использует дифференцированный таймаут (12с для
+    многодневных окон и 28с для однодневных) и при таймауте дробит окно пополам до 1 дня.
     """
     params = {
         "scheduledStartInstantFrom": f"{chunk_from.isoformat()}T00:00:00.000Z",
         "scheduledStartInstantTo": f"{chunk_to.isoformat()}T23:59:59.999Z",
     }
+    span_days = (chunk_to - chunk_from).days
+    req_timeout = 12 if span_days > 0 else 28
 
     if isinstance(api_client, _AdvantumApiClient):
         ok, status_code, data, is_timeout, err_msg = api_client.get_json(
-            "/api/v1/shipments", params=params, timeout=30
+            "/api/v1/shipments", params=params, timeout=req_timeout
         )
     else:
         ok, status_code, data, is_timeout, err_msg = False, 0, None, False, None
         try:
-            resp = api_client.get(
-                f"{base_url.rstrip('/')}/api/v1/shipments", params=params, timeout=30
-            )
+            with _GLOBAL_ADVANTUM_API_SEMAPHORE:
+                resp = api_client.get(
+                    f"{base_url.rstrip('/')}/api/v1/shipments", params=params, timeout=req_timeout
+                )
             status_code = resp.status_code
             if resp.ok:
                 ok = True
@@ -814,9 +1465,12 @@ def _fetch_shipments_chunk_http(
             err_msg = str(exc)
 
     if ok:
-        return data if isinstance(data, list) else []
+        days_ok = {
+            chunk_from + datetime.timedelta(days=i)
+            for i in range(max(0, span_days) + 1)
+        }
+        return (data if isinstance(data, list) else []), days_ok
 
-    span_days = (chunk_to - chunk_from).days
     should_split = span_days > 0 and (
         is_timeout or status_code in (400, 408, 500, 502, 503, 504)
     )
@@ -829,11 +1483,13 @@ def _fetch_shipments_chunk_http(
             chunk_to,
             reason,
         )
-        part1 = _fetch_shipments_chunk_http(api_client, chunk_from, mid, base_url=base_url)
-        part2 = _fetch_shipments_chunk_http(
+        part1, d1 = _fetch_shipments_chunk_detailed(
+            api_client, chunk_from, mid, base_url=base_url
+        )
+        part2, d2 = _fetch_shipments_chunk_detailed(
             api_client, mid + datetime.timedelta(days=1), chunk_to, base_url=base_url
         )
-        return part1 + part2
+        return part1 + part2, d1 | d2
 
     if status_code:
         logger.warning(
@@ -849,7 +1505,122 @@ def _fetch_shipments_chunk_http(
             chunk_to,
             err_msg,
         )
-    return []
+    return [], set()
+
+
+def _fetch_shipments_chunk_http(
+    api_client: _AdvantumApiClient | requests.Session,
+    chunk_from: datetime.date,
+    chunk_to: datetime.date,
+    base_url: str = "https://atms.advantum.ru",
+) -> list[dict[str, Any]]:
+    """Совместимая обертка, возвращающая только список рейсов без набора закрытых дней."""
+    items, _ = _fetch_shipments_chunk_detailed(
+        api_client, chunk_from, chunk_to, base_url=base_url
+    )
+    return items
+
+
+def _group_days_into_windows(
+    days_desc: list[datetime.date], max_window_days: int = 2
+) -> list[tuple[datetime.date, datetime.date]]:
+    """Группирует отсортированный по убыванию список дат в окна длиной не более max_window_days."""
+    if not days_desc:
+        return []
+    ordered = sorted(set(days_desc), reverse=True)
+    windows: list[tuple[datetime.date, datetime.date]] = []
+    win_to = ordered[0]
+    win_from = ordered[0]
+    for d in ordered[1:]:
+        if (win_from - d).days == 1 and (win_to - d).days < max_window_days:
+            win_from = d
+        else:
+            windows.append((win_from, win_to))
+            win_to = d
+            win_from = d
+    windows.append((win_from, win_to))
+    return windows
+
+
+def _estimate_target_dates(
+    missing_targets: list[str],
+    anchors: list[tuple[str, int, datetime.date]],
+    min_date: datetime.date,
+    max_date: datetime.date,
+) -> list[datetime.date]:
+    """
+    Оценивает вероятные даты рейсов по прогрессии номеров МЛ (напр. МСКxxxxxx -> ~160/день
+    или реальный темп по калибровочным якорям). Возвращает список ориентировочных дат.
+    """
+    if not missing_targets or not anchors:
+        return []
+
+    by_prefix_date: dict[str, dict[datetime.date, list[int]]] = {}
+    for p, num, d in anchors:
+        by_prefix_date.setdefault(p, {}).setdefault(d, []).append(num)
+
+    prefix_models: dict[str, tuple[datetime.date, float, float]] = {}
+    for p, date_map in by_prefix_date.items():
+        day_medians = sorted(
+            ((d, float(statistics.median(nums))) for d, nums in date_map.items()),
+            key=lambda x: x[0],
+        )
+        if len(day_medians) >= 2:
+            d0, m0 = day_medians[0]
+            d1, m1 = day_medians[-1]
+            span = (d1 - d0).days
+            if span >= 1 and m1 > m0:
+                rate = min(1500.0, max(30.0, (m1 - m0) / float(span)))
+            else:
+                rate = DEFAULT_ML_RATE_PER_DAY
+            prefix_models[p] = (d1, m1, rate)
+        elif len(day_medians) == 1:
+            d1, m1 = day_medians[0]
+            prefix_models[p] = (d1, m1, DEFAULT_ML_RATE_PER_DAY)
+
+    est_dates: list[datetime.date] = []
+    min_ord = min_date.toordinal()
+    max_ord = max_date.toordinal()
+    for t in missing_targets:
+        parsed = _extract_ml_prefix_num(t)
+        if not parsed:
+            continue
+        p, target_num = parsed
+        model = prefix_models.get(p)
+        if not model:
+            continue
+        ref_date, ref_num, rate = model
+        delta_days = (target_num - ref_num) / rate
+        est_ord = round(ref_date.toordinal() + delta_days)
+        clamped_ord = max(min_ord, min(max_ord, est_ord))
+        est_dates.append(datetime.date.fromordinal(clamped_ord))
+    return est_dates
+
+
+def _prioritize_windows(
+    windows: list[tuple[datetime.date, datetime.date]],
+    estimated_dates: list[datetime.date],
+) -> list[tuple[datetime.date, datetime.date]]:
+    """
+    Переупорядочивает оставшиеся окна поиска так, чтобы ближайшие к оценочным датам
+    проверялись первыми, не отбрасывая при этом ни одного резервного окна.
+    """
+    if not windows:
+        return []
+    if not estimated_dates:
+        return sorted(windows, key=lambda w: w[1], reverse=True)
+
+    def _window_distance(w: tuple[datetime.date, datetime.date]) -> tuple[int, int]:
+        w_from, w_to = w
+        best = min(
+            0
+            if w_from <= ed <= w_to
+            else min(abs((ed - w_from).days), abs((ed - w_to).days))
+            for ed in estimated_dates
+        )
+        return (best, -w_to.toordinal())
+
+    return sorted(windows, key=_window_distance)
 
 
 def find_shipments_by_ml_api(
@@ -860,78 +1631,226 @@ def find_shipments_by_ml_api(
     base_url: str = "https://atms.advantum.ru",
     driver: WebDriver | None = None,
     api_client: _AdvantumApiClient | None = None,
+    cache: _ShipmentsCache | None = None,
+    use_cache: bool = True,
+    max_workers: int = 3,
 ) -> dict[str, dict[str, Any]]:
     """
-    Каскадный поиск рейсов по номерам МЛ (routeNum) или ID рейсов через нативный REST API Advantum.
-    Не требует ввода дат от пользователя: шагает назад от текущей даты чанками по 4 дня
-    и мгновенно останавливается, как только все искомые МЛ найдены.
-
-    Возвращает словарь { normalize_ml_number(ml): shipment_dict } для найденных рейсов.
+    Ускоренный каскадный поиск рейсов по номерам МЛ (routeNum) или ID рейсов через REST API:
+    1. Проверяет пассивный SQLite WAL-кэш (мгновенный возврат для ранее встречавшихся старых рейсов).
+    2. Пропускает полностью проиндексированные старые дни (> 3 дней назад).
+    3. Оценивает целевую дату по темпу номеров МЛ (Smart Jump) и проверяет ближайшие 2-дневные окна первыми.
+    4. Запрашивает окна волнами по 3 потока (последовательно в режиме browser fetch) с авто-дроблением
+       и мгновенной остановкой, как только все искомые МЛ найдены.
     """
     base_url = base_url.rstrip("/")
     index: dict[str, dict[str, Any]] = {}
-    client = api_client or _AdvantumApiClient(token=token, base_url=base_url, driver=driver)
+    owns_client = api_client is None
+    client = api_client or _AdvantumApiClient(
+        token=token,
+        base_url=base_url,
+        driver=driver,
+        token_manager=ADVANTUM_TOKEN_MANAGER if driver is None else None,
+    )
+    active_cache = (cache or _SHIPMENTS_CACHE) if use_cache else None
 
-    normalized_targets = [normalize_ml_number(ml) for ml in ml_numbers if ml.strip()]
-    if not normalized_targets:
-        return {}
+    try:
+        seen_norms: set[str] = set()
+        normalized_targets: list[str] = []
+        for ml in ml_numbers:
+            if not ml or not ml.strip():
+                continue
+            norm = normalize_ml_number(ml)
+            if norm not in seen_norms:
+                seen_norms.add(norm)
+                normalized_targets.append(norm)
 
-    # 1. Прямая проверка, если пользователь передал внутренние ID рейса (7-9 цифр)
-    for norm in normalized_targets:
-        if _is_pure_shipment_id(norm):
-            ok, _, item, _, err_msg = client.get_json(f"/api/v1/shipments/{norm}", timeout=15)
-            if ok and isinstance(item, dict) and item.get("id"):
-                _index_shipment_record(item, index)
-                print(f"[API] Рейс ID {norm} найден напрямую (МЛ: {item.get('routeNum', '—')}).")
-            elif err_msg:
-                logger.debug("Ошибка прямого запроса ID %s: %s", norm, err_msg)
+        if not normalized_targets:
+            return {}
 
-    def _all_found() -> bool:
-        return all(_lookup_indexed_shipment(t, index) is not None for t in normalized_targets)
+        def _all_found() -> bool:
+            return all(_lookup_indexed_shipment(t, index) is not None for t in normalized_targets)
 
-    if _all_found():
-        return {
-            t: _lookup_indexed_shipment(t, index)
-            for t in normalized_targets
-            if _lookup_indexed_shipment(t, index) is not None
+        def _build_result_map() -> dict[str, dict[str, Any]]:
+            res: dict[str, dict[str, Any]] = {}
+            for t in normalized_targets:
+                found = _lookup_indexed_shipment(t, index)
+                if found is not None:
+                    res[t] = found
+            return res
+
+        # 0. Пассивный SQLite-кэш поискового индекса
+        if active_cache is not None:
+            active_cache.prune_old(max_age_days=90)
+            cached_hits = active_cache.lookup(normalized_targets)
+            if cached_hits:
+                for item in cached_hits.values():
+                    _index_shipment_record(item, index)
+                print(
+                    f"[Кэш] Найдено в локальном индексе: {len(cached_hits)}/{len(normalized_targets)} МЛ."
+                )
+            if _all_found():
+                return _build_result_map()
+
+        # 1. Прямая проверка внутренних числовых ID рейсов (7-9 цифр)
+        for norm in normalized_targets:
+            if _lookup_indexed_shipment(norm, index) is not None:
+                continue
+            if _is_pure_shipment_id(norm):
+                ok, _, item, _, err_msg = client.get_json(f"/api/v1/shipments/{norm}", timeout=15)
+                if ok and isinstance(item, dict) and item.get("id"):
+                    _index_shipment_record(item, index)
+                    if active_cache is not None:
+                        active_cache.upsert_shipments([item])
+                    print(f"[API] Рейс ID {norm} найден напрямую (МЛ: {item.get('routeNum', '—')}).")
+                elif err_msg:
+                    logger.debug("Ошибка прямого запроса ID %s: %s", norm, err_msg)
+
+        if _all_found():
+            return _build_result_map()
+
+        # 2. Строим 2-дневные окна поиска (отбрасывая уже закрытые прошлые дни из кэша)
+        if date_filter:
+            start_d, end_d = date_filter
+        else:
+            end_d = datetime.date.today() + datetime.timedelta(days=1)
+            start_d = end_d - datetime.timedelta(days=max_lookback_days)
+
+        total_span = max(0, (end_d - start_d).days)
+        all_days = [end_d - datetime.timedelta(days=i) for i in range(total_span + 1)]
+        closed_days = active_cache.get_indexed_days() if active_cache is not None else set()
+        days_to_scan = [d for d in all_days if d.isoformat() not in closed_days]
+        remaining_windows = _group_days_into_windows(days_to_scan, max_window_days=2)
+
+        if not remaining_windows:
+            return _build_result_map()
+
+        missing_now = [t for t in normalized_targets if _lookup_indexed_shipment(t, index) is None]
+        target_prefixes = {
+            p for p_opt in (_extract_ml_prefix_num(t) for t in missing_now) if p_opt for p, _ in [p_opt]
         }
-
-    # 2. Строим окна поиска по 4 дня (в обратном хронологическом порядке)
-    if date_filter:
-        start_d, end_d = date_filter
-    else:
-        end_d = datetime.date.today() + datetime.timedelta(days=1)
-        start_d = end_d - datetime.timedelta(days=max_lookback_days)
-
-    windows: list[tuple[datetime.date, datetime.date]] = []
-    cur_to = end_d
-    while cur_to >= start_d:
-        cur_from = max(start_d, cur_to - datetime.timedelta(days=3))
-        windows.append((cur_from, cur_to))
-        cur_to = cur_from - datetime.timedelta(days=1)
-
-    for w_idx, (c_from, c_to) in enumerate(windows, 1):
-        print(
-            f"[API] Поиск МЛ в периоде {c_from.strftime('%d.%m.%Y')} — {c_to.strftime('%d.%m.%Y')} "
-            f"(окно {w_idx}/{len(windows)})..."
+        anchors: list[tuple[str, int, datetime.date]] = (
+            active_cache.get_ml_anchors(prefixes=target_prefixes or None)
+            if active_cache is not None
+            else []
         )
-        items = _fetch_shipments_chunk_http(client, c_from, c_to, base_url=base_url)
-        for item in items:
-            _index_shipment_record(item, index)
 
-        found_now = sum(1 for t in normalized_targets if _lookup_indexed_shipment(t, index) is not None)
-        print(
-            f"[API] Получено {len(items)} рейсов; найдено искомых МЛ: {found_now}/{len(normalized_targets)}."
-        )
-        if found_now == len(normalized_targets):
-            break
+        def _ingest_window_results(items: list[dict[str, Any]], days_ok: set[datetime.date]) -> None:
+            for item in items:
+                _index_shipment_record(item, index)
+                r_num = item.get("routeNum")
+                s_date = _extract_shipment_date(item)
+                if r_num and s_date:
+                    parsed = _extract_ml_prefix_num(normalize_ml_number(str(r_num)))
+                    if parsed:
+                        try:
+                            d_obj = datetime.date.fromisoformat(s_date)
+                            if not target_prefixes or parsed[0] in target_prefixes:
+                                anchors.append((parsed[0], parsed[1], d_obj))
+                        except Exception:
+                            pass
+            if active_cache is not None:
+                if items:
+                    active_cache.upsert_shipments(items)
+                if days_ok:
+                    active_cache.mark_days_indexed(days_ok, items_count=len(items))
 
-    result_map: dict[str, dict[str, Any]] = {}
-    for t in normalized_targets:
-        found = _lookup_indexed_shipment(t, index)
-        if found is not None:
-            result_map[t] = found
-    return result_map
+        # 3. Если нет свежего якоря (за последние 2 дня), сначала быстро снимаем новейшее 2-дневное окно
+        recent_cutoff = datetime.date.today() - datetime.timedelta(days=2)
+        has_recent_anchor = any(d >= recent_cutoff for _, _, d in anchors)
+        scanned_windows = 0
+        total_windows_initial = len(remaining_windows)
+
+        if not has_recent_anchor and remaining_windows:
+            w_from, w_to = remaining_windows.pop(0)
+            scanned_windows += 1
+            print(
+                f"[API] Поиск МЛ в периоде {w_from.strftime('%d.%m.%Y')} — {w_to.strftime('%d.%m.%Y')} "
+                f"(свежее окно 1/{total_windows_initial})..."
+            )
+            items, days_ok = _fetch_shipments_chunk_detailed(
+                client, w_from, w_to, base_url=base_url
+            )
+            _ingest_window_results(items, days_ok)
+            found_now = sum(1 for t in normalized_targets if _lookup_indexed_shipment(t, index) is not None)
+            print(
+                f"[API] Получено {len(items)} рейсов; найдено искомых МЛ: {found_now}/{len(normalized_targets)}."
+            )
+            if found_now == len(normalized_targets):
+                return _build_result_map()
+
+        # 4. Smart Jump: сортируем оставшиеся окна ближе к оценочным датам и обходим волнами
+        missing_now = [t for t in normalized_targets if _lookup_indexed_shipment(t, index) is None]
+        est_dates = _estimate_target_dates(missing_now, anchors, start_d, end_d)
+        remaining_windows = _prioritize_windows(remaining_windows, est_dates)
+        if est_dates and remaining_windows:
+            est_str = ", ".join(sorted({d.strftime("%d.%m.%Y") for d in est_dates}))
+            print(f"[API] Ориентир Smart Jump: {est_str} (осталось окон: {len(remaining_windows)}).")
+
+        while remaining_windows:
+            wave_size = (
+                1
+                if (client._use_browser_fetch or max_workers <= 1)
+                else min(max_workers, len(remaining_windows))
+            )
+            wave = remaining_windows[:wave_size]
+            remaining_windows = remaining_windows[wave_size:]
+
+            if wave_size == 1:
+                w_from, w_to = wave[0]
+                scanned_windows += 1
+                print(
+                    f"[API] Поиск МЛ в периоде {w_from.strftime('%d.%m.%Y')} — {w_to.strftime('%d.%m.%Y')} "
+                    f"(шаг {scanned_windows}/{total_windows_initial})..."
+                )
+                items, days_ok = _fetch_shipments_chunk_detailed(
+                    client, w_from, w_to, base_url=base_url
+                )
+                _ingest_window_results(items, days_ok)
+                total_wave_items = len(items)
+            else:
+                desc_parts = [f"{w0.strftime('%d.%m')}–{w1.strftime('%d.%m')}" for w0, w1 in wave]
+                print(
+                    f"[API] Параллельный опрос {len(wave)} окон: {', '.join(desc_parts)}..."
+                )
+                total_wave_items = 0
+                with ThreadPoolExecutor(max_workers=wave_size) as pool:
+                    fut_map = {
+                        pool.submit(
+                            _fetch_shipments_chunk_detailed,
+                            client,
+                            w0,
+                            w1,
+                            base_url,
+                        ): (w0, w1)
+                        for w0, w1 in wave
+                    }
+                    for fut in as_completed(fut_map):
+                        scanned_windows += 1
+                        try:
+                            items, days_ok = fut.result()
+                            total_wave_items += len(items)
+                            _ingest_window_results(items, days_ok)
+                        except Exception as w_err:
+                            w0, w1 = fut_map[fut]
+                            logger.warning("[API] Ошибка параллельного окна %s..%s: %s", w0, w1, w_err)
+
+            found_now = sum(1 for t in normalized_targets if _lookup_indexed_shipment(t, index) is not None)
+            print(
+                f"[API] Получено {total_wave_items} рейсов за волну; найдено искомых МЛ: {found_now}/{len(normalized_targets)}."
+            )
+            if found_now == len(normalized_targets):
+                break
+
+            if remaining_windows and anchors:
+                missing_now = [t for t in normalized_targets if _lookup_indexed_shipment(t, index) is None]
+                est_dates = _estimate_target_dates(missing_now, anchors, start_d, end_d)
+                remaining_windows = _prioritize_windows(remaining_windows, est_dates)
+
+        return _build_result_map()
+    finally:
+        if owns_client:
+            client.close()
 
 
 def fetch_shipments_api_by_interval(
@@ -1979,8 +2898,8 @@ def recover_after_error(
 
 
 def export_thermographs(
-    driver: WebDriver,
-    wait: WebDriverWait,
+    driver: WebDriver | None,
+    wait: WebDriverWait | None,
     ml_numbers: list[str],
     config: Config,
     date_filter: tuple[datetime.date, datetime.date] | None = None,
@@ -1991,6 +2910,10 @@ def export_thermographs(
     Использует прямой каскадный поиск через REST API Advantum (без ввода дат
     и работы с UI-таблицей), прямой сбор данных датчиков и единую сессию PDF-печати.
 
+    Если driver=None (фоновые воркеры портала), использует общий потокобезопасный
+    AdvantumTokenManager и лениво запускает headless-браузер только при реальной
+    необходимости (fallback).
+
     on_progress: опциональный callback(idx, total, ml_number, result_or_none)
     """
     results: list[ExportResult] = []
@@ -1998,121 +2921,175 @@ def export_thermographs(
     api_shipments: dict[str, dict[str, Any]] = {}
     api_client: _AdvantumApiClient | None = None
     ui_ready = False
+    owned_ui_driver: WebDriver | None = None
+    active_driver: WebDriver | None = driver
+    active_wait: WebDriverWait | None = wait
 
-    # 1. Извлекаем Bearer-токен из авторизованного браузера и останавливаем тяжелые фоновые запросы SPA
-    try:
-        token = get_advantum_bearer_token(driver)
+    # 1. Получаем Bearer-токен: либо из переданного браузера, либо из общего AdvantumTokenManager
+    if driver is not None:
         try:
-            driver.get("https://atms.advantum.ru/pre-load.js")
-        except Exception:
-            pass
-    except Exception as e:
-        logger.warning("[API] Не удалось извлечь токен из браузера: %s. Переход в UI-режим.", e)
-
-    # 2. Каскадный поиск всех запрошенных МЛ через REST API Advantum (без необходимости ввода дат)
-    if token:
-        api_client = _AdvantumApiClient(token=token, driver=driver)
-        print("[API] Поиск маршрутных листов через нативный REST API Advantum...")
-        try:
-            api_shipments = find_shipments_by_ml_api(
-                token=token,
-                ml_numbers=ml_numbers,
-                date_filter=date_filter,
-                driver=driver,
-                api_client=api_client,
-            )
-            print(f"[API] Поиск завершен: найдено {len(api_shipments)}/{len(ml_numbers)} МЛ.")
+            token = get_advantum_bearer_token(driver)
+            ADVANTUM_TOKEN_MANAGER.set_token(token)
+            try:
+                driver.get("https://atms.advantum.ru/pre-load.js")
+            except Exception:
+                pass
         except Exception as e:
-            logger.warning("[API] Ошибка каскадного поиска МЛ: %s", e)
+            logger.warning("[API] Не удалось извлечь токен из браузера: %s. Переход в UI-режим.", e)
+    else:
+        token = ADVANTUM_TOKEN_MANAGER.get_token(config)
 
-    # 3. Пакетная обработка и генерация PDF в рамках единой сессии PdfPrinterSession
-    with PdfPrinterSession(config) as printer:
-        for idx, ml in enumerate(ml_numbers, 1):
-            print(f"\n{'='*50}\nМЛ ({idx}/{len(ml_numbers)}): {ml}\n{'='*50}")
-            if on_progress:
-                try:
-                    on_progress(idx, len(ml_numbers), ml, None)
-                except Exception:
-                    pass
+    try:
+        # 2. Каскадный поиск всех запрошенных МЛ через REST API Advantum (кэш + Smart Jump + параллельные чанки)
+        if token:
+            api_client = _AdvantumApiClient(
+                token=token,
+                driver=driver,
+                config=config,
+                token_manager=ADVANTUM_TOKEN_MANAGER,
+            )
+            print("[API] Поиск маршрутных листов через нативный REST API Advantum...")
+            try:
+                api_shipments = find_shipments_by_ml_api(
+                    token=token,
+                    ml_numbers=ml_numbers,
+                    date_filter=date_filter,
+                    driver=driver,
+                    api_client=api_client,
+                )
+                print(f"[API] Поиск завершен: найдено {len(api_shipments)}/{len(ml_numbers)} МЛ.")
+            except Exception as e:
+                logger.warning("[API] Ошибка каскадного поиска МЛ: %s", e)
 
-            norm_ml = normalize_ml_number(ml)
-            shipment_info = api_shipments.get(norm_ml)
-            result: ExportResult | None = None
+        def _ensure_ui_session() -> tuple[WebDriver, WebDriverWait]:
+            nonlocal active_driver, active_wait, owned_ui_driver, ui_ready
+            if active_driver is None:
+                from browser import create_driver, login_to_advantum
 
-            if token:
-                if not shipment_info:
-                    print(f"[API] Рейс {ml} не найден в системе Advantum.")
-                    result = ExportResult(
-                        ml_number=ml,
-                        success=False,
-                        filepath="",
-                        error="Рейс не найден в системе Advantum",
-                    )
-                elif shipment_info.get("hasTelematicEquipment") is False:
-                    print(
-                        f"[API] У автомобиля {shipment_info.get('vehicleGosNum', '')} нет телематики (датчиков). Пропуск."
-                    )
-                    result = ExportResult(
-                        ml_number=ml,
-                        success=False,
-                        filepath="",
-                        error="Телематическое оборудование (датчики) отсутствует",
-                        driver_name=shipment_info.get("driverFio", ""),
-                        tc_number=shipment_info.get("vehicleGosNum", ""),
-                    )
-                else:
+                owned_ui_driver = create_driver(config, headless=True)
+                active_driver = owned_ui_driver
+                active_wait = login_to_advantum(active_driver, config)
+            elif active_wait is None:
+                active_wait = WebDriverWait(active_driver, getattr(config, "default_timeout", 20))
+            if not ui_ready:
+                ensure_table_view(active_driver, active_wait, config, date_filter=date_filter)
+                ui_ready = True
+            return active_driver, active_wait
+
+        # 3. Пакетная обработка и генерация PDF в рамках единой сессии PdfPrinterSession (ленивый запуск)
+        with PdfPrinterSession(config, lazy=True) as printer:
+            for idx, ml in enumerate(ml_numbers, 1):
+                print(f"\n{'='*50}\nМЛ ({idx}/{len(ml_numbers)}): {ml}\n{'='*50}")
+                if on_progress:
                     try:
-                        result = export_single_ml_via_api(
-                            token=token,
-                            ml_number=ml,
-                            shipment_info=shipment_info,
-                            config=config,
-                            printer=printer,
-                            driver=driver,
-                            api_client=api_client,
+                        on_progress(idx, len(ml_numbers), ml, None)
+                    except Exception:
+                        pass
+
+                norm_ml = normalize_ml_number(ml)
+                shipment_info = api_shipments.get(norm_ml)
+                result: ExportResult | None = None
+
+                # Защита от устаревшего кэша по флагу телематики: уточняем карточку вживую
+                if (
+                    shipment_info
+                    and shipment_info.get("hasTelematicEquipment") is False
+                    and shipment_info.get("_from_cache")
+                    and api_client is not None
+                ):
+                    sid = shipment_info.get("id")
+                    if sid:
+                        ok_live, _, live_item, _, _ = api_client.get_json(
+                            f"/api/v1/shipments/{sid}", timeout=15
                         )
-                    except ValueError as ve:
-                        # Нет показаний датчиков или пустой график — UI здесь также пуст
-                        print(f"[API] {ml}: {ve}")
+                        if ok_live and isinstance(live_item, dict) and live_item.get("id"):
+                            merged = dict(shipment_info)
+                            merged.update(live_item)
+                            merged.pop("_from_cache", None)
+                            shipment_info = merged
+                            _SHIPMENTS_CACHE.upsert_shipments([merged])
+
+                if token:
+                    if not shipment_info:
+                        print(f"[API] Рейс {ml} не найден в системе Advantum.")
                         result = ExportResult(
                             ml_number=ml,
                             success=False,
                             filepath="",
-                            error=str(ve),
-                            driver_name=shipment_info.get("driverFio", "") if shipment_info else "",
-                            tc_number=shipment_info.get("vehicleGosNum", "") if shipment_info else "",
+                            error="Рейс не найден в системе Advantum",
                         )
-                    except Exception as api_err:
-                        logger.warning(
-                            "[API] Прямая генерация графика для %s не удалась (%s). Пробуем UI fallback...",
-                            ml,
-                            api_err,
+                    elif shipment_info.get("hasTelematicEquipment") is False:
+                        print(
+                            f"[API] У автомобиля {shipment_info.get('vehicleGosNum', '')} нет телематики (датчиков). Пропуск."
                         )
+                        result = ExportResult(
+                            ml_number=ml,
+                            success=False,
+                            filepath="",
+                            error="Телематическое оборудование (датчики) отсутствует",
+                            driver_name=shipment_info.get("driverFio", ""),
+                            tc_number=shipment_info.get("vehicleGosNum", ""),
+                        )
+                    else:
+                        try:
+                            cur_token = api_client._current_token() if api_client else token
+                            result = export_single_ml_via_api(
+                                token=cur_token,
+                                ml_number=ml,
+                                shipment_info=shipment_info,
+                                config=config,
+                                printer=printer,
+                                driver=active_driver,
+                                api_client=api_client,
+                            )
+                        except ValueError as ve:
+                            # Нет показаний датчиков или пустой график — UI здесь также пуст
+                            print(f"[API] {ml}: {ve}")
+                            result = ExportResult(
+                                ml_number=ml,
+                                success=False,
+                                filepath="",
+                                error=str(ve),
+                                driver_name=shipment_info.get("driverFio", "") if shipment_info else "",
+                                tc_number=shipment_info.get("vehicleGosNum", "") if shipment_info else "",
+                            )
+                        except Exception as api_err:
+                            logger.warning(
+                                "[API] Прямая генерация графика для %s не удалась (%s). Пробуем UI fallback...",
+                                ml,
+                                api_err,
+                            )
 
-            # Fallback через UI-таблицу только если прямой API путь не дал результата из-за сбоя или отсутствия токена
-            if result is None:
-                if not ui_ready:
-                    ensure_table_view(driver, wait, config, date_filter=date_filter)
-                    ui_ready = True
-                result = export_single_ml(
-                    driver,
-                    wait,
-                    ml,
-                    config,
-                    date_filter=date_filter,
-                    printer=printer,
-                    shipment_info=shipment_info,
-                )
-                if not result.success and "Не найден" not in result.error:
-                    recover_after_error(driver, wait, config, date_filter=date_filter)
+                # Fallback через UI-таблицу только если прямой API путь не дал результата из-за сбоя или отсутствия токена
+                if result is None:
+                    ui_drv, ui_w = _ensure_ui_session()
+                    result = export_single_ml(
+                        ui_drv,
+                        ui_w,
+                        ml,
+                        config,
+                        date_filter=date_filter,
+                        printer=printer,
+                        shipment_info=shipment_info,
+                    )
+                    if not result.success and "Не найден" not in result.error:
+                        recover_after_error(ui_drv, ui_w, config, date_filter=date_filter)
 
-            results.append(result)
+                results.append(result)
 
-            if on_progress:
-                try:
-                    on_progress(idx, len(ml_numbers), ml, result)
-                except Exception:
-                    pass
+                if on_progress:
+                    try:
+                        on_progress(idx, len(ml_numbers), ml, result)
+                    except Exception:
+                        pass
+    finally:
+        if api_client is not None:
+            api_client.close()
+        if owned_ui_driver is not None:
+            try:
+                owned_ui_driver.quit()
+            except Exception:
+                pass
 
     # 3. Итоговый отчёт
     success_count = sum(1 for r in results if r.success)

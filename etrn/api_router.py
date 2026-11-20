@@ -12,6 +12,7 @@ api_router.py — FastAPI Router для интеграции отчетов ЭТ
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import os
 import threading
@@ -32,9 +33,10 @@ except ImportError:
 router = APIRouter(prefix="/api/etrn", tags=["ЭТРН"])
 service = EtrnService()
 
-# Потокобезопасное хранилище задач
+# Потокобезопасное хранилище задач и блокировка монопольной 1С
 _TASKS_LOCK = threading.Lock()
 _TASKS_STORE: Dict[str, Dict[str, Any]] = {}
+_ETRN_1C_LOCK = threading.Lock()
 
 ETRN_EMAIL_TO = "ab.smirnov@puls.ru; e.sokovnin@puls.ru; n.rozhkov@puls.ru"
 ETRN_EMAIL_CC = "e.myalkin@puls.ru"
@@ -84,8 +86,9 @@ async def process_files(
         model_bytes = await model_file.read()
         percent_bytes = await percent_file.read()
 
-        # Генерация отчета
-        report_bytes = service.build_report_from_sources(
+        # Генерация отчета в пуле потоков без блокировки event loop
+        report_bytes = await asyncio.to_thread(
+            service.build_report_from_sources,
             etrn_source=etrn_bytes,
             model_source=model_bytes,
             percent_source=percent_bytes,
@@ -125,8 +128,17 @@ async def process_files(
         os.makedirs(out_dir, exist_ok=True)
         out_filepath = os.path.join(out_dir, out_filename)
 
-        with open(out_filepath, "wb") as f:
-            f.write(report_bytes)
+        tmp_filepath = os.path.join(out_dir, f".{out_filename}.{task_id[:8]}.tmp")
+        try:
+            with open(tmp_filepath, "wb") as f:
+                f.write(report_bytes)
+            os.replace(tmp_filepath, out_filepath)
+        finally:
+            if os.path.exists(tmp_filepath):
+                try:
+                    os.remove(tmp_filepath)
+                except Exception:
+                    pass
 
         with _TASKS_LOCK:
             _TASKS_STORE[task_id] = {
@@ -173,14 +185,24 @@ async def process_files(
 # 2. Фоновая автовыгрузка из 1С и сборка отчета
 # =============================================================================
 def _run_background_etrn_task(task_id: str, d_from: datetime, d_to: datetime, date_label: str) -> None:
-    """Воркер фонового потока для выгрузки из 1С."""
+    """Воркер фонового потока для выгрузки из 1С (монопольная блокировка _ETRN_1C_LOCK)."""
     def progress_callback(pct: int, msg: str) -> None:
         with _TASKS_LOCK:
             if task_id in _TASKS_STORE:
                 _TASKS_STORE[task_id]["progress"] = pct
                 _TASKS_STORE[task_id]["message"] = msg
 
+    lock_acquired = _ETRN_1C_LOCK.acquire(blocking=False)
     try:
+        if not lock_acquired:
+            with _TASKS_LOCK:
+                if task_id in _TASKS_STORE:
+                    _TASKS_STORE[task_id]["message"] = (
+                        "Ожидание освобождения 1С (выполняется другой отчёт)..."
+                    )
+            _ETRN_1C_LOCK.acquire()
+            lock_acquired = True
+
         result = service.generate_full_report(
             date_from=d_from,
             date_to=d_to,
@@ -205,6 +227,9 @@ def _run_background_etrn_task(task_id: str, d_from: datetime, d_to: datetime, da
                 "message": f"Ошибка формирования: {str(e)}",
                 "failed_at": datetime.now().isoformat(),
             })
+    finally:
+        if lock_acquired:
+            _ETRN_1C_LOCK.release()
 
 
 @router.post(
