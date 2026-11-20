@@ -34,7 +34,7 @@ import webbrowser
 import zipfile
 from typing import Any, Optional
 
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -73,7 +73,7 @@ except ImportError:
 
 # ─── Настройка FastAPI и CORS ─────────────────────────────────────────────────
 
-PORTAL_VERSION = "1.8"
+PORTAL_VERSION = "1.9"
 app = FastAPI(title="ПУЛЬС — Транспортная логистика", version=f"v{PORTAL_VERSION}")
 
 ALLOWED_ORIGIN_REGEX = (
@@ -802,17 +802,36 @@ def get_storage_info(request: Request):
 
 
 @app.post("/api/upload")
-async def upload_file(request: Request, file: UploadFile = File(...)):
+async def upload_file(
+    request: Request,
+    file: UploadFile = File(...),
+    start_date: Optional[str] = Form(None),
+    end_date: Optional[str] = Form(None),
+):
     check_auth(request, required_section="opt_schedules")
     try:
         temp_dir = tempfile.gettempdir()
-        safe_name = os.path.basename(file.filename or "plan.xlsm")
+        safe_name = os.path.basename(file.filename or "plan.xlsx")
         temp_path = os.path.join(temp_dir, safe_name)
         with open(temp_path, "wb") as f:
             shutil.copyfileobj(file.file, f)
 
         base_name = os.path.splitext(safe_name)[0]
         schedules_dir = get_schedules_dir()
+
+        # Парсим пользовательский диапазон дат, если передан с веб-интерфейса
+        start_dt = None
+        end_dt = None
+        if start_date and start_date.strip():
+            try:
+                start_dt = datetime.datetime.strptime(start_date.strip(), "%Y-%m-%d")
+            except Exception:
+                start_dt = None
+        if end_date and end_date.strip():
+            try:
+                end_dt = datetime.datetime.strptime(end_date.strip(), "%Y-%m-%d")
+            except Exception:
+                end_dt = None
 
         is_edited_schedule = False
         all_trips = []
@@ -832,54 +851,48 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
             core.refresh_schedule_file_summary(target_path)
             all_trips = core.parse_final_schedule_file(target_path)
         else:
-            plan_trips, start_date = core.parse_plan_file(temp_path)
-            end_date = start_date + datetime.timedelta(days=6)
-            date_range_str = f"{start_date.strftime('%d.%m')} - {end_date.strftime('%d.%m.%Y')}"
+            plan_trips, parsed_start_date, tpl_trips = core.parse_plan_file_with_3pl(
+                temp_path, start_date_override=start_dt
+            )
+            final_start = start_dt or parsed_start_date
+            final_end = (
+                end_dt
+                if (end_dt and end_dt >= final_start)
+                else (final_start + datetime.timedelta(days=6))
+            )
+            date_range_str = f"{final_start.strftime('%d.%m')} - {final_end.strftime('%d.%m.%Y')}"
 
             clean_name = base_name.replace(" (готовый)", "")
             out_filename = f"{clean_name} ({date_range_str}).xlsx"
             target_path = os.path.join(schedules_dir, out_filename)
 
             try:
-                all_trips = core.build_schedule_from_plan(plan_trips, start_date, target_path)
+                all_trips = core.build_schedule_from_plan(
+                    plan_trips, final_start, target_path, tpl_trips=tpl_trips, end_date=final_end
+                )
             except PermissionError:
                 out_filename = f"{clean_name} ({date_range_str})_{int(time.time())}.xlsx"
                 target_path = os.path.join(schedules_dir, out_filename)
-                all_trips = core.build_schedule_from_plan(plan_trips, start_date, target_path)
+                all_trips = core.build_schedule_from_plan(
+                    plan_trips, final_start, target_path, tpl_trips=tpl_trips, end_date=final_end
+                )
 
         carrier_counts = Counter([t["carrier"] for t in all_trips if t.get("carrier")])
         dates = [t["date"] for t in all_trips]
         week_range = f"{dates[0]} - {dates[-1]}" if dates else ""
 
-        total_cost = sum(t.get("tariff", 0) for t in all_trips)
-        total_cost_str = f"{total_cost:,}".replace(",", " ") + " ₽"
-
-        carrier_costs: dict[str, int] = defaultdict(int)
-        for t in all_trips:
-            car = t.get("carrier")
-            if car:
-                carrier_costs[car] += t.get("tariff", 0)
-
         carriers_list = [
-            {
-                "name": k,
-                "count": v,
-                "cost": carrier_costs[k],
-                "cost_str": f"{carrier_costs[k]:,}".replace(",", " ") + " ₽",
-            }
+            {"name": k, "count": v}
             for k, v in carrier_counts.most_common()
         ]
 
-        no_tariff_path = core.get_no_tariffs_copy_path(target_path)
-        no_tariff_filename = os.path.basename(no_tariff_path) if no_tariff_path else ""
         manual_trips_count = sum(1 for t in all_trips if t.get("is_manual"))
-        free_trips_list = [t for t in all_trips if str(t.get("carrier", "")).strip() == "?"]
+        tpl_trips_count = sum(1 for t in all_trips if t.get("is_3pl"))
+        free_trips_count = sum(1 for t in all_trips if str(t.get("carrier", "")).strip() == "?")
 
         CURRENT_STATE["all_trips"] = all_trips
         CURRENT_STATE["week_range"] = week_range
         CURRENT_STATE["total_trips"] = len(all_trips)
-        CURRENT_STATE["total_cost"] = total_cost
-        CURRENT_STATE["total_cost_str"] = total_cost_str
         CURRENT_STATE["carriers"] = carriers_list
         CURRENT_STATE["last_output_path"] = target_path
         CURRENT_STATE["last_output_filename"] = out_filename
@@ -888,12 +901,11 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
             "status": "success",
             "week_range": week_range,
             "total_trips": len(all_trips),
-            "total_cost": total_cost_str,
             "carriers": carriers_list,
             "filename": out_filename,
-            "no_tariff_filename": no_tariff_filename,
             "manual_trips": manual_trips_count,
-            "free_trips_count": len(free_trips_list),
+            "tpl_trips": tpl_trips_count,
+            "free_trips_count": free_trips_count,
             "is_edited": is_edited_schedule,
         }
     except Exception as e:
@@ -968,35 +980,18 @@ def select_file(req: SelectFileRequest, request: Request):
         dates = [t["date"] for t in trips]
         week_range = f"{dates[0]} - {dates[-1]}" if dates else ""
 
-        total_cost = sum(t.get("tariff", 0) for t in trips)
-        total_cost_str = f"{total_cost:,}".replace(",", " ") + " ₽"
-
-        carrier_costs: dict[str, int] = defaultdict(int)
-        for t in trips:
-            car = t.get("carrier")
-            if car:
-                carrier_costs[car] += t.get("tariff", 0)
-
         carriers_list = [
-            {
-                "name": k,
-                "count": v,
-                "cost": carrier_costs[k],
-                "cost_str": f"{carrier_costs[k]:,}".replace(",", " ") + " ₽",
-            }
+            {"name": k, "count": v}
             for k, v in carrier_counts.most_common()
         ]
 
-        no_tariff_path = core.get_no_tariffs_copy_path(target_path)
-        no_tariff_filename = os.path.basename(no_tariff_path) if no_tariff_path else ""
         manual_trips_count = sum(1 for t in trips if t.get("is_manual"))
-        free_trips_list = [t for t in trips if str(t.get("carrier", "")).strip() == "?"]
+        tpl_trips_count = sum(1 for t in trips if t.get("is_3pl"))
+        free_trips_count = sum(1 for t in trips if str(t.get("carrier", "")).strip() == "?")
 
         CURRENT_STATE["all_trips"] = trips
         CURRENT_STATE["week_range"] = week_range
         CURRENT_STATE["total_trips"] = len(trips)
-        CURRENT_STATE["total_cost"] = total_cost
-        CURRENT_STATE["total_cost_str"] = total_cost_str
         CURRENT_STATE["carriers"] = carriers_list
         CURRENT_STATE["last_output_path"] = target_path
         CURRENT_STATE["last_output_filename"] = safe_name
@@ -1004,12 +999,11 @@ def select_file(req: SelectFileRequest, request: Request):
         return {
             "status": "success",
             "filename": safe_name,
-            "no_tariff_filename": no_tariff_filename,
             "manual_trips": manual_trips_count,
-            "free_trips_count": len(free_trips_list),
+            "tpl_trips": tpl_trips_count,
+            "free_trips_count": free_trips_count,
             "week_range": week_range,
             "total_trips": len(trips),
-            "total_cost": total_cost_str,
             "carriers": carriers_list,
         }
     except Exception as e:

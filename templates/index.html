@@ -781,7 +781,7 @@
             <p>Единый корпоративный портал автоматизации транспортной логистики ФК «ПУЛЬС» (РЦ Черная Грязь)</p>
           </div>
           <span class="badge" id="portal-version-badge">
-            <span class="badge-dot"></span> Версия 1.8
+            <span class="badge-dot"></span> Версия 1.9
           </span>
         </div>
 
@@ -829,13 +829,24 @@
         </div>
 
         <div class="card">
-            <div class="card-title">📁 1. Загрузите файл плана отгрузок (.xlsm / .xlsx)</div>
+            <div class="card-title">📁 1. Загрузите файл плана отгрузок (.xlsx / .xlsm)</div>
             <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
               <div class="dropzone-icon">📥</div>
-              <div class="dropzone-text" id="dropzoneText">Нажмите или перетащите сюда файл плана (.xlsm)</div>
-              <div class="dropzone-subtext">Поддерживается базовый файл плана 'График_отгрузки_филиалов.xlsm'</div>
+              <div class="dropzone-text" id="dropzoneText">Нажмите или перетащите сюда файл плана (.xlsx / .xlsm)</div>
+              <div class="dropzone-subtext">Поддерживается новый формат 'График отгрузки филиалов неделя_финальная версия!.xlsx' (лист «График») и прежний формат .xlsm</div>
             </div>
             <input type="file" id="fileInput" accept=".xlsm,.xlsx" style="display:none" onchange="handleFileSelected(event)">
+
+            <div style="display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; margin-top: 14px; background: #f8fafc; border: 1px solid var(--border-light); border-radius: 8px; padding: 12px 14px;">
+              <div style="flex: 1; min-width: 170px;">
+                <label for="scheduleStartDate" class="form-label" style="margin-bottom: 4px; font-size: 12px;">📅 Дата начала периода (С):</label>
+                <input type="date" id="scheduleStartDate" class="form-control" onchange="onScheduleStartDateChange()">
+              </div>
+              <div style="flex: 1; min-width: 170px;">
+                <label for="scheduleEndDate" class="form-label" style="margin-bottom: 4px; font-size: 12px;">📅 Дата окончания периода (По):</label>
+                <input type="date" id="scheduleEndDate" class="form-control">
+              </div>
+            </div>
 
             <div class="path-badge" id="schedulesPathBadge">
               <span>📁 Папка сохранения:</span> <b id="schedulesPathText">Загрузка...</b>
@@ -867,8 +878,8 @@
                 <div class="stat-value" id="statCarriers">-</div>
               </div>
               <div class="stat-box">
-                <div class="stat-label">Бюджет недели</div>
-                <div class="stat-value" id="statCost" style="color: #15803d;">-</div>
+                <div class="stat-label">Рейсов 3PL</div>
+                <div class="stat-value" id="stat3pl" style="color: #dc2626;">0</div>
               </div>
             </div>
 
@@ -878,7 +889,6 @@
                   <div style="font-size: 14px; font-weight: 700; color: #166534;">📁 Активный файл недели</div>
                   <div style="font-size: 12px; color: #1e293b; margin-top: 3px;" id="schedulesActiveFolderLabel"></div>
                   <div style="font-size: 13px; font-weight: 600; color: var(--primary); margin-top: 4px;" id="currentFileLabel">Файл: -</div>
-                  <div style="font-size: 12px; font-weight: 600; color: #15803d; margin-top: 2px;" id="currentNoTariffFileLabel">Копия без тарифов: -</div>
                 </div>
                 <div style="display:flex; gap: 8px; flex-wrap: wrap;">
                   <button class="btn btn-primary" id="directReloadBtn" onclick="reloadCurrentActiveFile()" style="display:none;">
@@ -2175,6 +2185,44 @@
       } catch (e) {}
     }
 
+    function formatDateYMD(dt) {
+      const y = dt.getFullYear();
+      const m = String(dt.getMonth() + 1).padStart(2, '0');
+      const d = String(dt.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+
+    function initScheduleDatePickers() {
+      const startInput = document.getElementById('scheduleStartDate');
+      const endInput = document.getElementById('scheduleEndDate');
+      if (!startInput || !endInput) return;
+
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const day = today.getDay(); // 0=Вс, 1=Пн..6=Сб
+      const diffToMonday = day === 1 ? 0 : (day === 0 ? 1 : (8 - day));
+      const monday = new Date(today);
+      monday.setDate(today.getDate() + diffToMonday);
+      const sunday = new Date(monday);
+      sunday.setDate(monday.getDate() + 6);
+
+      startInput.value = formatDateYMD(monday);
+      endInput.value = formatDateYMD(sunday);
+    }
+
+    function onScheduleStartDateChange() {
+      const startInput = document.getElementById('scheduleStartDate');
+      const endInput = document.getElementById('scheduleEndDate');
+      if (!startInput || !endInput || !startInput.value) return;
+      const parts = startInput.value.split('-');
+      if (parts.length !== 3) return;
+      const d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+      d.setDate(d.getDate() + 6);
+      endInput.value = formatDateYMD(d);
+    }
+
+    initScheduleDatePickers();
+
     function updateScheduleUIWithData(data) {
       document.getElementById('statWeek').innerText = data.week_range;
       document.getElementById('statTotal').innerText = data.total_trips + ' машин';
@@ -2183,12 +2231,9 @@
       const freeTripsCount = data.free_trips_count !== undefined ? data.free_trips_count : (freeCarrierObj ? freeCarrierObj.count : 0);
 
       document.getElementById('statCarriers').innerText = regularCarriers.length;
-      document.getElementById('statCost').innerText = data.total_cost || '-';
+      const stat3plEl = document.getElementById('stat3pl');
+      if (stat3plEl) stat3plEl.innerText = (data.tpl_trips || 0) + ' машин';
       document.getElementById('currentFileLabel').innerText = 'Файл: ' + data.filename;
-      const noTarLabel = document.getElementById('currentNoTariffFileLabel');
-      if (noTarLabel && data.no_tariff_filename) {
-        noTarLabel.innerText = 'Копия без тарифов: ' + data.no_tariff_filename;
-      }
       currentLoadedFilename = data.filename;
 
       availableCarriers = regularCarriers;
@@ -2197,13 +2242,12 @@
       const select = document.getElementById('carrierSelect');
       select.innerHTML = '';
 
-      data.carriers.forEach(c => {
+      (data.carriers || []).forEach(c => {
         if (c.name === '?') {
           container.innerHTML += `<div class="carrier-tag" style="background:#fff7ed;border-color:#fdba74;color:#9a3412;">❓ Свободные рейсы («?») <span style="color:#c2410c;">${c.count} рейсов • без перевозчика</span></div>`;
         } else {
-          const costStr = c.cost_str ? ` • ${c.cost_str}` : '';
-          container.innerHTML += `<div class="carrier-tag">${c.name} <span>${c.count} рейсов${costStr}</span></div>`;
-          select.innerHTML += `<option value="${c.name}">${c.name} (${c.count} рейсов${costStr})</option>`;
+          container.innerHTML += `<div class="carrier-tag">${c.name} <span>${c.count} рейсов</span></div>`;
+          select.innerHTML += `<option value="${c.name}">${c.name} (${c.count} рейсов)</option>`;
         }
       });
 
@@ -2246,8 +2290,9 @@
         if (data.status === 'success') {
           updateScheduleUIWithData(data);
           const notice = document.getElementById('reloadNotice');
-          const manualInfo = data.manual_trips > 0 ? ` Выделено цветом новых ручных рейсов: ${data.manual_trips} шт.` : '';
-          notice.innerText = `✅ График '${currentLoadedFilename}' и его копия без тарифов успешно пересобраны!${manualInfo}`;
+          const manualInfo = data.manual_trips > 0 ? ` Новых ручных рейсов: ${data.manual_trips} шт.` : '';
+          const tplInfo = data.tpl_trips > 0 ? ` 3PL рейсов: ${data.tpl_trips} шт.` : '';
+          notice.innerText = `✅ График '${currentLoadedFilename}' успешно пересобран!${tplInfo}${manualInfo}`;
           notice.style.display = 'block';
         } else {
           alert('Ошибка обновления графика: ' + data.message);
@@ -2288,6 +2333,10 @@
 
       const formData = new FormData();
       formData.append('file', selectedFile);
+      const startDateVal = document.getElementById('scheduleStartDate')?.value;
+      const endDateVal = document.getElementById('scheduleEndDate')?.value;
+      if (startDateVal) formData.append('start_date', startDateVal);
+      if (endDateVal) formData.append('end_date', endDateVal);
 
       try {
         const resp = await fetch('/api/upload', {
@@ -2387,8 +2436,9 @@
         if (data.status === 'success') {
           updateScheduleUIWithData(data);
           const notice = document.getElementById('reloadNotice');
-          const manualInfo = data.manual_trips > 0 ? ` Выделено цветом новых ручных рейсов: ${data.manual_trips} шт.` : '';
-          notice.innerText = `✅ График '${filename}' и его копия без тарифов успешно пересобраны!${manualInfo}`;
+          const manualInfo = data.manual_trips > 0 ? ` Новых ручных рейсов: ${data.manual_trips} шт.` : '';
+          const tplInfo = data.tpl_trips > 0 ? ` 3PL рейсов: ${data.tpl_trips} шт.` : '';
+          notice.innerText = `✅ График '${filename}' успешно пересобран!${tplInfo}${manualInfo}`;
           notice.style.display = 'block';
           closeFileSelectModal();
         } else {

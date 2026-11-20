@@ -102,51 +102,62 @@ def load_city_sequence(base_dir=None):
         print(f"Ошибка загрузки последовательности направлений из {filepath}: {e}")
         return list(DEFAULT_MASTER_CITY_ORDER)
 
-def get_ordered_cities(cities, base_dir=None):
-    """Сортирует список городов строго по эталонной последовательности направлений"""
-    master_seq = load_city_sequence(base_dir)
-    
+def get_ordered_cities(cities, base_dir=None, d_name=None):
+    """Сортирует список городов строго по эталонной последовательности направлений (с учетом пятничного исключения для Брянска)"""
+    master_seq = list(load_city_sequence(base_dir))
+
     def norm_c(name):
         n = str(name).strip().lower()
         if 'санкт' in n or 'спб' in n:
             return 'санкт-петербург'
         return n
-        
+
+    # Исключение для пятницы: Брянск грузится всегда сразу после Ярославля
+    if d_name == 'Пт':
+        bryansk_items = [c for c in master_seq if norm_c(c) == 'брянск']
+        other_items = [c for c in master_seq if norm_c(c) != 'брянск']
+        if not bryansk_items:
+            bryansk_items = ['Брянск']
+        yar_idx = next((i for i, c in enumerate(other_items) if norm_c(c) == 'ярославль'), -1)
+        insert_pos = yar_idx + 1 if yar_idx >= 0 else 0
+        master_seq = other_items[:insert_pos] + bryansk_items + other_items[insert_pos:]
+
     master_map = {norm_c(c): idx for idx, c in enumerate(master_seq)}
-    
+
     def sort_key(city_item):
         c_norm = norm_c(city_item)
         for m_name, idx in master_map.items():
             if m_name == c_norm or m_name in c_norm or c_norm in m_name:
                 return (0, idx)
         return (1, str(city_item))
-        
+
     return sorted(cities, key=sort_key)
 
 START_HOURS = {
-    'Пн': 9, 'Вт': 9, 'Ср': 9, 'Чт': 9, 'Пт': 9, 'Сб': 9,
+    'Пн': 9, 'Вт': 9, 'Ср': 9, 'Чт': 9, 'Пт': 9, 'Сб': 5,
     'Вс': 8.5
 }
 
 def get_trip_time(d_name, city=None, truck_num=1, trip_index_in_day=0):
     """
     Рассчитывает согласованное время погрузки строго по правилу: 2 машины в час.
-    В воскресенье ('Вс') начало отгрузки строго в 08:30:00.
-    Для остальных дней (Пн-Сб) отгрузка начинается строго в 09:00:00.
-    
+    - Суббота ('Сб'): начало отгрузки строго с 05:00:00
+    - Воскресенье ('Вс'): начало отгрузки строго с 08:30:00
+    - Понедельник–Пятница (Пн-Пт): начало отгрузки строго с 09:00:00
+
     Каждые 2 машины занимают одно часовое окно:
-      Машины 1 и 2 (индексы 0 и 1) -> 08:30 (Вс) / 09:00 (Пн-Сб)
-      Машины 3 и 4 (индексы 2 и 3) -> 09:30 (Вс) / 10:00 (Пн-Сб)
-      Машины 5 и 6 (индексы 4 и 5) -> 10:30 (Вс) / 11:00 (Пн-Сб)
-      Машины 7 и 8 (индексы 6 и 7) -> 11:30 (Вс) / 12:00 (Пн-Сб)
+      Машины 1 и 2 (индексы 0 и 1) -> 05:00 (Сб) / 08:30 (Вс) / 09:00 (Пн-Пт)
+      Машины 3 и 4 (индексы 2 и 3) -> 06:00 (Сб) / 09:30 (Вс) / 10:00 (Пн-Пт)
       и т.д.
     """
     slot_offset_hours = trip_index_in_day // 2
-    if d_name == 'Вс':
+    if d_name == 'Сб':
+        start_min = 5 * 60       # 05:00:00
+    elif d_name == 'Вс':
         start_min = 8 * 60 + 30  # 08:30:00
     else:
         start_min = 9 * 60       # 09:00:00
-        
+
     total_min = start_min + slot_offset_hours * 60
     h = (total_min // 60) % 24
     m = total_min % 60
@@ -377,19 +388,31 @@ def load_tariffs_matrix(base_dir=None):
         }
     return tariffs
 
-def plan_weekly_carrier_assignments(plan_trips, tariffs):
+def plan_weekly_carrier_assignments(plan_trips, tariffs, base_dir=None):
     """
     Распределяет перевозчиков и тарифы по рейсам согласно официальным правилам
-    из файла 'Исключения для алгоритма распределения транспорта.docx':
+    из файла 'Исключения для алгоритма распределения транспорта.docx'.
 
-    Иерархия приоритетов:
-    1. Направление -> 2. Количество машин -> 3. Номер машины -> 4. Фиксированный перевозчик
-    -> 5. Доступность ТС -> 6. Исключение/отказ -> 7. Резервный перевозчик -> 8. Экономическая оптимизация.
-    Фиксированные правила имеют наивысший приоритет над оптимизацией по тарифу.
+    Приоритет применения правил:
+    1. Направление -> 2. Количество ТС -> 3. Порядковый номер машины -> 4. Фиксированный перевозчик
+    -> 5. Дневные и недельные ограничения -> 6. Доступность ТС / отказ -> 7. Резерв
+    -> 8. Недельный баланс по направлению -> 9. Экономическая оптимизация тарифа.
     """
     assigned = {}
     carrier_counts = defaultdict(int)
     city_carrier_counts = defaultdict(lambda: defaultdict(int))
+
+    # Спец-ограничения и счетчики по направлениям
+    ekb_nordline_used = False
+    spb_nordline_day = defaultdict(int)
+    spb_karavan_day = defaultdict(int)
+    spb_karavan_week = 0
+
+    avangard_day = (
+        'Сб' if plan_trips.get('Сб', {}).get('Хабаровск', 0) > 0
+        else ('Пт' if plan_trips.get('Пт', {}).get('Хабаровск', 0) > 0 else None)
+    )
+    khabarovsk_week_idx = 0
 
     def assign_trip(d_name, city, tr_i, carrier):
         key = (d_name, city, tr_i)
@@ -400,21 +423,21 @@ def plan_weekly_carrier_assignments(plan_trips, tariffs):
         carrier_counts[carrier] += 1
         city_carrier_counts[city][carrier] += 1
 
-    def pick_balanced(city, allowed):
-        # Балансировка: приоритет перевозчику с наименьшим накопленным количеством рейсов за неделю
+    def pick_city_balanced(city, allowed):
+        # Балансировка по конкретному направлению за текущую неделю, при равенстве — минимальный тариф
         sorted_cars = sorted(
             allowed,
             key=lambda c: (
-                carrier_counts[c],
                 city_carrier_counts[city][c],
-                tariffs.get(city, {}).get(c, 9999999)
+                tariffs.get(city, {}).get(c, 9999999),
+                carrier_counts[c]
             )
         )
         return sorted_cars[0]
 
     def pick_cheapest(city, allowed=None, exclude=None):
         c_tar = tariffs.get(city, {})
-        candidates = allowed if allowed else list(c_tar.keys())
+        candidates = list(allowed) if allowed else list(c_tar.keys())
         if exclude:
             candidates = [c for c in candidates if c not in exclude]
         if not candidates:
@@ -423,6 +446,7 @@ def plan_weekly_carrier_assignments(plan_trips, tariffs):
             candidates,
             key=lambda c: (
                 c_tar.get(c, 9999999),
+                city_carrier_counts[city][c],
                 carrier_counts[c]
             )
         )
@@ -431,14 +455,14 @@ def plan_weekly_carrier_assignments(plan_trips, tariffs):
     # Обрабатываем дни недели последовательно (Пн -> Вс)
     for d_name, d_short, offset in DAYS_MAPPING:
         d_plan = plan_trips.get(d_name, {})
-        city_order = get_ordered_cities(d_plan.keys())
+        city_order = get_ordered_cities(d_plan.keys(), base_dir, d_name=d_name)
 
         for city in city_order:
             cnt = d_plan.get(city, 0)
             for tr_i in range(1, cnt + 1):
 
                 # 2. ЯРОСЛАВЛЬ
-                # 1-я машина: чередование по дням (Пн/Ср/Пт - Мельник, Вт/Чт - Коршунов)
+                # 1-я машина: чередование по дням (Пн/Ср/Пт/Вс - Мельник, Вт/Чт/Сб - Коршунов)
                 # 2-я и последующие - всегда ИП Гусманов
                 if city == 'Ярославль':
                     if tr_i == 1:
@@ -447,7 +471,7 @@ def plan_weekly_carrier_assignments(plan_trips, tariffs):
                         carrier = 'ИП Гусманов'
 
                 # 3. БРЯНСК
-                # 1-я машина — Норд Лайн, 2-я машина — Сияние ТК, 3-я+ — по рентабельному тарифу
+                # 1-я — НОРДЛАЙН, 2-я — ТК Сияние, 3-я+ — по стандартному алгоритму (рентабельный тариф)
                 elif city == 'Брянск':
                     if tr_i == 1:
                         carrier = 'НОРДЛАЙН'
@@ -457,47 +481,44 @@ def plan_weekly_carrier_assignments(plan_trips, tariffs):
                         carrier = pick_cheapest(city, exclude={'НОРДЛАЙН', 'ТК Сияние'})
 
                 # 4. КАЗАНЬ
-                # 1-я машина — Сияние ТК; 2-я+ между Норд Лайн, АО Национальный, ООО Агро-Авто
+                # 1-я — ТК Сияние; 2-я+ между НОРДЛАЙН, АО Национальный, Буш-Авто
                 elif city == 'Казань':
                     if tr_i == 1:
                         carrier = 'ТК Сияние'
                     else:
-                        carrier = pick_balanced(city, ['НОРДЛАЙН', 'АО Национальный', 'Агро-Авто'])
+                        carrier = pick_city_balanced(city, ['НОРДЛАЙН', 'АО Национальный', 'Буш-Авто'])
 
                 # 5. УФА
-                # 1-я машина — Сияние ТК; 2-я+ — АО Национальный и/или ООО Агро-Авто
+                # 1-я — ТК Сияние; 2-я+ между АО Национальный, Агро-Авто, Буш-Авто
                 elif city == 'Уфа':
                     if tr_i == 1:
                         carrier = 'ТК Сияние'
                     else:
-                        carrier = pick_balanced(city, ['АО Национальный', 'Агро-Авто'])
+                        carrier = pick_city_balanced(city, ['АО Национальный', 'Агро-Авто', 'Буш-Авто'])
 
                 # 6. ВОРОНЕЖ
-                # Направление Воронеж — ТОЛЬКО Сияние ТК. Другие перевозчики не назначаются.
+                # Направление Воронеж — ТОЛЬКО ТК Сияние
                 elif city == 'Воронеж':
                     carrier = 'ТК Сияние'
 
                 # 7. РОСТОВ-НА-ДОНУ
-                # Основной перевозчик — Сияние ТК. Резервные: АО Национальный -> Агро-Авто -> Буш-Авто
+                # Основной перевозчик — ТК Сияние
                 elif city == 'Ростов-на-Дону':
                     carrier = 'ТК Сияние'
 
                 # 8. КРАСНОДАР
-                # 1-я: Сияние ТК, 2-я: АО Национальный, 3-я: ООО Буш-Автопром, 4-я: ООО Агро-Авто
+                # 1-я: ТК Сияние, 2-я: Буш-Авто, 3-я: Агро-Авто (циклично)
                 elif city == 'Краснодар':
-                    kras_seq = ['ТК Сияние', 'АО Национальный', 'Буш-Авто', 'Агро-Авто']
-                    if tr_i <= len(kras_seq):
-                        carrier = kras_seq[tr_i - 1]
-                    else:
-                        carrier = kras_seq[(tr_i - 1) % len(kras_seq)]
+                    kras_seq = ['ТК Сияние', 'Буш-Авто', 'Агро-Авто']
+                    carrier = kras_seq[(tr_i - 1) % len(kras_seq)]
 
                 # 9. ВОЛГОГРАД
-                # Направление Волгоград — ТОЛЬКО Сияние ТК.
+                # Направление Волгоград — ТОЛЬКО ТК Сияние
                 elif city == 'Волгоград':
                     carrier = 'ТК Сияние'
 
                 # 10. САМАРА
-                # 1-я машина — Сияние ТК, 2-я и последующие — преимущественно АО Национальный перевозчик
+                # 1-я — ТК Сияние, 2-я+ — АО Национальный
                 elif city == 'Самара':
                     if tr_i == 1:
                         carrier = 'ТК Сияние'
@@ -505,45 +526,71 @@ def plan_weekly_carrier_assignments(plan_trips, tariffs):
                         carrier = 'АО Национальный'
 
                 # 11. ЕКАТЕРИНБУРГ
-                # 1-я: Сияние ТК, 2-я: АО Национальный, 3-я и последующие — по рентабельному тарифу
+                # 1-я: ТК Сияние, 2-я: АО Национальный, 3-я+ по рентабельному тарифу;
+                # Исключение: НОРДЛАЙН не более 1 ТС в неделю и только в Чт или Пт
                 elif city == 'Екатеринбург':
                     if tr_i == 1:
                         carrier = 'ТК Сияние'
                     elif tr_i == 2:
                         carrier = 'АО Национальный'
                     else:
-                        carrier = pick_cheapest(city, exclude={'ТК Сияние', 'АО Национальный'})
+                        excl = {'ТК Сияние', 'АО Национальный'}
+                        if d_name not in ('Чт', 'Пт') or ekb_nordline_used:
+                            excl.add('НОРДЛАЙН')
+                        carrier = pick_cheapest(city, exclude=excl)
+                        if carrier == 'НОРДЛАЙН':
+                            ekb_nordline_used = True
 
                 # 12. НОВОСИБИРСК
-                # Допустимые: ЕманТрансАвто, Виллайн, ВЕБ ЛОГИСТИКА. Равномерный баланс за неделю.
+                # 1-я: ТК Сияние, 2-я: АО Национальный, 3-я+ равномерно между всеми 4-мя:
+                # ЕманТрансАвто, Виллайн, АО Национальный, ТК Сияние (с учетом 1-й и 2-й в балансе)
                 elif city == 'Новосибирск':
-                    carrier = pick_balanced(city, ['ЕманТрансАвто', 'Виллайн', 'Веб-Логистика'])
+                    if tr_i == 1:
+                        carrier = 'ТК Сияние'
+                    elif tr_i == 2:
+                        carrier = 'АО Национальный'
+                    else:
+                        carrier = pick_city_balanced(city, ['ЕманТрансАвто', 'Виллайн', 'АО Национальный', 'ТК Сияние'])
 
                 # 13. КРАСНОЯРСК
-                # Допустимые: ЕманТрансАвто, Виллайн, ВЕБ ЛОГИСТИКА. Равномерный баланс за неделю.
+                # Равномерный недельный баланс между ЕманТрансАвто и Виллайн
                 elif city == 'Красноярск':
-                    carrier = pick_balanced(city, ['ЕманТрансАвто', 'Виллайн', 'Веб-Логистика'])
+                    carrier = pick_city_balanced(city, ['ЕманТрансАвто', 'Виллайн'])
 
                 # 14. ИРКУТСК
-                # Допустимые: Азимут ТК, ЕманТрансАвто. Равномерный баланс за неделю.
+                # Равномерный недельный баланс между Азимут и ЕманТрансАвто
                 elif city == 'Иркутск':
-                    carrier = pick_balanced(city, ['Азимут', 'ЕманТрансАвто'])
+                    carrier = pick_city_balanced(city, ['Азимут', 'ЕманТрансАвто'])
 
                 # 15. ХАБАРОВСК
-                # 1-я и 2-я машины — Азимут ТК; 3-я и последующие — Авангард
+                # 1-я и 2-я недели — Азимут; 3-я+ — Авангард только в Сб (если Сб нет, то в Пт)
                 elif city == 'Хабаровск':
-                    if tr_i in (1, 2):
-                        carrier = 'Азимут'
-                    else:
+                    khabarovsk_week_idx += 1
+                    if khabarovsk_week_idx >= 3 and d_name == avangard_day:
                         carrier = 'Авангард'
+                    else:
+                        carrier = 'Азимут'
 
                 # 16. САНКТ-ПЕТЕРБУРГ
-                # 1-я машина — Сияние ТК; 2-я и последующие — Норд Лайн / АО Национальный
+                # 1-я — ТК Сияние; 2-я+ — НОРДЛАЙН (<= 1/день) и Караван (<= 1/день и <= 3/нед)
                 elif city == 'Санкт-Петербург':
                     if tr_i == 1:
                         carrier = 'ТК Сияние'
                     else:
-                        carrier = pick_balanced(city, ['НОРДЛАЙН', 'АО Национальный'])
+                        allowed_spb = []
+                        if spb_nordline_day[d_name] < 1:
+                            allowed_spb.append('НОРДЛАЙН')
+                        if spb_karavan_day[d_name] < 1 and spb_karavan_week < 3:
+                            allowed_spb.append('Караван')
+                        if allowed_spb:
+                            carrier = pick_cheapest(city, allowed=allowed_spb)
+                        else:
+                            carrier = pick_cheapest(city, exclude={'ТК Сияние', 'НОРДЛАЙН', 'Караван'})
+                        if carrier == 'НОРДЛАЙН':
+                            spb_nordline_day[d_name] += 1
+                        elif carrier == 'Караван':
+                            spb_karavan_day[d_name] += 1
+                            spb_karavan_week += 1
 
                 # Прочие направления по умолчанию
                 else:
@@ -567,37 +614,160 @@ def find_default_plan_file(base_dir):
             return c
     return None
 
-def parse_plan_file(plan_path):
+def _get_default_nearest_monday():
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    if today.weekday() == 0:
+        return today
+    return today + timedelta(days=(7 - today.weekday()))
+
+
+def _norm_plan_city_name(city_raw):
+    c = str(city_raw or '').strip()
+    c_clean = c.upper().replace(' ', '')
+    if c_clean in ('СПБ', 'САНКТ-ПЕТЕРБУРГ', 'САНКТПЕТЕРБУРГ'):
+        return 'Санкт-Петербург'
+    if c_clean == 'УФА':
+        return 'Уфа'
+    return c
+
+
+def parse_plan_file_with_3pl(plan_path, start_date_override=None):
+    """
+    Читает файл плана отгрузок (поддерживает новый лист 'График' с двумя таблицами
+    'Коммерческая отгрузка' и 'Коммерческая отгрузка + 3PL', а также старый формат .xlsm).
+    Возвращает: (plan_trips, start_date, tpl_trips)
+    """
     wb = openpyxl.load_workbook(plan_path, data_only=True)
+
+    # Определяем дату начала недели
+    start_date = start_date_override
+    if start_date is None:
+        sheet_a1 = str(wb[wb.sheetnames[0]]['A1'].value or '') if wb.sheetnames else ''
+        fname = os.path.basename(plan_path)
+        for text in (sheet_a1, fname):
+            m = re.search(r'(\d{1,2}\.\d{2})\s*-\s*(\d{1,2}\.\d{2})', text)
+            if m:
+                start_d_str = m.group(1)
+                cur_year = datetime.now().year
+                try:
+                    start_date = datetime.strptime(f"{start_d_str}.{cur_year}", "%d.%m.%Y")
+                    break
+                except Exception:
+                    pass
+    if start_date is None:
+        start_date = _get_default_nearest_monday()
+
+    days_cols = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
+    days_lower = [d.lower() for d in days_cols]
+
+    # Ищем лист "График"
+    grafik_sheet = None
+    for s in wb.sheetnames:
+        if s.strip().lower() == 'график':
+            grafik_sheet = wb[s]
+            break
+
+    plan_trips = defaultdict(lambda: defaultdict(int))
+    tpl_trips = defaultdict(lambda: defaultdict(int))
+
+    if grafik_sheet is not None:
+        ws = grafik_sheet
+        comm_trips = defaultdict(lambda: defaultdict(int))
+        total_trips = defaultdict(lambda: defaultdict(int))
+        tables_found = 0
+        has_total_table = False
+
+        max_r = min(ws.max_row + 1, 200)
+        for r in range(1, max_r):
+            # Ищем заголовок таблицы: 'РК' в колонках 1..5 и Пн..Вс в следующих 7 колонках
+            rk_col = None
+            for col_c in range(1, 6):
+                v = str(ws.cell(r, col_c).value or '').strip().lower()
+                if v == 'рк':
+                    next7 = [str(ws.cell(r, col_c + 1 + i).value or '').strip().lower() for i in range(7)]
+                    if next7 == days_lower:
+                        rk_col = col_c
+                        break
+            if rk_col is None:
+                continue
+
+            # Проверяем заголовок на 1..3 строки выше
+            is_3pl_table = False
+            for up in range(1, 4):
+                if r - up < 1:
+                    break
+                for col_c in range(1, 12):
+                    hv = str(ws.cell(r - up, col_c).value or '').strip().lower()
+                    if '3pl' in hv:
+                        is_3pl_table = True
+                        break
+                if is_3pl_table:
+                    break
+
+            if not is_3pl_table and tables_found >= 1:
+                # На случай если у 2-й таблицы заголовок отличается, вторая таблица по умолчанию суммарная (+3PL)
+                is_3pl_table = True
+
+            tables_found += 1
+            target_dict = total_trips if is_3pl_table else comm_trips
+            if is_3pl_table:
+                has_total_table = True
+
+            for rr in range(r + 1, max_r):
+                city_raw = ws.cell(rr, rk_col).value
+                if not city_raw or not str(city_raw).strip():
+                    break
+                city_s = str(city_raw).strip()
+                if city_s.lower() in ('итого', 'всего'):
+                    break
+                city_clean = _norm_plan_city_name(city_s)
+                for i, d_name in enumerate(days_cols):
+                    val = ws.cell(rr, rk_col + 1 + i).value
+                    try:
+                        cnt_int = int(float(val)) if val is not None and str(val).strip() != '' else 0
+                    except Exception:
+                        cnt_int = 0
+                    if cnt_int > 0:
+                        target_dict[d_name][city_clean] = cnt_int
+
+        if tables_found > 0:
+            if has_total_table:
+                all_days = set(comm_trips.keys()) | set(total_trips.keys())
+                for d_name in all_days:
+                    all_cities = set(comm_trips[d_name].keys()) | set(total_trips[d_name].keys())
+                    for city_clean in all_cities:
+                        c_cnt = comm_trips[d_name].get(city_clean, 0)
+                        t_cnt = total_trips[d_name].get(city_clean, 0)
+                        tot = max(c_cnt, t_cnt)
+                        diff_3pl = max(0, t_cnt - c_cnt)
+                        if tot > 0:
+                            plan_trips[d_name][city_clean] = tot
+                        if diff_3pl > 0:
+                            tpl_trips[d_name][city_clean] = diff_3pl
+            else:
+                for d_name, c_map in comm_trips.items():
+                    for city_clean, c_cnt in c_map.items():
+                        if c_cnt > 0:
+                            plan_trips[d_name][city_clean] = c_cnt
+
+            wb.close()
+            return plan_trips, start_date, tpl_trips
+
+    # Старый формат (.xlsm или первый лист с датой в имени)
     sheet_name = wb.sheetnames[0]
     for s in wb.sheetnames:
         if '.' in s and '-' in s:
             sheet_name = s
             break
     ws = wb[sheet_name]
-    
-    header_val = str(ws['A1'].value or '')
-    match = re.search(r'(\d{1,2}\.\d{2})\s*-\s*(\d{1,2}\.\d{2})', header_val)
-    if match:
-        start_d_str = match.group(1)
-        cur_year = datetime.now().year
-        try:
-            start_date = datetime.strptime(f"{start_d_str}.{cur_year}", "%d.%m.%Y")
-        except Exception:
-            start_date = datetime(2026, 9, 28)
-    else:
-        start_date = datetime(2026, 9, 28)
-        
-    days_cols = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
-    plan_trips = defaultdict(lambda: defaultdict(int))
-    
-    for r in range(2, ws.max_row+1):
+
+    for r in range(2, ws.max_row + 1):
         city = ws.cell(r, 1).value
         if not city or not str(city).strip() or str(city).strip().lower() in ['итого', 'всего']:
             continue
-        city_clean = str(city).strip()
+        city_clean = _norm_plan_city_name(city)
         for col_idx in range(2, 9):
-            d_name = days_cols[col_idx-2]
+            d_name = days_cols[col_idx - 2]
             cnt = ws.cell(r, col_idx).value or 0
             try:
                 cnt_int = int(cnt)
@@ -605,15 +775,50 @@ def parse_plan_file(plan_path):
                 cnt_int = 0
             if cnt_int > 0:
                 plan_trips[d_name][city_clean] = cnt_int
-                
+
     wb.close()
+    return plan_trips, start_date, tpl_trips
+
+
+def parse_plan_file(plan_path):
+    """Обратная совместимость: возвращает (plan_trips, start_date)"""
+    plan_trips, start_date, _ = parse_plan_file_with_3pl(plan_path)
     return plan_trips, start_date
 
-MANUAL_FILL_COLOR = 'FFF2CC'  # Мягкий желтый цвет для рейсов, добавленных сотрудником вручную
+
+TPL_FILL_COLOR = 'FF6B6B'      # Насыщенный читаемый красный цвет для рейсов 3PL
+MANUAL_FILL_COLOR = 'FFF2CC'   # Мягкий желтый цвет для рейсов, добавленных сотрудником вручную
+PALLETS_40_FILL_COLOR = 'E2EFDA'  # Светло-зеленый цвет для рейсов на 40 паллет
+
+
+def is_cell_3pl_fill(cell):
+    """Проверяет, выделена ли ячейка красным цветом рейса 3PL"""
+    if not cell or not cell.fill or not cell.fill.fill_type or cell.fill.fill_type == 'none':
+        return False
+    sc = cell.fill.start_color
+    if not sc or sc.type != 'rgb':
+        return False
+    rgb = str(sc.rgb or '').upper()
+    if len(rgb) < 6:
+        return False
+    hex6 = rgb[-6:]
+    if hex6 == TPL_FILL_COLOR:
+        return True
+    try:
+        r_v = int(hex6[0:2], 16)
+        g_v = int(hex6[2:4], 16)
+        b_v = int(hex6[4:6], 16)
+        if r_v >= 180 and g_v <= 135 and b_v <= 135 and (r_v - g_v) >= 60:
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def is_cell_manual_fill(cell):
-    """Проверяет, выделена ли ячейка цветом ручного добавления (или пользовательским маркером в Excel)"""
+    """Проверяет, выделена ли ячейка цветом ручного добавления (исключая красный 3PL и зеленый 40 паллет)"""
+    if is_cell_3pl_fill(cell):
+        return False
     if not cell or not cell.fill or not cell.fill.fill_type or cell.fill.fill_type == 'none':
         return False
     sc = cell.fill.start_color
@@ -624,8 +829,8 @@ def is_cell_manual_fill(cell):
         if not rgb:
             return False
         hex6 = rgb[-6:] if len(rgb) >= 6 else rgb
-        # Игнорируем прозрачный/белый и стандартный зеленый цвет 40 паллет (E2EFDA)
-        if hex6 in ('000000', 'FFFFFF', 'E2EFDA'):
+        # Игнорируем прозрачный/белый, стандартный зеленый цвет 40 паллет (E2EFDA) и красный 3PL (FF6B6B)
+        if hex6 in ('000000', 'FFFFFF', PALLETS_40_FILL_COLOR, TPL_FILL_COLOR):
             return False
         return True
     elif sc.type in ('theme', 'indexed'):
@@ -813,9 +1018,9 @@ def parse_final_schedule_file(excel_path):
     """
     Считывает готовый график отгрузок (Недельные графики.xlsx), 
     в который сотрудник мог внести ручные правки в Excel 
-    (добавил/удалил машины, изменил время, перевозчика или тариф).
+    (добавил/удалил машины, изменил время или перевозчика).
     Поддерживает:
-    - Чистый формат (начинается со столбца Месяц в A: A..I)
+    - Чистый формат (начинается со столбца Месяц в A: A..I, опционально с тарифом в J)
     - Прежний формат со смещением (C..K)
     - Старый легаси формат
     """
@@ -830,10 +1035,13 @@ def parse_final_schedule_file(excel_path):
 
         if 'месяц' in h_a:
             fmt = 'starts_a'
+            has_tariff_j = 'тариф' in str(ws['J1'].value or '').strip().lower()
         elif 'месяц' in h_c or 'время' in h_e:
             fmt = 'starts_c'
+            has_tariff_j = False
         elif 'дата' in h_c:
             fmt = 'legacy'
+            has_tariff_j = False
         else:
             continue
             
@@ -848,7 +1056,7 @@ def parse_final_schedule_file(excel_path):
                 carrier_val = ws[f'G{row}'].value
                 pallets = ws[f'H{row}'].value or 33
                 deliv_val = ws[f'I{row}'].value
-                tariff_val = ws[f'J{row}'].value
+                tariff_val = ws[f'J{row}'].value if has_tariff_j else None
                 check_cell = ws[f'E{row}']
             elif fmt == 'starts_c':
                 month_val = ws[f'C{row}'].value or ''
@@ -937,6 +1145,7 @@ def parse_final_schedule_file(excel_path):
                 'time': time_str,
                 'delivery_dt': delivery_dt,
                 'delivery_str': delivery_str,
+                'is_3pl': is_cell_3pl_fill(check_cell),
                 'is_manual': is_cell_manual_fill(check_cell)
             })
             
@@ -944,13 +1153,15 @@ def parse_final_schedule_file(excel_path):
     return all_trips
 
 
-def build_schedule_from_plan(plan_trips, start_date, output_path):
+def build_schedule_from_plan(plan_trips, start_date, output_path, tpl_trips=None, end_date=None):
     wb_out = openpyxl.Workbook()
     wb_out.remove(wb_out.active)
-    
-    tariffs = load_tariffs_matrix(os.path.dirname(output_path))
-    weekly_assignments = plan_weekly_carrier_assignments(plan_trips, tariffs)
-    
+
+    base_dir = os.path.dirname(output_path)
+    tariffs = load_tariffs_matrix(base_dir)
+    weekly_assignments = plan_weekly_carrier_assignments(plan_trips, tariffs, base_dir=base_dir)
+    tpl_trips = tpl_trips or {}
+
     font_header = Font(name='Arial', size=10, bold=True)
     font_regular = Font(name='Arial', size=10)
     font_bold_center = Font(name='Times New Roman', size=11, bold=True)
@@ -979,19 +1190,33 @@ def build_schedule_from_plan(plan_trips, start_date, output_path):
         top=Side(style='thin', color='000000'),
         bottom=Side(style='double', color='000000')
     )
-    fill_40p = PatternFill(start_color='E2EFDA', end_color='E2EFDA', fill_type='solid')
+    fill_40p = PatternFill(start_color=PALLETS_40_FILL_COLOR, end_color=PALLETS_40_FILL_COLOR, fill_type='solid')
+    fill_3pl = PatternFill(start_color=TPL_FILL_COLOR, end_color=TPL_FILL_COLOR, fill_type='solid')
 
-    # Чистая структура: график начинается сразу со столбца Месяц (A), без столбцов A и B
+    # Чистая структура без тарифов: данные в A..I, разделитель J, сводная в K..M
     col_widths = {
         'A': 13, 'B': 12, 'C': 15, 'D': 6, 'E': 22, 'F': 15,
-        'G': 26, 'H': 14, 'I': 18, 'J': 16, 'K': 5, 'L': 22, 'M': 10, 'N': 10
+        'G': 26, 'H': 14, 'I': 18, 'J': 5, 'K': 22, 'L': 10, 'M': 10
     }
+
+    if end_date is not None and end_date >= start_date:
+        total_days = (end_date - start_date).days + 1
+        days_iter = [
+            (DAYS_MAPPING[(start_date + timedelta(days=offset)).weekday()][0],
+             DAYS_MAPPING[(start_date + timedelta(days=offset)).weekday()][1],
+             start_date + timedelta(days=offset))
+            for offset in range(total_days)
+        ]
+    else:
+        days_iter = [
+            (d_name, d_short, start_date + timedelta(days=offset))
+            for d_name, d_short, offset in DAYS_MAPPING
+        ]
 
     all_scheduled_trips = []
     sheets_baseline = {}
 
-    for d_name, d_short, offset in DAYS_MAPPING:
-        cur_date = start_date + timedelta(days=offset)
+    for d_name, d_short, cur_date in days_iter:
         d_str = cur_date.strftime('%d.%m.%Y')
         d_month = RUSSIAN_MONTHS[cur_date.month]
         sheet_title = f"{cur_date.strftime('%d.%m')} {d_name}"
@@ -1006,7 +1231,7 @@ def build_schedule_from_plan(plan_trips, start_date, output_path):
         headers = {
             'A': 'Месяц', 'B': 'Дата', 'C': 'Время погрузки', 'D': '',
             'E': 'Направление', 'F': 'Номер Машины', 'G': 'Перевозчик',
-            'H': 'Кол-во паллет ', 'I': 'Дата доставки', 'J': 'Тариф'
+            'H': 'Кол-во паллет ', 'I': 'Дата доставки'
         }
         for col_l, h_text in headers.items():
             cell = ws[f'{col_l}1']
@@ -1016,22 +1241,25 @@ def build_schedule_from_plan(plan_trips, start_date, output_path):
             cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
 
         day_plan = plan_trips.get(d_name, {})
-        city_order = get_ordered_cities(day_plan.keys(), os.path.dirname(output_path))
+        city_order = get_ordered_cities(day_plan.keys(), base_dir, d_name=d_name)
         
         ordered_trips = []
         city_truck_counters = Counter()
         for city in city_order:
             count = day_plan.get(city, 0)
+            tpl_cnt = min(count, tpl_trips.get(d_name, {}).get(city, 0))
+            comm_cnt = count - tpl_cnt
             for _ in range(count):
                 city_truck_counters[city] += 1
                 tr_num = city_truck_counters[city]
+                is_3pl_trip = (tr_num > comm_cnt)
                 carrier, tariff = weekly_assignments.get((d_name, city, tr_num), ('ТК Сияние', 0))
                 
-                # Точное распределение паллет
-                if city == 'Ярославль':
+                # Точное распределение паллет: Хабаровск всегда 40 паллет
+                if city == 'Хабаровск':
+                    pal = 40
+                elif city == 'Ярославль':
                     pal = 40 if (tr_num == 1 or (d_name == 'Вт' and tr_num == 2)) else 33
-                elif city == 'Хабаровск':
-                    pal = 40 if (d_name == 'Чт' and tr_num == 1) else 33
                 else:
                     pal = 33
                     
@@ -1052,13 +1280,14 @@ def build_schedule_from_plan(plan_trips, start_date, output_path):
                     'time': time_str,
                     'delivery_dt': deliv_dt,
                     'delivery_str': deliv_str,
+                    'is_3pl': is_3pl_trip,
                     'is_manual': False
                 }
                 ordered_trips.append(tr_data)
                 all_scheduled_trips.append(tr_data)
 
         sheets_baseline[sheet_title] = [
-            {'city': tr['city'], 'truck_num': tr['truck_num'], 'carrier': tr['carrier']}
+            {'city': tr['city'], 'truck_num': tr['truck_num'], 'carrier': tr['carrier'], 'is_3pl': tr.get('is_3pl', False)}
             for tr in ordered_trips
         ]
 
@@ -1118,15 +1347,14 @@ def build_schedule_from_plan(plan_trips, start_date, output_path):
             c_i.alignment = Alignment(horizontal='center', vertical='center')
             c_i.border = border_thin
             
-            c_j = ws[f'J{row_idx}']
-            c_j.value = tr.get('tariff', 0)
-            c_j.font = font_regular
-            c_j.number_format = '#,##0 ₽'
-            c_j.alignment = Alignment(horizontal='right', vertical='center')
-            c_j.border = border_thin
-            
-            if tr['pallets'] == 40:
-                for col_l in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']:
+            # Приоритет цветовой заливки:
+            # 1) 3PL рейс -> красный (FF6B6B)
+            # 2) 40 паллет -> светло-зеленый (E2EFDA)
+            if tr.get('is_3pl'):
+                for col_l in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I']:
+                    ws[f'{col_l}{row_idx}'].fill = fill_3pl
+            elif tr['pallets'] == 40:
+                for col_l in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I']:
                     ws[f'{col_l}{row_idx}'].fill = fill_40p
             
             ws.row_dimensions[row_idx].height = 18.0
@@ -1134,58 +1362,57 @@ def build_schedule_from_plan(plan_trips, start_date, output_path):
 
         last_data_row = row_idx - 1
         if last_data_row >= 2:
-            ws.auto_filter.ref = f'A1:J{last_data_row}'
+            ws.auto_filter.ref = f'A1:I{last_data_row}'
 
         carrier_counts = Counter([t['carrier'] for t in ordered_trips if t.get('carrier')])
         if carrier_counts:
-            ws['L3'] = 'Перевозчик'
+            ws['K3'] = 'Перевозчик'
+            ws['K3'].font = font_header
+            ws['K3'].border = border_summary_header
+            ws['L3'] = 'Рейсы'
             ws['L3'].font = font_header
+            ws['L3'].alignment = Alignment(horizontal='center')
             ws['L3'].border = border_summary_header
-            ws['M3'] = 'Рейсы'
+            ws['M3'] = '%'
             ws['M3'].font = font_header
             ws['M3'].alignment = Alignment(horizontal='center')
             ws['M3'].border = border_summary_header
-            ws['N3'] = '%'
-            ws['N3'].font = font_header
-            ws['N3'].alignment = Alignment(horizontal='center')
-            ws['N3'].border = border_summary_header
             
             s_row = 4
             for car, cnt in carrier_counts.most_common():
-                ws[f'L{s_row}'] = car
+                ws[f'K{s_row}'] = car
+                ws[f'K{s_row}'].font = font_regular
+                ws[f'K{s_row}'].border = border_thin
+                
+                ws[f'L{s_row}'] = f'=COUNTIF(G$2:G${last_data_row}, K{s_row})'
                 ws[f'L{s_row}'].font = font_regular
+                ws[f'L{s_row}'].alignment = Alignment(horizontal='center')
                 ws[f'L{s_row}'].border = border_thin
                 
-                ws[f'M{s_row}'] = f'=COUNTIF(G$2:G${last_data_row}, L{s_row})'
-                ws[f'M{s_row}'].font = font_regular
-                ws[f'M{s_row}'].alignment = Alignment(horizontal='center')
-                ws[f'M{s_row}'].border = border_thin
-                
                 total_target_row = 4 + len(carrier_counts)
-                ws[f'N{s_row}'] = f'=M{s_row}/M{total_target_row}'
-                ws[f'N{s_row}'].font = font_regular
-                ws[f'N{s_row}'].number_format = '0.0%'
-                ws[f'N{s_row}'].alignment = Alignment(horizontal='right')
-                ws[f'N{s_row}'].border = border_thin
+                ws[f'M{s_row}'] = f'=L{s_row}/L{total_target_row}'
+                ws[f'M{s_row}'].font = font_regular
+                ws[f'M{s_row}'].number_format = '0.0%'
+                ws[f'M{s_row}'].alignment = Alignment(horizontal='right')
+                ws[f'M{s_row}'].border = border_thin
                 s_row += 1
                 
-            ws[f'L{s_row}'] = 'Всего'
+            ws[f'K{s_row}'] = 'Всего'
+            ws[f'K{s_row}'].font = font_header
+            ws[f'K{s_row}'].border = border_total
+            
+            ws[f'L{s_row}'] = f'=SUM(L4:L{s_row-1})'
             ws[f'L{s_row}'].font = font_header
+            ws[f'L{s_row}'].alignment = Alignment(horizontal='center')
             ws[f'L{s_row}'].border = border_total
             
-            ws[f'M{s_row}'] = f'=SUM(M4:M{s_row-1})'
+            ws[f'M{s_row}'] = '100%'
             ws[f'M{s_row}'].font = font_header
-            ws[f'M{s_row}'].alignment = Alignment(horizontal='center')
+            ws[f'M{s_row}'].alignment = Alignment(horizontal='right')
             ws[f'M{s_row}'].border = border_total
-            
-            ws[f'N{s_row}'] = '100%'
-            ws[f'N{s_row}'].font = font_header
-            ws[f'N{s_row}'].alignment = Alignment(horizontal='right')
-            ws[f'N{s_row}'].border = border_total
 
     wb_out.save(output_path)
     _save_schedule_baseline(output_path, sheets_baseline)
-    create_schedule_copy_without_tariffs(output_path)
     print(f"Таблица успешно создана: {output_path}")
     return all_scheduled_trips
 
@@ -1248,12 +1475,13 @@ def refresh_schedule_file_summary(excel_path):
         top=Side(style='thin', color='000000'),
         bottom=Side(style='double', color='000000')
     )
-    fill_40p = PatternFill(start_color='E2EFDA', end_color='E2EFDA', fill_type='solid')
+    fill_40p = PatternFill(start_color=PALLETS_40_FILL_COLOR, end_color=PALLETS_40_FILL_COLOR, fill_type='solid')
     fill_manual = PatternFill(start_color=MANUAL_FILL_COLOR, end_color=MANUAL_FILL_COLOR, fill_type='solid')
+    fill_3pl = PatternFill(start_color=TPL_FILL_COLOR, end_color=TPL_FILL_COLOR, fill_type='solid')
 
     col_widths = {
         'A': 13, 'B': 12, 'C': 15, 'D': 6, 'E': 22, 'F': 15,
-        'G': 26, 'H': 14, 'I': 18, 'J': 16, 'K': 5, 'L': 22, 'M': 10, 'N': 10
+        'G': 26, 'H': 14, 'I': 18, 'J': 5, 'K': 22, 'L': 10, 'M': 10
     }
     
     carriers_norm = {
@@ -1306,14 +1534,18 @@ def refresh_schedule_file_summary(excel_path):
 
         if 'месяц' in h_a:
             fmt = 'starts_a'
+            has_tariff_j = 'тариф' in str(ws['J1'].value or '').strip().lower()
         elif 'месяц' in h_c or 'время' in h_e:
             fmt = 'starts_c'
+            has_tariff_j = False
         elif 'дата' in h_c:
             fmt = 'legacy'
+            has_tariff_j = False
         else:
             has_day = any(d[0] in sheet_name for d in DAYS_MAPPING)
             if has_day:
                 fmt = 'starts_a'
+                has_tariff_j = 'тариф' in str(ws['J1'].value or '').strip().lower()
             else:
                 continue
 
@@ -1373,7 +1605,7 @@ def refresh_schedule_file_summary(excel_path):
                 cell_car = ws[f'G{r}']
                 cell_pal = ws[f'H{r}']
                 cell_deliv = ws[f'I{r}']
-                cell_tar = ws[f'J{r}']
+                cell_tar = ws[f'J{r}'] if has_tariff_j else None
                 row_check_cells = [cell_month, cell_date, cell_time, cell_day, cell_city, cell_truck, cell_car, cell_pal, cell_deliv]
             elif fmt == 'starts_c':
                 cell_month = ws[f'C{r}']
@@ -1403,7 +1635,7 @@ def refresh_schedule_file_summary(excel_path):
             c_city = cell_city.value
             c_car = cell_car.value
             c_pal = cell_pal.value
-            c_tar = cell_tar.value
+            c_tar = cell_tar.value if cell_tar is not None else None
 
             if not c_city or not str(c_city).strip():
                 continue
@@ -1418,7 +1650,10 @@ def refresh_schedule_file_summary(excel_path):
             else:
                 car_clean = carriers_norm.get(car_raw_str, car_raw_str) if car_raw_str else 'ТК Сияние'
 
-            # Признак 1: строка уже была выделена цветом (при прошлом обновлении или самим сотрудником)
+            # Признак 3PL: красная заливка сохраняется при пересборке
+            is_3pl_row = any(is_cell_3pl_fill(c) for c in row_check_cells if c is not None)
+
+            # Признак 1: строка уже была выделена желтым (или пользовательским не-красным маркером)
             already_colored = any(is_cell_manual_fill(c) for c in row_check_cells if c is not None)
 
             # Признак 2: отсутствуют автоматически генерируемые поля (Месяц, Дата, Время, День, № Машины, Паллеты, Доставка)
@@ -1493,8 +1728,9 @@ def refresh_schedule_file_summary(excel_path):
                 'orig_index': len(raw_trips),
                 'city': city_clean,
                 'carrier': car_clean,
-                'tariff': tariff_num,
+                'tariff': 0 if car_clean == '?' else tariff_num,
                 'pallets': pallets_num,
+                'is_3pl': is_3pl_row,
                 'is_manual': is_manual_row
             })
 
@@ -1516,22 +1752,35 @@ def refresh_schedule_file_summary(excel_path):
                     to_mark = extra_needed - already_man
                     if to_mark > 0:
                         for t in reversed(c_list):
-                            if not t.get('is_manual') and to_mark > 0:
+                            if not t.get('is_manual') and not t.get('is_3pl') and to_mark > 0:
                                 t['is_manual'] = True
                                 to_mark -= 1
+                        if to_mark > 0:
+                            for t in reversed(c_list):
+                                if not t.get('is_manual') and to_mark > 0:
+                                    t['is_manual'] = True
+                                    t['is_3pl'] = False
+                                    to_mark -= 1
 
-        # 3. Сортируем направления строго по эталонной очередности
-        ordered_cities = get_ordered_cities(list({t['city'] for t in raw_trips}), base_dir)
+        # 3. Сортируем направления строго по эталонной очередности (с учетом пятничного исключения для Брянска)
+        ordered_cities = get_ordered_cities(list({t['city'] for t in raw_trips}), base_dir, d_name=d_name)
         city_to_rank = {c: i for i, c in enumerate(ordered_cities)}
-        sorted_trips = sorted(raw_trips, key=lambda t: (city_to_rank.get(t['city'], 999), 1 if t.get('is_manual') else 0, t['orig_index']))
+        sorted_trips = sorted(
+            raw_trips,
+            key=lambda t: (
+                city_to_rank.get(t['city'], 999),
+                2 if t.get('is_manual') else (1 if t.get('is_3pl') else 0),
+                t['orig_index']
+            )
+        )
 
         # Если baseline для этого файла еще не существовал, фиксируем исходные (не ручные) рейсы
         inferred_baseline[sheet_name] = [
-            {'city': t['city'], 'truck_num': i + 1, 'carrier': t['carrier']}
+            {'city': t['city'], 'truck_num': i + 1, 'carrier': t['carrier'], 'is_3pl': t.get('is_3pl', False)}
             for i, t in enumerate([x for x in sorted_trips if not x.get('is_manual')])
         ]
 
-        # 4. Нумеруем машины (1, 2, 3...), актуализируем паллеты и тарифы
+        # 4. Нумеруем машины (1, 2, 3...), актуализируем паллеты и внутренний тариф
         city_truck_counters = Counter()
         for t in sorted_trips:
             c = t['city']
@@ -1539,16 +1788,16 @@ def refresh_schedule_file_summary(excel_path):
             tr_num = city_truck_counters[c]
             t['truck_num'] = tr_num
 
-            # Паллеты: Ярославль и Хабаровск по регламенту
-            if c == 'Ярославль':
+            # Паллеты: Хабаровск всегда 40 паллет, Ярославль по регламенту
+            if c == 'Хабаровск':
+                t['pallets'] = 40
+            elif c == 'Ярославль':
                 t['pallets'] = 40 if (tr_num == 1 or (d_name == 'Вт' and tr_num == 2)) else 33
-            elif c == 'Хабаровск':
-                t['pallets'] = 40 if (d_name == 'Чт' and tr_num == 1) else 33
             else:
                 if t['pallets'] not in (33, 40):
                     t['pallets'] = 33
 
-            # Тариф: автозаполнение из Тарифы.xlsx (для свободных рейсов '?' тариф = 0)
+            # Внутренний тариф (не выводится в Excel; для свободных рейсов '?' = 0)
             if t['carrier'] == '?':
                 t['tariff'] = 0
             else:
@@ -1557,7 +1806,6 @@ def refresh_schedule_file_summary(excel_path):
                 if t['tariff'] == 0 and calc_tar > 0:
                     t['tariff'] = calc_tar
                 elif calc_tar > 0 and t['tariff'] != calc_tar:
-                    # Если в ячейке остался тариф другого перевозчика по этому городу (сменили перевозчика)
                     if t['tariff'] in known_city_tariffs:
                         t['tariff'] = calc_tar
 
@@ -1569,16 +1817,23 @@ def refresh_schedule_file_summary(excel_path):
             t['delivery_dt'] = deliv_dt
             t['delivery_str'] = deliv_dt.strftime('%d.%m.%Y %H:%M')
 
-        # 6. Полностью очищаем старые данные на листе
+        # 6. Полностью очищаем старые данные на листе (включая старый заголовок тарифа в J1 и сводную в K..P)
         max_clear = max(ws.max_row + 15, len(sorted_trips) + 20, 50)
+        for col_l in ['J', 'K', 'L', 'M', 'N', 'O', 'P']:
+            for r in range(1, max_clear + 1):
+                cell = ws[f'{col_l}{r}']
+                cell.value = None
+                cell.border = None
+                cell.fill = PatternFill(fill_type=None)
+                cell.number_format = 'General'
         for r in range(2, max_clear + 1):
-            for col_l in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P']:
+            for col_l in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I']:
                 cell = ws[f'{col_l}{r}']
                 cell.value = None
                 cell.border = None
                 cell.fill = PatternFill(fill_type=None)
 
-        # 7. Настраиваем заголовки чистого формата A..J
+        # 7. Настраиваем заголовки чистого формата A..I (без колонки Тариф)
         ws.views.sheetView[0].showGridLines = True
         for col_l, w in col_widths.items():
             ws.column_dimensions[col_l].width = w
@@ -1587,7 +1842,7 @@ def refresh_schedule_file_summary(excel_path):
         headers = {
             'A': 'Месяц', 'B': 'Дата', 'C': 'Время погрузки', 'D': '',
             'E': 'Направление', 'F': 'Номер Машины', 'G': 'Перевозчик',
-            'H': 'Кол-во паллет ', 'I': 'Дата доставки', 'J': 'Тариф'
+            'H': 'Кол-во паллет ', 'I': 'Дата доставки'
         }
         for col_l, h_text in headers.items():
             cell = ws[f'{col_l}1']
@@ -1596,7 +1851,7 @@ def refresh_schedule_file_summary(excel_path):
             cell.border = border_header
             cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
 
-        # 8. Записываем пересобранные строки
+        # 8. Записываем пересобранные строки (A..I)
         row_idx = 2
         for tr in sorted_trips:
             c_a = ws[f'A{row_idx}']
@@ -1653,21 +1908,18 @@ def refresh_schedule_file_summary(excel_path):
             c_i.alignment = Alignment(horizontal='center', vertical='center')
             c_i.border = border_thin
 
-            c_j = ws[f'J{row_idx}']
-            c_j.value = tr.get('tariff', 0)
-            c_j.font = font_regular
-            c_j.number_format = '#,##0 ₽'
-            c_j.alignment = Alignment(horizontal='right', vertical='center')
-            c_j.border = border_thin
-
             # Приоритет цветовой заливки:
-            # 1) Новые рейсы, добавленные сотрудником вручную -> желтый (FFF2CC)
-            # 2) Рейсы на 40 паллет -> светло-зеленый (E2EFDA)
-            if tr.get('is_manual'):
-                for col_l in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']:
+            # 1) Рейс 3PL -> красный (FF6B6B)
+            # 2) Новый рейс, добавленный вручную -> желтый (FFF2CC)
+            # 3) Рейс на 40 паллет -> светло-зеленый (E2EFDA)
+            if tr.get('is_3pl'):
+                for col_l in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I']:
+                    ws[f'{col_l}{row_idx}'].fill = fill_3pl
+            elif tr.get('is_manual'):
+                for col_l in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I']:
                     ws[f'{col_l}{row_idx}'].fill = fill_manual
             elif tr['pallets'] == 40:
-                for col_l in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']:
+                for col_l in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I']:
                     ws[f'{col_l}{row_idx}'].fill = fill_40p
 
             ws.row_dimensions[row_idx].height = 18.0
@@ -1675,55 +1927,55 @@ def refresh_schedule_file_summary(excel_path):
 
         last_data_row = row_idx - 1
         if last_data_row >= 2:
-            ws.auto_filter.ref = f'A1:J{last_data_row}'
+            ws.auto_filter.ref = f'A1:I{last_data_row}'
 
-        # 9. Формируем актуальную сводную таблицу по перевозчикам в L..N
+        # 9. Формируем актуальную сводную таблицу по перевозчикам в K..M
         carrier_counts = Counter([t['carrier'] for t in sorted_trips if t.get('carrier')])
         if carrier_counts:
-            ws['L3'] = 'Перевозчик'
+            ws['K3'] = 'Перевозчик'
+            ws['K3'].font = font_header
+            ws['K3'].border = border_summary_header
+            ws['L3'] = 'Рейсы'
             ws['L3'].font = font_header
+            ws['L3'].alignment = Alignment(horizontal='center')
             ws['L3'].border = border_summary_header
-            ws['M3'] = 'Рейсы'
+            ws['M3'] = '%'
             ws['M3'].font = font_header
             ws['M3'].alignment = Alignment(horizontal='center')
             ws['M3'].border = border_summary_header
-            ws['N3'] = '%'
-            ws['N3'].font = font_header
-            ws['N3'].alignment = Alignment(horizontal='center')
-            ws['N3'].border = border_summary_header
 
             s_row = 4
             for car, cnt in carrier_counts.most_common():
-                ws[f'L{s_row}'] = car
+                ws[f'K{s_row}'] = car
+                ws[f'K{s_row}'].font = font_regular
+                ws[f'K{s_row}'].border = border_thin
+
+                ws[f'L{s_row}'] = f'=COUNTIF(G$2:G${last_data_row}, K{s_row})'
                 ws[f'L{s_row}'].font = font_regular
+                ws[f'L{s_row}'].alignment = Alignment(horizontal='center')
                 ws[f'L{s_row}'].border = border_thin
 
-                ws[f'M{s_row}'] = f'=COUNTIF(G$2:G${last_data_row}, L{s_row})'
-                ws[f'M{s_row}'].font = font_regular
-                ws[f'M{s_row}'].alignment = Alignment(horizontal='center')
-                ws[f'M{s_row}'].border = border_thin
-
                 total_target_row = 4 + len(carrier_counts)
-                ws[f'N{s_row}'] = f'=M{s_row}/M{total_target_row}'
-                ws[f'N{s_row}'].font = font_regular
-                ws[f'N{s_row}'].number_format = '0.0%'
-                ws[f'N{s_row}'].alignment = Alignment(horizontal='right')
-                ws[f'N{s_row}'].border = border_thin
+                ws[f'M{s_row}'] = f'=L{s_row}/L{total_target_row}'
+                ws[f'M{s_row}'].font = font_regular
+                ws[f'M{s_row}'].number_format = '0.0%'
+                ws[f'M{s_row}'].alignment = Alignment(horizontal='right')
+                ws[f'M{s_row}'].border = border_thin
                 s_row += 1
 
-            ws[f'L{s_row}'] = 'Всего'
+            ws[f'K{s_row}'] = 'Всего'
+            ws[f'K{s_row}'].font = font_header
+            ws[f'K{s_row}'].border = border_total
+
+            ws[f'L{s_row}'] = f'=SUM(L4:L{s_row-1})'
             ws[f'L{s_row}'].font = font_header
+            ws[f'L{s_row}'].alignment = Alignment(horizontal='center')
             ws[f'L{s_row}'].border = border_total
 
-            ws[f'M{s_row}'] = f'=SUM(M4:M{s_row-1})'
+            ws[f'M{s_row}'] = '100%'
             ws[f'M{s_row}'].font = font_header
-            ws[f'M{s_row}'].alignment = Alignment(horizontal='center')
+            ws[f'M{s_row}'].alignment = Alignment(horizontal='right')
             ws[f'M{s_row}'].border = border_total
-
-            ws[f'N{s_row}'] = '100%'
-            ws[f'N{s_row}'].font = font_header
-            ws[f'N{s_row}'].alignment = Alignment(horizontal='right')
-            ws[f'N{s_row}'].border = border_total
 
         modified = True
 
@@ -1732,7 +1984,6 @@ def refresh_schedule_file_summary(excel_path):
             wb.save(excel_path)
             if not saved_baseline and inferred_baseline:
                 _save_schedule_baseline(excel_path, inferred_baseline)
-            create_schedule_copy_without_tariffs(excel_path)
             print(f"График успешно пересобран и сохранен в: {excel_path}")
         except Exception as e:
             print(f"Ошибка сохранения файла {excel_path}: {e}")
@@ -2029,8 +2280,8 @@ if __name__ == '__main__':
         sys.exit(1)
         
     print(f"Обработка плана отгрузок: {args.plan}")
-    plan_trips, start_date = parse_plan_file(args.plan)
-    all_trips = build_schedule_from_plan(plan_trips, start_date, args.out)
+    plan_trips, start_date, tpl_trips = parse_plan_file_with_3pl(args.plan)
+    all_trips = build_schedule_from_plan(plan_trips, start_date, args.out, tpl_trips=tpl_trips)
     
     # Если указан флаг отправки
     if args.send_outlook or args.draft:
