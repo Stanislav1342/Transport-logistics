@@ -688,6 +688,28 @@
       font-size: 13.5px;
     }
 
+    .alert-info {
+      background-color: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-left: 4px solid var(--primary);
+      border-radius: 8px;
+      padding: 13px 16px;
+      margin-bottom: 18px;
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      color: #1e3a8a;
+      font-size: 13.5px;
+      line-height: 1.45;
+    }
+    .alert-info .alert-icon {
+      flex-shrink: 0;
+      width: 20px;
+      height: 20px;
+      fill: var(--primary);
+      margin-top: 1px;
+    }
+
     .table-responsive, .table-container {
       overflow-x: auto;
       margin-top: 15px;
@@ -948,7 +970,7 @@
             <p>Единый корпоративный портал автоматизации транспортной логистики ФК «ПУЛЬС» (РЦ Черная Грязь)</p>
           </div>
           <span class="badge" id="portal-version-badge">
-            <span class="badge-dot"></span> Версия 1.12
+            <span class="badge-dot"></span> Версия 1.13
           </span>
         </div>
 
@@ -1262,34 +1284,17 @@
 
         <div class="card" id="form-card">
           <div class="card-title">Параметры выгрузки</div>
-          <div class="alert-warning">
-            <strong>Внимание:</strong> Не выбирайте период более <strong>30 дней</strong> — при слишком широком диапазоне система Advantum возвращает ошибку.
-          </div>
-
-          <div class="form-group">
-            <label>Период дат рейсов (включительно):</label>
-            <div class="date-row">
-              <div>
-                <span style="font-size:12px;color:var(--text-muted);">Дата с:</span>
-                <input type="date" id="date-from">
-              </div>
-              <div>
-                <span style="font-size:12px;color:var(--text-muted);">Дата по:</span>
-                <input type="date" id="date-to">
-              </div>
-            </div>
-            <div class="presets">
-              <button type="button" class="btn-chip" onclick="setPreset('today')">Сегодня</button>
-              <button type="button" class="btn-chip" onclick="setPreset('yesterday')">Вчера</button>
-              <button type="button" class="btn-chip" onclick="setPreset('7days')">Последние 7 дней</button>
-              <button type="button" class="btn-chip" onclick="setPreset('14days')">Последние 14 дней</button>
-              <button type="button" class="btn-chip" onclick="setPreset('30days')">Последние 30 дней</button>
-              <button type="button" class="btn-chip" onclick="setPreset('current_month')">Текущий месяц</button>
+          <div class="alert-info">
+            <svg class="alert-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
+            </svg>
+            <div>
+              <strong>Указывать даты больше не нужно:</strong> сервис автоматически находит рейсы в системе Advantum по номерам МЛ через нативный API (в том числе за прошлые недели и месяцы) и формирует PDF-графики напрямую по данным датчиков.
             </div>
           </div>
 
           <div class="form-group">
-            <label>Номера маршрутных листов (МЛ):</label>
+            <label for="ml-input">Номера маршрутных листов (МЛ):</label>
             <textarea id="ml-input" placeholder="Вставьте номера МЛ (колонкой из Excel, через запятую или пробел)..." oninput="updateMlCount()"></textarea>
             <div class="textarea-hint">
               <span>Пример: МСК541192, МСК538028</span>
@@ -1297,7 +1302,7 @@
             </div>
           </div>
 
-          <button id="btn-start" class="btn btn-primary" style="width:100%;padding:13px;" onclick="startExport()">
+          <button type="button" id="btn-start" class="btn btn-primary" style="width:100%;padding:13px;" onclick="startExport()">
             <span>Запустить выгрузку</span>
           </button>
         </div>
@@ -1871,10 +1876,10 @@
     }
 
     window.addEventListener('DOMContentLoaded', () => {
-      setPreset('7days');
       setEtrnPreset('yesterday');
       setEtrnManualPreset('yesterday');
       initIdleTracker();
+      updateMlCount();
 
       const savedLogin = localStorage.getItem('puls_last_login') || '';
       const loginInput = document.getElementById('modal-login-input');
@@ -3090,49 +3095,6 @@
     let activeTaskId = null;
     let pollInterval = null;
 
-    function formatDate(d) {
-      const yyyy = d.getFullYear();
-      const mm = String(d.getMonth() + 1).padStart(2, '0');
-      const dd = String(d.getDate()).padStart(2, '0');
-      return `${yyyy}-${mm}-${dd}`;
-    }
-
-    function setPreset(type) {
-      const today = new Date();
-      const fromInput = document.getElementById('date-from');
-      const toInput = document.getElementById('date-to');
-      if (!fromInput || !toInput) return;
-
-      if (type === 'today') {
-        fromInput.value = formatDate(today);
-        toInput.value = formatDate(today);
-      } else if (type === 'yesterday') {
-        const y = new Date(today);
-        y.setDate(y.getDate() - 1);
-        fromInput.value = formatDate(y);
-        toInput.value = formatDate(y);
-      } else if (type === '7days') {
-        const past = new Date(today);
-        past.setDate(past.getDate() - 7);
-        fromInput.value = formatDate(past);
-        toInput.value = formatDate(today);
-      } else if (type === '14days') {
-        const past = new Date(today);
-        past.setDate(past.getDate() - 14);
-        fromInput.value = formatDate(past);
-        toInput.value = formatDate(today);
-      } else if (type === '30days') {
-        const past = new Date(today);
-        past.setDate(past.getDate() - 30);
-        fromInput.value = formatDate(past);
-        toInput.value = formatDate(today);
-      } else if (type === 'current_month') {
-        const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
-        fromInput.value = formatDate(firstDay);
-        toInput.value = formatDate(today);
-      }
-    }
-
     function parseMls() {
       const raw = document.getElementById('ml-input').value;
       const tokens = raw.split(/[\s,;]+/).map(t => {
@@ -3161,25 +3123,6 @@
         return;
       }
 
-      const dateFrom = document.getElementById('date-from').value;
-      const dateTo = document.getElementById('date-to').value;
-      if (!dateFrom || !dateTo) {
-        alert('Пожалуйста, укажите период дат');
-        return;
-      }
-
-      const d1 = new Date(dateFrom);
-      const d2 = new Date(dateTo);
-      const diffDays = Math.round((d2 - d1) / (1000 * 60 * 60 * 24));
-      if (diffDays < 0) {
-        alert('Дата окончания не может быть раньше даты начала!');
-        return;
-      }
-      if (diffDays > 30) {
-        alert(`Выбранный период составляет ${diffDays} дн.\nПожалуйста, выберите период не более 30 дней.`);
-        return;
-      }
-
       const btnStart = document.getElementById('btn-start');
       btnStart.disabled = true;
       btnStart.innerHTML = `<span class="spinner"></span><span>Запуск задачи...</span>`;
@@ -3188,7 +3131,7 @@
         const resp = await fetch('/api/tasks', {
           method: 'POST',
           headers: authHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify({ ml_numbers: mls, date_from: dateFrom, date_to: dateTo })
+          body: JSON.stringify({ ml_numbers: mls })
         });
         const data = await resp.json();
         if (!resp.ok) {

@@ -73,7 +73,7 @@ except ImportError:
 
 # ─── Настройка FastAPI и CORS ─────────────────────────────────────────────────
 
-PORTAL_VERSION = "1.12"
+PORTAL_VERSION = "1.13"
 app = FastAPI(title="ПУЛЬС — Транспортная логистика", version=f"v{PORTAL_VERSION}")
 
 ALLOWED_ORIGIN_REGEX = (
@@ -1582,8 +1582,16 @@ class ExportRequest(BaseModel):
         max_length=100,
         description="Список номеров МЛ (от 1 до 100 за одну задачу)",
     )
-    date_from: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
-    date_to: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
+    date_from: str | None = Field(
+        default=None,
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+        description="Опциональная дата с (YYYY-MM-DD)",
+    )
+    date_to: str | None = Field(
+        default=None,
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+        description="Опциональная дата по (YYYY-MM-DD)",
+    )
 
 
 jobs_db: dict[str, dict[str, Any]] = {}
@@ -1689,9 +1697,11 @@ def _task_worker():
         driver = None
         try:
             log_msg("Подготовка к запуску...")
-            d_from = datetime.date.fromisoformat(job["date_from"])
-            d_to = datetime.date.fromisoformat(job["date_to"])
-            date_filter = (d_from, d_to)
+            date_filter = None
+            if job.get("date_from") and job.get("date_to"):
+                d_from = datetime.date.fromisoformat(job["date_from"])
+                d_to = datetime.date.fromisoformat(job["date_to"])
+                date_filter = (d_from, d_to)
 
             log_msg("Запуск браузера через Direct CDP (в фоновом режиме)...")
             driver = create_driver(task_config, headless=True)
@@ -1723,7 +1733,7 @@ def _task_worker():
                     else:
                         log_msg(f"МЛ {ml}: не выгружен ({result.error})")
 
-            log_msg("Применение фильтра дат и начало экспорта...")
+            log_msg("Поиск рейсов через API Advantum и выгрузка графиков...")
             export_thermographs(
                 driver,
                 wait,
@@ -1740,7 +1750,10 @@ def _task_worker():
             ]
 
             if pdf_files:
-                zip_filename = f"advantum_charts_{job['date_from']}_{job['date_to']}.zip"
+                if job.get("date_from") and job.get("date_to"):
+                    zip_filename = f"advantum_charts_{job['date_from']}_{job['date_to']}.zip"
+                else:
+                    zip_filename = f"advantum_charts_{datetime.date.today().isoformat()}.zip"
                 zip_path = os.path.join(task_dir, zip_filename)
                 with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
                     for p in pdf_files:
@@ -1821,14 +1834,20 @@ async def create_export_task(req: ExportRequest, request: Request):
             detail="Превышен лимит: максимум 100 МЛ за одну задачу",
         )
 
-    try:
-        datetime.date.fromisoformat(req.date_from)
-        datetime.date.fromisoformat(req.date_to)
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Некорректный формат даты (требуется YYYY-MM-DD)",
-        )
+    if req.date_from or req.date_to:
+        if not (req.date_from and req.date_to):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Необходимо указать обе даты или оставить период пустым",
+            )
+        try:
+            datetime.date.fromisoformat(req.date_from)
+            datetime.date.fromisoformat(req.date_to)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Некорректный формат даты (требуется YYYY-MM-DD)",
+            )
 
     task_id = str(uuid.uuid4())
     job_data = {
@@ -1876,6 +1895,7 @@ async def get_task_status(task_id: str, request: Request):
         "results": job["results"],
         "logs": job["logs"],
         "has_zip": job["has_zip"],
+        "zip_filename": job.get("zip_filename"),
         "success_count": job["success_count"],
         "fail_count": job["fail_count"],
         "error_message": job["error_message"],

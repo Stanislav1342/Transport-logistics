@@ -10,14 +10,18 @@ export.py — Логика экспорта термографиков из Adva
 
 import base64
 import datetime
+import html as html_lib
 import json
 import logging
+import math
 import os
 import re
 import sys
 import time
 import urllib.parse
 from typing import NamedTuple, Dict, Any
+
+import requests
 
 from selenium import webdriver
 from selenium.common.exceptions import (
@@ -206,6 +210,24 @@ class PdfPrinterSession:
             logger.error("Ошибка печати PDF через постоянную сессию: %s. Пробуем fallback...", e)
             print_html_to_pdf_headless(html_path, output_pdf, self.config)
             return True
+
+    def render_html_to_pdf(self, html_content: str, output_pdf: str) -> bool:
+        """Сохраняет HTML во временный файл и печатает в PDF без внешних зависимостей."""
+        os.makedirs(os.path.dirname(os.path.abspath(output_pdf)), exist_ok=True)
+        temp_html_path = os.path.join(
+            os.path.dirname(os.path.abspath(output_pdf)),
+            f".tmp_render_{os.getpid()}_{int(time.time() * 1000)}.html",
+        )
+        try:
+            with open(temp_html_path, "w", encoding="utf-8") as f:
+                f.write(html_content)
+            return self.print_html_to_pdf(temp_html_path, output_pdf)
+        finally:
+            if os.path.exists(temp_html_path):
+                try:
+                    os.remove(temp_html_path)
+                except Exception:
+                    pass
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.driver:
@@ -504,60 +526,784 @@ def _clear_search_input(driver: WebDriver) -> None:
         pass
 
 
+def get_advantum_bearer_token(driver: WebDriver) -> str:
+    """Извлекает JWT Bearer-токен Advantum из localStorage авторизованного браузера."""
+    auth_raw = driver.execute_script("return localStorage.getItem('auth_data');")
+    if not auth_raw:
+        raise RuntimeError("Данные авторизации (auth_data) не найдены в localStorage")
+    try:
+        parsed = json.loads(auth_raw)
+        token = (parsed.get("authData") or {}).get("access_token", "")
+    except Exception as e:
+        raise RuntimeError(f"Не удалось разобрать auth_data из localStorage: {e}") from e
+    if not token:
+        raise RuntimeError("Поле access_token отсутствует в auth_data")
+    return token
+
+
+def _is_pure_shipment_id(token_ml: str) -> bool:
+    """Проверяет, является ли строка внутренним числовым ID рейса Advantum (7-9 цифр)."""
+    return bool(re.fullmatch(r"\d{7,9}", token_ml.strip()))
+
+
+def _index_shipment_record(item: dict[str, Any], index: dict[str, dict[str, Any]]) -> None:
+    """Индексирует запись рейса в словаре по id, нормализованному routeNum и цифрам routeNum."""
+    sid = item.get("id")
+    if sid is not None:
+        index[f"id:{sid}"] = item
+    r_num = item.get("routeNum")
+    if r_num:
+        norm = normalize_ml_number(str(r_num))
+        index[f"ml:{norm}"] = item
+        digits = "".join(re.findall(r"\d+", norm))
+        if digits:
+            d_key = f"digits:{digits}"
+            if d_key not in index or item.get("hasTelematicEquipment"):
+                index[d_key] = item
+
+
+def _lookup_indexed_shipment(ml: str, index: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    """Ищет рейс в индексе по точному нормализованному номеру МЛ, ID или цифрам."""
+    norm = normalize_ml_number(ml)
+    if f"ml:{norm}" in index:
+        return index[f"ml:{norm}"]
+    if _is_pure_shipment_id(norm) and f"id:{norm}" in index:
+        return index[f"id:{norm}"]
+    digits = "".join(re.findall(r"\d+", norm))
+    if digits and f"digits:{digits}" in index:
+        return index[f"digits:{digits}"]
+    return None
+
+
+def _fetch_shipments_chunk_http(
+    session: requests.Session,
+    chunk_from: datetime.date,
+    chunk_to: datetime.date,
+    base_url: str = "https://atms.advantum.ru",
+) -> list[dict[str, Any]]:
+    """
+    Запрашивает список рейсов через GET /api/v1/shipments за интервал chunk_from..chunk_to.
+    При таймауте на многодневном интервале автоматически дробит окно пополам (до 1 дня).
+    """
+    params = {
+        "scheduledStartInstantFrom": f"{chunk_from.isoformat()}T00:00:00.000Z",
+        "scheduledStartInstantTo": f"{chunk_to.isoformat()}T23:59:59.999Z",
+    }
+    try:
+        resp = session.get(f"{base_url}/api/v1/shipments", params=params, timeout=30)
+        if resp.ok:
+            data = resp.json()
+            return data if isinstance(data, list) else []
+        logger.warning(
+            "[API] GET /api/v1/shipments (%s..%s) вернул статус %s",
+            chunk_from,
+            chunk_to,
+            resp.status_code,
+        )
+        return []
+    except (requests.exceptions.Timeout, requests.exceptions.RequestException) as exc:
+        span_days = (chunk_to - chunk_from).days
+        if span_days > 0:
+            mid = chunk_from + datetime.timedelta(days=span_days // 2)
+            logger.info(
+                "[API] Таймаут чанка %s..%s (%s), дробим на 2 под-окна...",
+                chunk_from,
+                chunk_to,
+                exc,
+            )
+            part1 = _fetch_shipments_chunk_http(session, chunk_from, mid, base_url=base_url)
+            part2 = _fetch_shipments_chunk_http(
+                session, mid + datetime.timedelta(days=1), chunk_to, base_url=base_url
+            )
+            return part1 + part2
+        logger.warning("[API] Ошибка запроса /api/v1/shipments за %s: %s", chunk_from, exc)
+        return []
+
+
+def find_shipments_by_ml_api(
+    token: str,
+    ml_numbers: list[str],
+    date_filter: tuple[datetime.date, datetime.date] | None = None,
+    max_lookback_days: int = 60,
+    base_url: str = "https://atms.advantum.ru",
+) -> dict[str, dict[str, Any]]:
+    """
+    Каскадный поиск рейсов по номерам МЛ (routeNum) или ID рейсов через нативный REST API Advantum.
+    Не требует ввода дат от пользователя: шагает назад от текущей даты чанками по 4 дня
+    и мгновенно останавливается, как только все искомые МЛ найдены.
+
+    Возвращает словарь { normalize_ml_number(ml): shipment_dict } для найденных рейсов.
+    """
+    base_url = base_url.rstrip("/")
+    index: dict[str, dict[str, Any]] = {}
+    session = requests.Session()
+    session.headers.update({"Authorization": f"Bearer {token}", "Accept": "application/json"})
+
+    normalized_targets = [normalize_ml_number(ml) for ml in ml_numbers if ml.strip()]
+    if not normalized_targets:
+        return {}
+
+    # 1. Прямая проверка, если пользователь передал внутренние ID рейса (7-9 цифр)
+    for norm in normalized_targets:
+        if _is_pure_shipment_id(norm):
+            try:
+                r = session.get(f"{base_url}/api/v1/shipments/{norm}", timeout=15)
+                if r.ok:
+                    item = r.json()
+                    if isinstance(item, dict) and item.get("id"):
+                        _index_shipment_record(item, index)
+                        print(f"[API] Рейс ID {norm} найден напрямую (МЛ: {item.get('routeNum', '—')}).")
+            except Exception as e:
+                logger.debug("Ошибка прямого запроса ID %s: %s", norm, e)
+
+    def _all_found() -> bool:
+        return all(_lookup_indexed_shipment(t, index) is not None for t in normalized_targets)
+
+    if _all_found():
+        return {
+            t: _lookup_indexed_shipment(t, index)
+            for t in normalized_targets
+            if _lookup_indexed_shipment(t, index) is not None
+        }
+
+    # 2. Строим окна поиска по 4 дня (в обратном хронологическом порядке)
+    if date_filter:
+        start_d, end_d = date_filter
+    else:
+        end_d = datetime.date.today() + datetime.timedelta(days=1)
+        start_d = end_d - datetime.timedelta(days=max_lookback_days)
+
+    windows: list[tuple[datetime.date, datetime.date]] = []
+    cur_to = end_d
+    while cur_to >= start_d:
+        cur_from = max(start_d, cur_to - datetime.timedelta(days=3))
+        windows.append((cur_from, cur_to))
+        cur_to = cur_from - datetime.timedelta(days=1)
+
+    for w_idx, (c_from, c_to) in enumerate(windows, 1):
+        print(
+            f"[API] Поиск МЛ в периоде {c_from.strftime('%d.%m.%Y')} — {c_to.strftime('%d.%m.%Y')} "
+            f"(окно {w_idx}/{len(windows)})..."
+        )
+        items = _fetch_shipments_chunk_http(session, c_from, c_to, base_url=base_url)
+        for item in items:
+            _index_shipment_record(item, index)
+
+        found_now = sum(1 for t in normalized_targets if _lookup_indexed_shipment(t, index) is not None)
+        print(
+            f"[API] Получено {len(items)} рейсов; найдено искомых МЛ: {found_now}/{len(normalized_targets)}."
+        )
+        if found_now == len(normalized_targets):
+            break
+
+    result_map: dict[str, dict[str, Any]] = {}
+    for t in normalized_targets:
+        found = _lookup_indexed_shipment(t, index)
+        if found is not None:
+            result_map[t] = found
+    return result_map
+
+
 def fetch_shipments_api_by_interval(
     driver: WebDriver,
     date_from: datetime.date,
     date_to: datetime.date,
 ) -> dict[str, dict[str, Any]]:
     """
-    Запрашивает данные о рейсах за выбранный интервал дат через нативный REST API Advantum.
-    Возвращает словарь { normalized_route_num: shipment_data } для быстрой валидации.
-    Если период превышает 7 дней, выполняет запросы последовательными чанками по 7 дней.
+    Совместимая обертка: запрашивает данные о рейсах за интервал дат через нативный REST API.
     """
     try:
-        cur_from = date_from
+        token = get_advantum_bearer_token(driver)
+        session = requests.Session()
+        session.headers.update({"Authorization": f"Bearer {token}", "Accept": "application/json"})
         index: dict[str, dict[str, Any]] = {}
-
+        cur_from = date_from
         while cur_from <= date_to:
-            cur_to = min(cur_from + datetime.timedelta(days=6), date_to)
-            from_str = f"{cur_from.isoformat()}T00:00:00.000Z"
-            to_str = f"{cur_to.isoformat()}T23:59:59.999Z"
-
-            js_code = f"""
-            return (async function() {{
-                var authStr = localStorage.getItem('auth_data');
-                if (!authStr) return null;
-                var token = '';
-                try {{
-                    var parsed = JSON.parse(authStr);
-                    token = parsed.authData ? parsed.authData.access_token : '';
-                }} catch(e) {{ return null; }}
-                if (!token) return null;
-                
-                var headers = {{ 'Authorization': 'Bearer ' + token, 'Accept': 'application/json' }};
-                var url = '/api/v1/shipments?scheduledStartInstantFrom={from_str}&scheduledStartInstantTo={to_str}';
-                var resp = await fetch(url, {{ headers: headers }});
-                if (!resp.ok) return null;
-                return await resp.json();
-            }})();
-            """
-            raw_items = driver.execute_script(js_code)
-            if raw_items and isinstance(raw_items, list):
-                for item in raw_items:
-                    r_num = item.get("routeNum")
-                    if r_num:
-                        norm = normalize_ml_number(r_num)
-                        index[norm] = item
-                        digits = "".join(re.findall(r"\d+", norm))
-                        if digits and digits not in index:
-                            index[digits] = item
-
+            cur_to = min(cur_from + datetime.timedelta(days=3), date_to)
+            items = _fetch_shipments_chunk_http(session, cur_from, cur_to)
+            for item in items:
+                r_num = item.get("routeNum")
+                if r_num:
+                    norm = normalize_ml_number(str(r_num))
+                    index[norm] = item
+                    digits = "".join(re.findall(r"\d+", norm))
+                    if digits and digits not in index:
+                        index[digits] = item
             cur_from = cur_to + datetime.timedelta(days=1)
-
         return index
     except Exception as e:
         logger.warning("Не удалось выполнить предварительный опрос API Advantum: %s", e)
         return {}
+
+
+# ─── Рендеринг печатной формы термографика из данных API ──────────────────────
+
+ADVANTUM_SENSOR_PALETTE = [
+    "#1f77b4",
+    "#ff7f0e",
+    "#2ca02c",
+    "#d62728",
+    "#9467bd",
+    "#8c564b",
+    "#e377c2",
+    "#7f7f7f",
+    "#bcbd22",
+    "#17becf",
+]
+
+
+def _parse_tz_offset(offset_str: str | None) -> tuple[datetime.timezone, str]:
+    """Парсит строку смещения вроде '+03:00' в (timezone, отображаемая_строка)."""
+    raw = (offset_str or "+03:00").strip()
+    m = re.match(r"^([+-])(\d{2}):?(\d{2})$", raw)
+    if not m:
+        return datetime.timezone(datetime.timedelta(hours=3)), "+03:00"
+    sign = 1 if m.group(1) == "+" else -1
+    hours = int(m.group(2))
+    mins = int(m.group(3))
+    td = datetime.timedelta(minutes=sign * (hours * 60 + mins))
+    return datetime.timezone(td), f"{m.group(1)}{m.group(2)}:{m.group(3)}"
+
+
+def _parse_iso_utc(dt_str: str | None) -> datetime.datetime | None:
+    """Парсит ISO-дату/время в timezone-aware datetime в UTC."""
+    if not dt_str or not isinstance(dt_str, str):
+        return None
+    s = dt_str.strip()
+    try:
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return dt.astimezone(datetime.timezone.utc)
+    except Exception:
+        return None
+
+
+def _format_duration_ru(start_dt: datetime.datetime, finish_dt: datetime.datetime) -> str:
+    """Форматирует длительность периода чтения как в Advantum."""
+    total_sec = max(0, int((finish_dt - start_dt).total_seconds()))
+    total_mins = total_sec // 60
+    days = total_mins // 1440
+    hours = (total_mins % 1440) // 60
+    mins = total_mins % 60
+    parts = []
+    if days > 0:
+        parts.append(f"{days} д.")
+    if hours > 0 or days > 0:
+        parts.append(f"{hours} ч.")
+    parts.append(f"{mins} мин.")
+    return " ".join(parts)
+
+
+def _compute_nice_ticks(y_lo: float, y_hi: float, target_count: int = 8) -> list[float]:
+    """Подбирает аккуратный шаг делений оси температуры Y."""
+    span = y_hi - y_lo
+    if span <= 0:
+        return [y_lo]
+    raw_step = span / max(2, target_count)
+    mag = 10 ** math.floor(math.log10(raw_step))
+    norm = raw_step / mag
+    if norm <= 1.0:
+        step = 1.0 * mag
+    elif norm <= 2.0:
+        step = 2.0 * mag
+    elif norm <= 2.5 and mag >= 1:
+        step = 2.5 * mag
+    elif norm <= 5.0:
+        step = 5.0 * mag
+    else:
+        step = 10.0 * mag
+    step = max(step, 0.5)
+    start_tick = math.ceil(y_lo / step) * step
+    ticks: list[float] = []
+    cur = start_tick
+    while cur <= y_hi + 1e-9:
+        ticks.append(round(cur, 2))
+        cur += step
+    return ticks
+
+
+def _build_compartment_svg(
+    sec_sensors: list[dict[str, Any]],
+    t_min: float | None,
+    t_max: float | None,
+    restr: dict[str, Any],
+    start_dt: datetime.datetime,
+    finish_dt: datetime.datetime,
+    tz_obj: datetime.timezone,
+) -> tuple[str, float | None, float | None]:
+    """Строит SVG-график температуры одного отсека в точном стиле Advantum."""
+    width = 960
+    height = 410
+    m_left, m_top, m_right, m_bottom = 68, 12, 20, 68
+    plot_w = width - m_left - m_right
+    plot_h = height - m_top - m_bottom
+
+    parsed_lines: list[tuple[int, dict[str, Any], list[tuple[datetime.datetime, float]]]] = []
+    all_vals: list[float] = []
+
+    for idx, sen in enumerate(sec_sensors):
+        pts: list[tuple[datetime.datetime, float]] = []
+        for item in sen.get("values") or []:
+            dt = _parse_iso_utc(item.get("dateInstance"))
+            val = item.get("value")
+            if dt is not None and val is not None:
+                try:
+                    fval = float(val)
+                    if not math.isnan(fval):
+                        pts.append((dt, fval))
+                        all_vals.append(fval)
+                except Exception:
+                    pass
+        pts.sort(key=lambda p: p[0])
+        parsed_lines.append((idx, sen, pts))
+
+    if not all_vals:
+        return "", None, None
+
+    temp_min_val = min(all_vals)
+    temp_max_val = max(all_vals)
+
+    domain_vals = list(all_vals)
+    tol = restr.get("toleranceInDegreesCelsius")
+    dev_upper = restr.get("sensorDeviationUpper")
+    dev_lower = restr.get("sensorDeviationLower")
+    if isinstance(t_min, (int, float)):
+        domain_vals.append(float(t_min))
+        if isinstance(tol, (int, float)):
+            domain_vals.append(float(t_min) - float(tol))
+        if isinstance(dev_lower, (int, float)):
+            domain_vals.append(float(t_min) - float(dev_lower) - (float(tol) if isinstance(tol, (int, float)) else 0.0))
+    if isinstance(t_max, (int, float)):
+        domain_vals.append(float(t_max))
+        if isinstance(tol, (int, float)):
+            domain_vals.append(float(t_max) + float(tol))
+        if isinstance(dev_upper, (int, float)):
+            domain_vals.append(float(t_max) + float(dev_upper) + (float(tol) if isinstance(tol, (int, float)) else 0.0))
+
+    raw_lo = min(domain_vals)
+    raw_hi = max(domain_vals)
+    if abs(raw_hi - raw_lo) < 0.5:
+        raw_lo -= 2.0
+        raw_hi += 2.0
+    span_y = raw_hi - raw_lo
+    y_lo = raw_lo - span_y * 0.2
+    y_hi = raw_hi + span_y * 0.1
+    if y_hi <= y_lo:
+        y_hi = y_lo + 1.0
+
+    start_ts = start_dt.timestamp()
+    finish_ts = finish_dt.timestamp()
+    if finish_ts <= start_ts:
+        finish_ts = start_ts + 3600.0
+
+    def x_px(dt: datetime.datetime) -> float:
+        return ((dt.timestamp() - start_ts) / (finish_ts - start_ts)) * plot_w
+
+    def y_px(val: float) -> float:
+        return plot_h - ((val - y_lo) / (y_hi - y_lo)) * plot_h
+
+    svg_parts: list[str] = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+        f'viewBox="0 0 {width} {height}" style="display:block;font-family:Arial,Helvetica,sans-serif;">',
+        f'<g transform="translate({m_left},{m_top})">',
+        f'<defs><clipPath id="clip-plot"><rect x="0" y="0" width="{plot_w}" height="{plot_h}"/></clipPath></defs>',
+    ]
+
+    # 1. Температурные коридоры (допустимая зона и допуски)
+    def _draw_band(b_min: float, b_max: float, fill_col: str, border_col: str, x_start: float = 0.0, x_w: float | None = None) -> None:
+        bw = plot_w if x_w is None else max(0.0, min(plot_w - x_start, x_w))
+        if bw <= 0 or b_max < b_min:
+            return
+        y_top = y_px(b_max)
+        y_bot = y_px(b_min)
+        bh = max(0.0, y_bot - y_top)
+        svg_parts.append(
+            f'<g clip-path="url(#clip-plot)">'
+            f'<rect x="{x_start:.2f}" y="{y_top:.2f}" width="{bw:.2f}" height="{bh:.2f}" fill="{fill_col}" />'
+            f'<line x1="{x_start:.2f}" y1="{y_bot:.2f}" x2="{x_start + bw:.2f}" y2="{y_bot:.2f}" stroke="{border_col}" stroke-width="2" />'
+            f'<line x1="{x_start:.2f}" y1="{y_top:.2f}" x2="{x_start + bw:.2f}" y2="{y_top:.2f}" stroke="{border_col}" stroke-width="2" />'
+            f'</g>'
+        )
+
+    def _draw_regime_block(r_min: float | None, r_max: float | None, x_start: float = 0.0, x_w: float | None = None) -> None:
+        if not (isinstance(r_min, (int, float)) and isinstance(r_max, (int, float))):
+            return
+        fmin, fmax = float(r_min), float(r_max)
+        if isinstance(tol, (int, float)):
+            ftol = float(tol)
+            if isinstance(dev_upper, (int, float)) or isinstance(dev_lower, (int, float)):
+                du = float(dev_upper or 0.0)
+                dl = float(dev_lower or 0.0)
+                _draw_band(fmin - dl - ftol, fmax + du + ftol, "#fef3c7", "#ffa300", x_start, x_w)
+            if ftol < 0:
+                _draw_band(fmin, fmax, "#F3FFCC", "#00CC00", x_start, x_w)
+                _draw_band(fmin - ftol, fmax + ftol, "#CCFFCC", "#DDDD00", x_start, x_w)
+            else:
+                _draw_band(fmin - ftol, fmax + ftol, "#FFFFCC", "#DDDD00", x_start, x_w)
+                _draw_band(fmin, fmax, "#CCFFCC", "#00CC00", x_start, x_w)
+        else:
+            _draw_band(fmin, fmax, "#CCFFCC", "#00CC00", x_start, x_w)
+
+    leg_params = restr.get("sectionTemperatureLegControlParams") or []
+    valid_legs = [
+        lg for lg in leg_params if lg.get("start") and lg.get("finish") and _parse_iso_utc(lg.get("start")) and _parse_iso_utc(lg.get("finish"))
+    ]
+    if valid_legs:
+        valid_legs.sort(key=lambda lg: _parse_iso_utc(lg["start"]))  # type: ignore[arg-type]
+        for lg in valid_legs:
+            l_s = _parse_iso_utc(lg["start"])
+            l_f = _parse_iso_utc(lg["finish"])
+            if l_s and l_f:
+                xs = max(0.0, min(plot_w, x_px(l_s)))
+                xf = max(0.0, min(plot_w, x_px(l_f)))
+                if xf > xs:
+                    _draw_regime_block(lg.get("temperatureMin"), lg.get("temperatureMax"), xs, xf - xs)
+    else:
+        _draw_regime_block(t_min, t_max)
+
+    # 2. Сетка и метки оси Y
+    for tick in _compute_nice_ticks(y_lo, y_hi):
+        yp = y_px(tick)
+        if 0 <= yp <= plot_h:
+            svg_parts.append(
+                f'<line x1="0" y1="{yp:.2f}" x2="{plot_w}" y2="{yp:.2f}" stroke="#e2e8f0" stroke-width="1" />'
+            )
+            svg_parts.append(
+                f'<line x1="-5" y1="{yp:.2f}" x2="0" y2="{yp:.2f}" stroke="#64748b" stroke-width="1" />'
+            )
+            svg_parts.append(
+                f'<text x="-8" y="{yp + 4:.2f}" text-anchor="end" font-size="11" fill="#1e293b">{tick:.1f} °C</text>'
+            )
+
+    # 3. Вертикальная сетка и метки времени по оси X (повернуты на -45°)
+    n_xticks = 10
+    for i in range(n_xticks + 1):
+        frac = i / n_xticks
+        t_cur = start_ts + frac * (finish_ts - start_ts)
+        dt_loc = datetime.datetime.fromtimestamp(t_cur, tz=tz_obj)
+        xp = frac * plot_w
+        svg_parts.append(
+            f'<line x1="{xp:.2f}" y1="0" x2="{xp:.2f}" y2="{plot_h}" stroke="#e2e8f0" stroke-width="0.8" stroke-dasharray="2 2" />'
+        )
+        svg_parts.append(
+            f'<line x1="{xp:.2f}" y1="{plot_h}" x2="{xp:.2f}" y2="{plot_h + 5}" stroke="#64748b" stroke-width="1" />'
+        )
+        lbl = dt_loc.strftime("%d.%m %H:%M")
+        svg_parts.append(
+            f'<text x="{xp:.2f}" y="{plot_h + 10}" transform="rotate(-45 {xp:.2f},{plot_h + 10})" '
+            f'text-anchor="end" font-size="10.5" fill="#1e293b">{lbl}</text>'
+        )
+
+    # Оси координат
+    svg_parts.append(
+        f'<line x1="0" y1="0" x2="0" y2="{plot_h}" stroke="#475569" stroke-width="1.2" />'
+    )
+    svg_parts.append(
+        f'<line x1="0" y1="{plot_h}" x2="{plot_w}" y2="{plot_h}" stroke="#475569" stroke-width="1.2" />'
+    )
+
+    # 4. Разрывы данных > 60 минут ("нет показаний") и кривые датчиков
+    gap_threshold_sec = 3600.0
+    for idx, sen, pts in parsed_lines:
+        color = ADVANTUM_SENSOR_PALETTE[idx % len(ADVANTUM_SENSOR_PALETTE)]
+        if not pts:
+            continue
+
+        # Выделяем непрерывные сегменты
+        segments: list[list[tuple[datetime.datetime, float]]] = [[pts[0]]]
+        for j in range(1, len(pts)):
+            dt_prev, _ = pts[j - 1]
+            dt_curr, _ = pts[j]
+            diff = (dt_curr - dt_prev).total_seconds()
+            if diff > gap_threshold_sec:
+                g_x1 = max(0.0, min(plot_w, x_px(dt_prev)))
+                g_x2 = max(0.0, min(plot_w, x_px(dt_curr)))
+                gw = g_x2 - g_x1
+                if gw > 4:
+                    svg_parts.append(
+                        f'<g clip-path="url(#clip-plot)">'
+                        f'<rect x="{g_x1:.2f}" y="0" width="{gw:.2f}" height="{plot_h}" fill="#cbd5e1" fill-opacity="0.45" />'
+                        f'<line x1="{g_x1:.2f}" y1="0" x2="{g_x1:.2f}" y2="{plot_h}" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 3" />'
+                        f'<line x1="{g_x2:.2f}" y1="0" x2="{g_x2:.2f}" y2="{plot_h}" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 3" />'
+                        f'</g>'
+                    )
+                    if gw >= 70:
+                        svg_parts.append(
+                            f'<text x="{(g_x1 + g_x2) / 2:.2f}" y="{plot_h / 2:.2f}" text-anchor="middle" '
+                            f'font-size="11" fill="#475569">нет показаний</text>'
+                        )
+                segments.append([])
+            segments[-1].append(pts[j])
+
+        # Рисуем ломаные по сегментам
+        for seg in segments:
+            if len(seg) < 2:
+                if len(seg) == 1:
+                    cx = x_px(seg[0][0])
+                    cy = y_px(seg[0][1])
+                    svg_parts.append(
+                        f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="2.2" fill="{color}" clip-path="url(#clip-plot)" />'
+                    )
+                continue
+            d_cmds = []
+            for p_idx, (p_dt, p_val) in enumerate(seg):
+                px = x_px(p_dt)
+                py = y_px(p_val)
+                cmd = "M" if p_idx == 0 else "L"
+                d_cmds.append(f"{cmd}{px:.2f},{py:.2f}")
+            svg_parts.append(
+                f'<path d="{" ".join(d_cmds)}" fill="none" stroke="{color}" stroke-width="1.6" '
+                f'stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip-plot)" />'
+            )
+
+    svg_parts.append("</g></svg>")
+    return "\n".join(svg_parts), temp_min_val, temp_max_val
+
+
+def build_advantum_print_html(shipment_full: dict[str, Any], chart_data: dict[str, Any]) -> str:
+    """
+    Формирует чистую HTML+SVG печатную форму температурного графика по данным API Advantum
+    (соответствует «Версия для печати -> Простая» в веб-интерфейсе Advantum).
+    """
+    sensors = chart_data.get("sensors") or []
+    tz_obj, offset_label = _parse_tz_offset(chart_data.get("firstLoadingPointOffset"))
+
+    start_dt = _parse_iso_utc(chart_data.get("requestTimeStart"))
+    finish_dt = _parse_iso_utc(chart_data.get("requestTimeFinish"))
+
+    all_point_dts: list[datetime.datetime] = []
+    sensors_by_sec: dict[int, list[dict[str, Any]]] = {}
+    for sen in sensors:
+        sec_num = int(sen.get("sectionNumber") or 1)
+        sensors_by_sec.setdefault(sec_num, []).append(sen)
+        for v in sen.get("values") or []:
+            dt = _parse_iso_utc(v.get("dateInstance"))
+            if dt is not None:
+                all_point_dts.append(dt)
+
+    if not start_dt and all_point_dts:
+        start_dt = min(all_point_dts)
+    if not finish_dt and all_point_dts:
+        finish_dt = max(all_point_dts)
+    if not start_dt:
+        start_dt = datetime.datetime.now(datetime.timezone.utc)
+    if not finish_dt:
+        finish_dt = start_dt + datetime.timedelta(hours=1)
+
+    start_local_str = start_dt.astimezone(tz_obj).strftime("%d.%m.%Y %H:%M")
+    finish_local_str = finish_dt.astimezone(tz_obj).strftime("%d.%m.%Y %H:%M")
+    duration_str = _format_duration_ru(start_dt, finish_dt)
+
+    route_num = shipment_full.get("routeNum") or str(shipment_full.get("id") or "")
+    customer_name = shipment_full.get("customerOrganizationName") or ""
+    carrier_name = shipment_full.get("carrierOrganizationName") or ""
+    tc_num = shipment_full.get("vehicleGosNums") or shipment_full.get("vehicleGosNum") or chart_data.get("gosNum") or ""
+    trailer_num = shipment_full.get("trailerGosNums") or ""
+    driver_fio = shipment_full.get("driverFio") or ""
+
+    active_sections = [s for s in sorted(sensors_by_sec.keys()) if any(sen.get("values") for sen in sensors_by_sec[s])]
+    if not active_sections:
+        raise ValueError("Данные температурного графика отсутствуют (нет показаний датчиков)")
+
+    esc = html_lib.escape
+    page_blocks: list[str] = []
+
+    for sec_idx, sec_num in enumerate(active_sections):
+        sec_sensors = sensors_by_sec[sec_num]
+        if sec_num == 1:
+            t_min = shipment_full.get("temperatureMin")
+            if t_min is None:
+                t_min = shipment_full.get("temperatureMinInCelsius")
+            t_max = shipment_full.get("temperatureMax")
+            if t_max is None:
+                t_max = shipment_full.get("temperatureMaxInCelsius")
+            restr = chart_data.get("firstSectionRestrictions") or {}
+        else:
+            t_min = shipment_full.get("secondChamberTemperatureMin")
+            if t_min is None:
+                t_min = shipment_full.get("secondChamberTemperatureMinInCelsius")
+            t_max = shipment_full.get("secondChamberTemperatureMax")
+            if t_max is None:
+                t_max = shipment_full.get("secondChamberTemperatureMaxInCelsius")
+            restr = chart_data.get("secondSectionRestrictions") or {}
+
+        svg_markup, min_temp, max_temp = _build_compartment_svg(
+            sec_sensors, t_min, t_max, restr, start_dt, finish_dt, tz_obj
+        )
+        if not svg_markup:
+            continue
+
+        serials = [str(sen.get("serialNumber") or sen.get("id") or "") for sen in sec_sensors if (sen.get("serialNumber") or sen.get("id"))]
+        has_violation = any(bool(sen.get("hasViolation")) for sen in sec_sensors)
+        min_temp_str = f"{min_temp:.1f}" if min_temp is not None else ""
+        max_temp_str = f"{max_temp:.1f}" if max_temp is not None else ""
+        bounds_str = f"{t_min if t_min is not None else ''} {t_max if t_max is not None else ''}".strip()
+
+        legend_items: list[str] = []
+        for s_i, sen in enumerate(sec_sensors):
+            col = ADVANTUM_SENSOR_PALETTE[s_i % len(ADVANTUM_SENSOR_PALETTE)]
+            ser_lbl = sen.get("serialNumber") or sen.get("name") or f"id {sen.get('id')}"
+            legend_items.append(
+                f'<span style="display:inline-flex;align-items:center;gap:5px;margin-right:14px;">'
+                f'<span style="display:inline-block;width:14px;height:3px;background:{col};"></span>'
+                f'<span>Датчик {esc(str(ser_lbl))}</span>'
+                f'</span>'
+            )
+
+        page_break = "always" if sec_idx < len(active_sections) - 1 else "avoid"
+        block_html = f"""
+        <div style="page-break-after:{page_break};break-inside:avoid;page-break-inside:avoid;margin-bottom:4px;">
+          <div style="margin-bottom:10px;font-size:11.5px;line-height:1.32;color:#111827;">
+            <div>Юридическое лицо: {esc(str(customer_name))}</div>
+            <div>Транспортная компания: {esc(str(carrier_name))}</div>
+            <div>Номер рейса: {esc(str(route_num))}</div>
+            <div>TC: {esc(str(tc_num))} Прицеп: {esc(str(trailer_num))}</div>
+            <div>Водитель: {esc(str(driver_fio))}</div>
+            <div>Интервал записи: 1 мин</div>
+            <div>Отсек №: {sec_num}</div>
+            <div>Терморегистратор №: {esc(', '.join(serials))}</div>
+            <div>Первое считывание: {esc(start_local_str)} {esc(offset_label)} Последнее считывание: {esc(finish_local_str)} {esc(offset_label)} Период считывания: {esc(duration_str)}</div>
+            <div>Минимальная температура: {esc(min_temp_str)}</div>
+            <div>Максимальная температура: {esc(max_temp_str)}</div>
+            <div>Температурные границы отсека {sec_num}: {esc(bounds_str)}</div>
+            <div>Отклонение: {'были' if has_violation else 'нет'}</div>
+            <div style="margin-top:4px;display:flex;flex-wrap:wrap;align-items:center;gap:6px;">
+              {''.join(legend_items)}
+              <span style="display:inline-flex;align-items:center;gap:4px;margin-left:8px;">
+                <span style="display:inline-block;width:14px;height:10px;background:#CCFFCC;border:1px solid #00CC00;"></span>
+                <span>Норма</span>
+              </span>
+              <span style="display:inline-flex;align-items:center;gap:4px;">
+                <span style="display:inline-block;width:14px;height:10px;background:#FFFFCC;border:1px solid #DDDD00;"></span>
+                <span>Допуск</span>
+              </span>
+            </div>
+          </div>
+          <div>{svg_markup}</div>
+        </div>
+        """
+        page_blocks.append(block_html)
+
+    if not page_blocks:
+        raise ValueError("Данные температурного графика отсутствуют (нет показаний датчиков)")
+
+    title_str = esc(f"Температурный график {route_num} для печати")
+    return f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>{title_str}</title>
+  <style>
+    @media print {{
+      @page {{ size: A4 landscape; margin: 0.7cm 1cm; }}
+    }}
+    body {{
+      margin: 0;
+      padding: 4px 8px;
+      background: #ffffff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      color: #0f172a;
+    }}
+  </style>
+</head>
+<body>
+  {''.join(page_blocks)}
+</body>
+</html>"""
+
+
+def fetch_and_render_chart_html(
+    shipment_id: int | str,
+    token: str,
+    shipment_hint: dict[str, Any] | None = None,
+    base_url: str = "https://atms.advantum.ru",
+) -> tuple[str, dict[str, Any]]:
+    """
+    Запрашивает карточку рейса и сырые данные температурного графика через API Advantum
+    и возвращает (html_content, shipment_full).
+    """
+    base_url = base_url.rstrip("/")
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+    shipment_full = dict(shipment_hint or {})
+    try:
+        r_ship = requests.get(f"{base_url}/api/v1/shipments/{shipment_id}", headers=headers, timeout=20)
+        if r_ship.ok:
+            data = r_ship.json()
+            if isinstance(data, dict):
+                shipment_full.update(data)
+    except Exception as e:
+        logger.debug("Ошибка получения карточки /api/v1/shipments/%s: %s", shipment_id, e)
+
+    r_chart = requests.get(
+        f"{base_url}/api/v1/shipment-temperature-chart/with-different-settings/{shipment_id}",
+        params={"useAggregatorSettings": "false"},
+        headers=headers,
+        timeout=25,
+    )
+    if not r_chart.ok:
+        raise RuntimeError(f"Ошибка API графика Advantum: HTTP {r_chart.status_code}")
+
+    chart_data = r_chart.json()
+    if not isinstance(chart_data, dict):
+        raise ValueError("Некорректный ответ API графика Advantum")
+
+    html_content = build_advantum_print_html(shipment_full, chart_data)
+    return html_content, shipment_full
+
+
+def export_single_ml_via_api(
+    token: str,
+    ml_number: str,
+    shipment_info: dict[str, Any],
+    config: Config,
+    printer: PdfPrinterSession,
+) -> ExportResult:
+    """
+    Прямая выгрузка термографика одного МЛ в PDF по данным REST API Advantum без UI-кликов.
+    """
+    norm_ml = normalize_ml_number(ml_number)
+    shipment_id = shipment_info.get("id")
+    if not shipment_id:
+        return ExportResult(ml_number, False, "", "Не найден идентификатор рейса")
+
+    html_content, shipment_full = fetch_and_render_chart_html(
+        shipment_id=shipment_id,
+        token=token,
+        shipment_hint=shipment_info,
+    )
+
+    route_display = normalize_ml_number(str(shipment_full.get("routeNum") or norm_ml))
+    driver_name = str(shipment_full.get("driverFio") or "НеизвестныйВодитель").strip()
+    tc_number = str(
+        shipment_full.get("vehicleGosNums")
+        or shipment_full.get("vehicleGosNum")
+        or "НеизвестноеТС"
+    ).strip()
+
+    clean_ml = re.sub(r'[<>:"/\\|?*]', "_", route_display).strip()
+    clean_driver = re.sub(r'[<>:"/\\|?*]', "_", driver_name).strip()
+    clean_tc = re.sub(r'[<>:"/\\|?*]', "_", tc_number).strip()
+
+    target_pdf = os.path.join(
+        config.download_dir,
+        f"Температурный график {clean_ml} {clean_driver} {clean_tc}.pdf",
+    )
+
+    print(f"[Генерация API->PDF] Сохраняем PDF: {os.path.basename(target_pdf)}...")
+    printer.render_html_to_pdf(html_content, target_pdf)
+
+    return ExportResult(
+        ml_number=ml_number,
+        success=True,
+        filepath=target_pdf,
+        error="",
+        driver_name=clean_driver,
+        tc_number=clean_tc,
+    )
 
 
 def ensure_table_view(
@@ -1009,27 +1755,40 @@ def export_thermographs(
 ) -> list[ExportResult]:
     """
     Массовый экспорт термографиков по списку номеров маршрутных листов.
-    Использует единую сессию headless PDF-печати и быстрый сброс между МЛ.
-    
+    Использует прямой каскадный поиск через REST API Advantum (без ввода дат
+    и работы с UI-таблицей), прямой сбор данных датчиков и единую сессию PDF-печати.
+
     on_progress: опциональный callback(idx, total, ml_number, result_or_none)
     """
     results: list[ExportResult] = []
-
-    # 1. Единоразовая подготовка таблицы 'Рейсы' и установка фильтра дат
-    ensure_table_view(driver, wait, config, date_filter=date_filter)
-
-    # 1.1. Предварительная быстрая валидация рейсов через нативный REST API Advantum
+    token = ""
     api_shipments: dict[str, dict[str, Any]] = {}
-    if date_filter:
-        print("[API] Предварительная валидация списка МЛ через API Advantum...")
-        try:
-            api_shipments = fetch_shipments_api_by_interval(driver, date_filter[0], date_filter[1])
-            if api_shipments:
-                print(f"[API] Загружено {len(api_shipments)} записей рейсов за выбранный период.")
-        except Exception as e:
-            logger.warning("[API] Ошибка предварительного опроса: %s", e)
+    ui_ready = False
 
-    # 2. Пакетная обработка в рамках единой сессии PdfPrinterSession
+    # 1. Извлекаем Bearer-токен из авторизованного браузера и останавливаем тяжелые фоновые запросы SPA
+    try:
+        token = get_advantum_bearer_token(driver)
+        try:
+            driver.get("https://atms.advantum.ru/pre-load.js")
+        except Exception:
+            pass
+    except Exception as e:
+        logger.warning("[API] Не удалось извлечь токен из браузера: %s. Переход в UI-режим.", e)
+
+    # 2. Каскадный поиск всех запрошенных МЛ через REST API Advantum (без необходимости ввода дат)
+    if token:
+        print("[API] Поиск маршрутных листов через нативный REST API Advantum...")
+        try:
+            api_shipments = find_shipments_by_ml_api(
+                token=token,
+                ml_numbers=ml_numbers,
+                date_filter=date_filter,
+            )
+            print(f"[API] Поиск завершен: найдено {len(api_shipments)}/{len(ml_numbers)} МЛ.")
+        except Exception as e:
+            logger.warning("[API] Ошибка каскадного поиска МЛ: %s", e)
+
+    # 3. Пакетная обработка и генерация PDF в рамках единой сессии PdfPrinterSession
     with PdfPrinterSession(config) as printer:
         for idx, ml in enumerate(ml_numbers, 1):
             print(f"\n{'='*50}\nМЛ ({idx}/{len(ml_numbers)}): {ml}\n{'='*50}")
@@ -1040,37 +1799,74 @@ def export_thermographs(
                     pass
 
             norm_ml = normalize_ml_number(ml)
-            digits_ml = "".join(re.findall(r"\d+", norm_ml))
-            shipment_info = api_shipments.get(norm_ml) or (api_shipments.get(digits_ml) if digits_ml else None)
+            shipment_info = api_shipments.get(norm_ml)
+            result: ExportResult | None = None
 
-            # Если по API точно известно, что датчики отсутствуют — не тратим время на долгие клики в UI
-            if shipment_info and shipment_info.get("hasTelematicEquipment") is False:
-                print(f"[API] У автомобиля {shipment_info.get('vehicleGosNum', '')} нет телематики (датчиков). Пропуск.")
-                result = ExportResult(
-                    ml_number=ml,
-                    success=False,
-                    filepath="",
-                    error="Телематическое оборудование (датчики) отсутствует",
-                    driver_name=shipment_info.get("driverFio", ""),
-                    tc_number=shipment_info.get("vehicleGosNum", ""),
-                )
-                results.append(result)
-                if on_progress:
+            if token:
+                if not shipment_info:
+                    print(f"[API] Рейс {ml} не найден в системе Advantum.")
+                    result = ExportResult(
+                        ml_number=ml,
+                        success=False,
+                        filepath="",
+                        error="Рейс не найден в системе Advantum",
+                    )
+                elif shipment_info.get("hasTelematicEquipment") is False:
+                    print(
+                        f"[API] У автомобиля {shipment_info.get('vehicleGosNum', '')} нет телематики (датчиков). Пропуск."
+                    )
+                    result = ExportResult(
+                        ml_number=ml,
+                        success=False,
+                        filepath="",
+                        error="Телематическое оборудование (датчики) отсутствует",
+                        driver_name=shipment_info.get("driverFio", ""),
+                        tc_number=shipment_info.get("vehicleGosNum", ""),
+                    )
+                else:
                     try:
-                        on_progress(idx, len(ml_numbers), ml, result)
-                    except Exception:
-                        pass
-                continue
+                        result = export_single_ml_via_api(
+                            token=token,
+                            ml_number=ml,
+                            shipment_info=shipment_info,
+                            config=config,
+                            printer=printer,
+                        )
+                    except ValueError as ve:
+                        # Нет показаний датчиков или пустой график — UI здесь также пуст
+                        print(f"[API] {ml}: {ve}")
+                        result = ExportResult(
+                            ml_number=ml,
+                            success=False,
+                            filepath="",
+                            error=str(ve),
+                            driver_name=shipment_info.get("driverFio", "") if shipment_info else "",
+                            tc_number=shipment_info.get("vehicleGosNum", "") if shipment_info else "",
+                        )
+                    except Exception as api_err:
+                        logger.warning(
+                            "[API] Прямая генерация графика для %s не удалась (%s). Пробуем UI fallback...",
+                            ml,
+                            api_err,
+                        )
 
-            result = export_single_ml(
-                driver,
-                wait,
-                ml,
-                config,
-                date_filter=date_filter,
-                printer=printer,
-                shipment_info=shipment_info,
-            )
+            # Fallback через UI-таблицу только если прямой API путь не дал результата из-за сбоя или отсутствия токена
+            if result is None:
+                if not ui_ready:
+                    ensure_table_view(driver, wait, config, date_filter=date_filter)
+                    ui_ready = True
+                result = export_single_ml(
+                    driver,
+                    wait,
+                    ml,
+                    config,
+                    date_filter=date_filter,
+                    printer=printer,
+                    shipment_info=shipment_info,
+                )
+                if not result.success and "Не найден" not in result.error:
+                    recover_after_error(driver, wait, config, date_filter=date_filter)
+
             results.append(result)
 
             if on_progress:
@@ -1078,10 +1874,6 @@ def export_thermographs(
                     on_progress(idx, len(ml_numbers), ml, result)
                 except Exception:
                     pass
-
-            # Если произошел непредвиденный сбой (не связанный с отсутствием рейса)
-            if not result.success and "Не найден" not in result.error:
-                recover_after_error(driver, wait, config, date_filter=date_filter)
 
     # 3. Итоговый отчёт
     success_count = sum(1 for r in results if r.success)

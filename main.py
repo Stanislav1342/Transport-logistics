@@ -16,7 +16,6 @@ import time
 from config import load_config
 from browser import create_driver, login_to_advantum
 from export import export_thermographs
-from utils import parse_date_range
 
 VERSION = "v42"
 
@@ -54,25 +53,7 @@ def task_export_by_route_numbers() -> None:
         print("[Ошибка] Список пуст!")
         return
 
-    # Запрос периода дат
-    date_range = None
-    while True:
-        raw_dates = input(
-            "Введите период дат (ДД.ММ.ГГГГ - ДД.ММ.ГГГГ, например: 01.09.2026 - 15.09.2026, или Enter для пропуска): "
-        ).strip()
-        if not raw_dates:
-            print("[Инфо] Фильтр по дате не задан (используется текущий фильтр системы).")
-            break
-        try:
-            date_range = parse_date_range(raw_dates)
-            if date_range:
-                d_from, d_to = date_range
-                print(f"[Инфо] Выбран период: с {d_from.strftime('%d.%m.%Y')} по {d_to.strftime('%d.%m.%Y')}")
-            break
-        except ValueError as err:
-            print(f"[Ошибка] {err}. Попробуйте снова.")
-
-    print(f"\n[Инфо] Будет обработано МЛ: {len(routes_list)}")
+    print(f"\n[Инфо] Будет обработано МЛ: {len(routes_list)} (автопоиск через API Advantum без ввода дат)")
     for i, ml in enumerate(routes_list, 1):
         print(f"  {i}. {ml}")
     print()
@@ -83,8 +64,8 @@ def task_export_by_route_numbers() -> None:
         driver = create_driver(config)
         wait = login_to_advantum(driver, config)
 
-        # Экспорт
-        results = export_thermographs(driver, wait, routes_list, config, date_filter=date_range)
+        # Экспорт через нативный API без необходимости указания периода дат
+        results = export_thermographs(driver, wait, routes_list, config, date_filter=None)
 
         # Вывод итогов
         print(f"\n{'=' * 50}")
