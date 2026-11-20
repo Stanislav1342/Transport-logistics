@@ -977,7 +977,14 @@ def create_schedule_copy_without_tariffs(excel_path):
         return None
 
 
-def _get_baseline_store_path(excel_path):
+BASELINE_STORE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schedule_baselines.json')
+
+
+def _get_baseline_store_path(excel_path=None):
+    return BASELINE_STORE_PATH
+
+
+def _get_legacy_baseline_store_path(excel_path):
     folder = os.path.dirname(os.path.abspath(excel_path))
     return os.path.join(folder, '.schedule_baselines.json')
 
@@ -1002,14 +1009,31 @@ def _save_schedule_baseline(excel_path, sheets_baseline):
 
 
 def _load_schedule_baseline(excel_path):
-    """Загружает эталонный состав рейсов для файла графика"""
+    """Загружает эталонный состав рейсов для файла графика (с автоматической миграцией из старой папки)"""
     try:
+        key = os.path.basename(excel_path)
         store_path = _get_baseline_store_path(excel_path)
-        if not os.path.exists(store_path):
-            return None
-        with open(store_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        return data.get(os.path.basename(excel_path))
+        if os.path.exists(store_path):
+            try:
+                with open(store_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if key in data:
+                    return data[key]
+            except Exception:
+                pass
+
+        legacy_path = _get_legacy_baseline_store_path(excel_path)
+        if os.path.exists(legacy_path):
+            try:
+                with open(legacy_path, 'r', encoding='utf-8') as f:
+                    legacy_data = json.load(f)
+                entry = legacy_data.get(key)
+                if entry is not None:
+                    _save_schedule_baseline(excel_path, entry)
+                    return entry
+            except Exception:
+                pass
+        return None
     except Exception:
         return None
 

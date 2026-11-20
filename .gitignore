@@ -19,6 +19,8 @@ env/
 # Credentials & local user DB (НИКОГДА не коммитить!)
 .env
 users_db.json
+schedule_baselines.json
+.schedule_baselines.json
 
 # WebDriver Manager cache
 .wdm/

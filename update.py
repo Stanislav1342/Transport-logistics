@@ -17,6 +17,8 @@ REPO_ZIP_URL = "https://github.com/Stanislav1342/Transport-logistics/archive/ref
 PROTECTED_FILES = {
     ".env",
     "users_db.json",
+    "schedule_baselines.json",
+    ".schedule_baselines.json",
     "РЕЧЬ_ДЛЯ_ПРЕЗЕНТАЦИИ.md",
     "PROJECT_CONTEXT.md",
     "Тарифы.xlsx",
