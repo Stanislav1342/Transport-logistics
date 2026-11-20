@@ -16,12 +16,14 @@ import logging
 import math
 import os
 import re
+import ssl
 import sys
 import time
 import urllib.parse
 from typing import NamedTuple, Dict, Any
 
 import requests
+import requests.adapters
 
 from selenium import webdriver
 from selenium.common.exceptions import (
@@ -575,49 +577,279 @@ def _lookup_indexed_shipment(ml: str, index: dict[str, dict[str, Any]]) -> dict[
     return None
 
 
+def _build_os_ssl_context() -> ssl.SSLContext:
+    """
+    Создает SSLContext на базе системного хранилища сертификатов ОС (включая корневые
+    сертификаты корпоративного прокси в Windows) и при наличии подгружает бандл certifi.
+    """
+    ctx = ssl.create_default_context()
+    if hasattr(ssl, "VERIFY_X509_STRICT"):
+        ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
+    try:
+        import certifi
+
+        ca_bundle = certifi.where()
+        if ca_bundle and os.path.exists(ca_bundle):
+            ctx.load_verify_locations(cafile=ca_bundle)
+    except Exception:
+        pass
+    ctx.check_hostname = True
+    ctx.verify_mode = ssl.CERT_REQUIRED
+    return ctx
+
+
+class _SystemSSLContextAdapter(requests.adapters.HTTPAdapter):
+    """HTTP-адаптер requests, использующий системное хранилище сертификатов ОС."""
+
+    def __init__(self, ssl_context: ssl.SSLContext | None = None, **kwargs: Any):
+        self._ssl_context = ssl_context or _build_os_ssl_context()
+        super().__init__(**kwargs)
+
+    def init_poolmanager(
+        self, connections: int, maxsize: int, block: bool = False, **pool_kwargs: Any
+    ) -> None:
+        pool_kwargs["ssl_context"] = self._ssl_context
+        super().init_poolmanager(connections, maxsize, block=block, **pool_kwargs)
+
+    def proxy_manager_for(self, proxy: str, **proxy_kwargs: Any) -> Any:
+        proxy_kwargs["ssl_context"] = self._ssl_context
+        return super().proxy_manager_for(proxy, **proxy_kwargs)
+
+    def build_connection_pool_key_attributes(
+        self,
+        request: requests.PreparedRequest,
+        verify: Any,
+        cert: Any = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        host_params, pool_kwargs = super().build_connection_pool_key_attributes(
+            request, verify, cert
+        )
+        if verify is True and host_params.get("scheme") == "https":
+            pool_kwargs["ssl_context"] = self._ssl_context
+        return host_params, pool_kwargs
+
+
+class _AdvantumApiClient:
+    """
+    Единый HTTP-клиент Advantum API:
+    1. Сначала выполняет запросы через requests.Session с системным хранилищем сертификатов ОС.
+    2. Если корпоративный прокси/антивирус блокирует TLS на уровне Python (SSLError/ProxyError),
+       мгновенно переключается на same-origin fetch() внутри уже авторизованного браузера.
+    """
+
+    def __init__(
+        self,
+        token: str,
+        base_url: str = "https://atms.advantum.ru",
+        driver: WebDriver | None = None,
+    ):
+        self.token = token
+        self.base_url = base_url.rstrip("/")
+        self.driver = driver
+        self._use_browser_fetch = False
+
+        self.session = requests.Session()
+        self.session.mount("https://", _SystemSSLContextAdapter())
+        self.session.headers.update(
+            {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+        )
+
+    def _browser_fetch_json(
+        self, path: str, params: dict[str, Any] | None = None, timeout: int = 25
+    ) -> tuple[bool, int, Any, bool, str | None]:
+        if not self.driver:
+            return False, 0, None, False, "Браузер недоступен для fallback fetch()"
+
+        rel_path = path if path.startswith("/") else f"/{path}"
+        if params:
+            qs = urllib.parse.urlencode(params)
+            sep = "&" if "?" in rel_path else "?"
+            rel_path = f"{rel_path}{sep}{qs}"
+
+        timeout_ms = min(max(int(timeout * 1000), 1000), 22000)
+
+        try:
+            cur_url = str(getattr(self.driver, "current_url", "") or "")
+            if not cur_url.startswith(self.base_url):
+                self.driver.get(f"{self.base_url}/pre-load.js")
+        except Exception:
+            pass
+
+        async_core = """
+            const url = arguments[0];
+            const token = arguments[1];
+            const timeoutMs = arguments[2];
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
+            try {
+                const resp = await fetch(url, {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': 'Bearer ' + token,
+                        'Accept': 'application/json'
+                    },
+                    signal: controller.signal
+                });
+                const text = await resp.text();
+                let data = null;
+                try { data = text ? JSON.parse(text) : null; } catch (e) {}
+                return {
+                    ok: !!resp.ok,
+                    status: Number(resp.status || 0),
+                    data: data,
+                    timeout: false,
+                    error: resp.ok ? null : ('HTTP ' + resp.status)
+                };
+            } catch (e) {
+                const msg = String(e || 'Fetch failed');
+                const isTimeout = Boolean(e && (e.name === 'AbortError' || msg.includes('AbortError')));
+                return {
+                    ok: false,
+                    status: 0,
+                    data: null,
+                    timeout: isTimeout,
+                    error: msg
+                };
+            } finally {
+                clearTimeout(timer);
+            }
+        """
+
+        try:
+            if isinstance(self.driver, DirectCDPDriver) or not hasattr(
+                self.driver, "execute_async_script"
+            ):
+                script = f"return (async function() {{ {async_core} }})();"
+                res = self.driver.execute_script(script, rel_path, self.token, timeout_ms)
+            else:
+                script = (
+                    "const done = arguments[arguments.length - 1];\n"
+                    f"(async function() {{ {async_core} }})().then(done).catch(err => "
+                    "done({ok: false, status: 0, data: null, timeout: false, error: String(err)}));"
+                )
+                res = self.driver.execute_async_script(script, rel_path, self.token, timeout_ms)
+
+            if not isinstance(res, dict):
+                return False, 0, None, False, f"Некорректный ответ browser fetch: {type(res).__name__}"
+            return (
+                bool(res.get("ok")),
+                int(res.get("status") or 0),
+                res.get("data"),
+                bool(res.get("timeout")),
+                res.get("error"),
+            )
+        except Exception as e:
+            err_str = str(e)
+            is_to = "timed out" in err_str.lower() or "timeout" in err_str.lower()
+            return False, 0, None, is_to, err_str
+
+    def get_json(
+        self, path: str, params: dict[str, Any] | None = None, timeout: int = 30
+    ) -> tuple[bool, int, Any, bool, str | None]:
+        """Возвращает кортеж (ok, status_code, json_data, is_timeout, error_msg)."""
+        if self._use_browser_fetch:
+            return self._browser_fetch_json(path, params=params, timeout=timeout)
+
+        rel_path = path if path.startswith("/") else f"/{path}"
+        url = f"{self.base_url}{rel_path}"
+        try:
+            resp = self.session.get(url, params=params, timeout=timeout)
+            if resp.ok:
+                try:
+                    return True, resp.status_code, resp.json(), False, None
+                except Exception as e:
+                    return False, resp.status_code, None, False, f"Ошибка JSON: {e}"
+            return False, resp.status_code, None, False, f"HTTP {resp.status_code}"
+        except requests.exceptions.Timeout as exc:
+            return False, 0, None, True, str(exc)
+        except (requests.exceptions.SSLError, requests.exceptions.ProxyError) as exc:
+            if self.driver is not None:
+                logger.warning(
+                    "[API] Прямой Python-запрос к Advantum заблокирован TLS/прокси (%s). Переключаемся на browser fetch().",
+                    exc,
+                )
+                print("[API] Корпоративный прокси/TLS: переключение запросов на браузерный fetch()...")
+                self._use_browser_fetch = True
+                return self._browser_fetch_json(path, params=params, timeout=timeout)
+            return False, 0, None, False, str(exc)
+        except requests.exceptions.RequestException as exc:
+            return False, 0, None, False, str(exc)
+
+
 def _fetch_shipments_chunk_http(
-    session: requests.Session,
+    api_client: _AdvantumApiClient | requests.Session,
     chunk_from: datetime.date,
     chunk_to: datetime.date,
     base_url: str = "https://atms.advantum.ru",
 ) -> list[dict[str, Any]]:
     """
     Запрашивает список рейсов через GET /api/v1/shipments за интервал chunk_from..chunk_to.
-    При таймауте на многодневном интервале автоматически дробит окно пополам (до 1 дня).
+    При таймауте или серверной перегрузке многодневного интервала дробит окно пополам (до 1 дня).
     """
     params = {
         "scheduledStartInstantFrom": f"{chunk_from.isoformat()}T00:00:00.000Z",
         "scheduledStartInstantTo": f"{chunk_to.isoformat()}T23:59:59.999Z",
     }
-    try:
-        resp = session.get(f"{base_url}/api/v1/shipments", params=params, timeout=30)
-        if resp.ok:
-            data = resp.json()
-            return data if isinstance(data, list) else []
+
+    if isinstance(api_client, _AdvantumApiClient):
+        ok, status_code, data, is_timeout, err_msg = api_client.get_json(
+            "/api/v1/shipments", params=params, timeout=30
+        )
+    else:
+        ok, status_code, data, is_timeout, err_msg = False, 0, None, False, None
+        try:
+            resp = api_client.get(
+                f"{base_url.rstrip('/')}/api/v1/shipments", params=params, timeout=30
+            )
+            status_code = resp.status_code
+            if resp.ok:
+                ok = True
+                data = resp.json()
+            else:
+                err_msg = f"HTTP {resp.status_code}"
+        except requests.exceptions.Timeout as exc:
+            is_timeout = True
+            err_msg = str(exc)
+        except requests.exceptions.RequestException as exc:
+            err_msg = str(exc)
+
+    if ok:
+        return data if isinstance(data, list) else []
+
+    span_days = (chunk_to - chunk_from).days
+    should_split = span_days > 0 and (
+        is_timeout or status_code in (400, 408, 500, 502, 503, 504)
+    )
+    if should_split:
+        mid = chunk_from + datetime.timedelta(days=span_days // 2)
+        reason = err_msg or f"HTTP {status_code}"
+        logger.info(
+            "[API] Окно %s..%s (%s), дробим на 2 под-окна...",
+            chunk_from,
+            chunk_to,
+            reason,
+        )
+        part1 = _fetch_shipments_chunk_http(api_client, chunk_from, mid, base_url=base_url)
+        part2 = _fetch_shipments_chunk_http(
+            api_client, mid + datetime.timedelta(days=1), chunk_to, base_url=base_url
+        )
+        return part1 + part2
+
+    if status_code:
         logger.warning(
             "[API] GET /api/v1/shipments (%s..%s) вернул статус %s",
             chunk_from,
             chunk_to,
-            resp.status_code,
+            status_code,
         )
-        return []
-    except (requests.exceptions.Timeout, requests.exceptions.RequestException) as exc:
-        span_days = (chunk_to - chunk_from).days
-        if span_days > 0:
-            mid = chunk_from + datetime.timedelta(days=span_days // 2)
-            logger.info(
-                "[API] Таймаут чанка %s..%s (%s), дробим на 2 под-окна...",
-                chunk_from,
-                chunk_to,
-                exc,
-            )
-            part1 = _fetch_shipments_chunk_http(session, chunk_from, mid, base_url=base_url)
-            part2 = _fetch_shipments_chunk_http(
-                session, mid + datetime.timedelta(days=1), chunk_to, base_url=base_url
-            )
-            return part1 + part2
-        logger.warning("[API] Ошибка запроса /api/v1/shipments за %s: %s", chunk_from, exc)
-        return []
+    else:
+        logger.warning(
+            "[API] Ошибка запроса /api/v1/shipments за %s..%s: %s",
+            chunk_from,
+            chunk_to,
+            err_msg,
+        )
+    return []
 
 
 def find_shipments_by_ml_api(
@@ -626,6 +858,8 @@ def find_shipments_by_ml_api(
     date_filter: tuple[datetime.date, datetime.date] | None = None,
     max_lookback_days: int = 60,
     base_url: str = "https://atms.advantum.ru",
+    driver: WebDriver | None = None,
+    api_client: _AdvantumApiClient | None = None,
 ) -> dict[str, dict[str, Any]]:
     """
     Каскадный поиск рейсов по номерам МЛ (routeNum) или ID рейсов через нативный REST API Advantum.
@@ -636,8 +870,7 @@ def find_shipments_by_ml_api(
     """
     base_url = base_url.rstrip("/")
     index: dict[str, dict[str, Any]] = {}
-    session = requests.Session()
-    session.headers.update({"Authorization": f"Bearer {token}", "Accept": "application/json"})
+    client = api_client or _AdvantumApiClient(token=token, base_url=base_url, driver=driver)
 
     normalized_targets = [normalize_ml_number(ml) for ml in ml_numbers if ml.strip()]
     if not normalized_targets:
@@ -646,15 +879,12 @@ def find_shipments_by_ml_api(
     # 1. Прямая проверка, если пользователь передал внутренние ID рейса (7-9 цифр)
     for norm in normalized_targets:
         if _is_pure_shipment_id(norm):
-            try:
-                r = session.get(f"{base_url}/api/v1/shipments/{norm}", timeout=15)
-                if r.ok:
-                    item = r.json()
-                    if isinstance(item, dict) and item.get("id"):
-                        _index_shipment_record(item, index)
-                        print(f"[API] Рейс ID {norm} найден напрямую (МЛ: {item.get('routeNum', '—')}).")
-            except Exception as e:
-                logger.debug("Ошибка прямого запроса ID %s: %s", norm, e)
+            ok, _, item, _, err_msg = client.get_json(f"/api/v1/shipments/{norm}", timeout=15)
+            if ok and isinstance(item, dict) and item.get("id"):
+                _index_shipment_record(item, index)
+                print(f"[API] Рейс ID {norm} найден напрямую (МЛ: {item.get('routeNum', '—')}).")
+            elif err_msg:
+                logger.debug("Ошибка прямого запроса ID %s: %s", norm, err_msg)
 
     def _all_found() -> bool:
         return all(_lookup_indexed_shipment(t, index) is not None for t in normalized_targets)
@@ -685,7 +915,7 @@ def find_shipments_by_ml_api(
             f"[API] Поиск МЛ в периоде {c_from.strftime('%d.%m.%Y')} — {c_to.strftime('%d.%m.%Y')} "
             f"(окно {w_idx}/{len(windows)})..."
         )
-        items = _fetch_shipments_chunk_http(session, c_from, c_to, base_url=base_url)
+        items = _fetch_shipments_chunk_http(client, c_from, c_to, base_url=base_url)
         for item in items:
             _index_shipment_record(item, index)
 
@@ -714,13 +944,12 @@ def fetch_shipments_api_by_interval(
     """
     try:
         token = get_advantum_bearer_token(driver)
-        session = requests.Session()
-        session.headers.update({"Authorization": f"Bearer {token}", "Accept": "application/json"})
+        client = _AdvantumApiClient(token=token, driver=driver)
         index: dict[str, dict[str, Any]] = {}
         cur_from = date_from
         while cur_from <= date_to:
             cur_to = min(cur_from + datetime.timedelta(days=3), date_to)
-            items = _fetch_shipments_chunk_http(session, cur_from, cur_to)
+            items = _fetch_shipments_chunk_http(client, cur_from, cur_to)
             for item in items:
                 r_num = item.get("routeNum")
                 if r_num:
@@ -1220,34 +1449,34 @@ def fetch_and_render_chart_html(
     token: str,
     shipment_hint: dict[str, Any] | None = None,
     base_url: str = "https://atms.advantum.ru",
+    driver: WebDriver | None = None,
+    api_client: _AdvantumApiClient | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """
     Запрашивает карточку рейса и сырые данные температурного графика через API Advantum
     и возвращает (html_content, shipment_full).
     """
     base_url = base_url.rstrip("/")
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    client = api_client or _AdvantumApiClient(token=token, base_url=base_url, driver=driver)
 
     shipment_full = dict(shipment_hint or {})
-    try:
-        r_ship = requests.get(f"{base_url}/api/v1/shipments/{shipment_id}", headers=headers, timeout=20)
-        if r_ship.ok:
-            data = r_ship.json()
-            if isinstance(data, dict):
-                shipment_full.update(data)
-    except Exception as e:
-        logger.debug("Ошибка получения карточки /api/v1/shipments/%s: %s", shipment_id, e)
+    ok_ship, _, data_ship, _, err_ship = client.get_json(
+        f"/api/v1/shipments/{shipment_id}", timeout=20
+    )
+    if ok_ship and isinstance(data_ship, dict):
+        shipment_full.update(data_ship)
+    elif err_ship:
+        logger.debug("Ошибка получения карточки /api/v1/shipments/%s: %s", shipment_id, err_ship)
 
-    r_chart = requests.get(
-        f"{base_url}/api/v1/shipment-temperature-chart/with-different-settings/{shipment_id}",
+    ok_chart, status_chart, chart_data, _, err_chart = client.get_json(
+        f"/api/v1/shipment-temperature-chart/with-different-settings/{shipment_id}",
         params={"useAggregatorSettings": "false"},
-        headers=headers,
         timeout=25,
     )
-    if not r_chart.ok:
-        raise RuntimeError(f"Ошибка API графика Advantum: HTTP {r_chart.status_code}")
+    if not ok_chart:
+        detail = f"HTTP {status_chart}" if status_chart else (err_chart or "неизвестная ошибка")
+        raise RuntimeError(f"Ошибка API графика Advantum: {detail}")
 
-    chart_data = r_chart.json()
     if not isinstance(chart_data, dict):
         raise ValueError("Некорректный ответ API графика Advantum")
 
@@ -1261,6 +1490,8 @@ def export_single_ml_via_api(
     shipment_info: dict[str, Any],
     config: Config,
     printer: PdfPrinterSession,
+    driver: WebDriver | None = None,
+    api_client: _AdvantumApiClient | None = None,
 ) -> ExportResult:
     """
     Прямая выгрузка термографика одного МЛ в PDF по данным REST API Advantum без UI-кликов.
@@ -1274,6 +1505,8 @@ def export_single_ml_via_api(
         shipment_id=shipment_id,
         token=token,
         shipment_hint=shipment_info,
+        driver=driver,
+        api_client=api_client,
     )
 
     route_display = normalize_ml_number(str(shipment_full.get("routeNum") or norm_ml))
@@ -1763,6 +1996,7 @@ def export_thermographs(
     results: list[ExportResult] = []
     token = ""
     api_shipments: dict[str, dict[str, Any]] = {}
+    api_client: _AdvantumApiClient | None = None
     ui_ready = False
 
     # 1. Извлекаем Bearer-токен из авторизованного браузера и останавливаем тяжелые фоновые запросы SPA
@@ -1777,12 +2011,15 @@ def export_thermographs(
 
     # 2. Каскадный поиск всех запрошенных МЛ через REST API Advantum (без необходимости ввода дат)
     if token:
+        api_client = _AdvantumApiClient(token=token, driver=driver)
         print("[API] Поиск маршрутных листов через нативный REST API Advantum...")
         try:
             api_shipments = find_shipments_by_ml_api(
                 token=token,
                 ml_numbers=ml_numbers,
                 date_filter=date_filter,
+                driver=driver,
+                api_client=api_client,
             )
             print(f"[API] Поиск завершен: найдено {len(api_shipments)}/{len(ml_numbers)} МЛ.")
         except Exception as e:
@@ -1831,6 +2068,8 @@ def export_thermographs(
                             shipment_info=shipment_info,
                             config=config,
                             printer=printer,
+                            driver=driver,
+                            api_client=api_client,
                         )
                     except ValueError as ve:
                         # Нет показаний датчиков или пустой график — UI здесь также пуст
