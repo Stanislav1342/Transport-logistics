@@ -73,7 +73,7 @@ except ImportError:
 
 # ─── Настройка FastAPI и CORS ─────────────────────────────────────────────────
 
-PORTAL_VERSION = "1.9"
+PORTAL_VERSION = "1.10"
 app = FastAPI(title="ПУЛЬС — Транспортная логистика", version=f"v{PORTAL_VERSION}")
 
 ALLOWED_ORIGIN_REGEX = (
@@ -816,7 +816,6 @@ async def upload_file(
         with open(temp_path, "wb") as f:
             shutil.copyfileobj(file.file, f)
 
-        base_name = os.path.splitext(safe_name)[0]
         schedules_dir = get_schedules_dir()
 
         # Парсим пользовательский диапазон дат, если передан с веб-интерфейса
@@ -860,9 +859,14 @@ async def upload_file(
                 if (end_dt and end_dt >= final_start)
                 else (final_start + datetime.timedelta(days=6))
             )
-            date_range_str = f"{final_start.strftime('%d.%m')} - {final_end.strftime('%d.%m.%Y')}"
+            if final_start.date() == final_end.date():
+                date_range_str = final_start.strftime("%d.%m.%Y")
+            else:
+                date_range_str = (
+                    f"{final_start.strftime('%d.%m.%Y')} - {final_end.strftime('%d.%m.%Y')}"
+                )
 
-            clean_name = base_name.replace(" (готовый)", "")
+            clean_name = "График отгрузки филиалов неделя"
             out_filename = f"{clean_name} ({date_range_str}).xlsx"
             target_path = os.path.join(schedules_dir, out_filename)
 
