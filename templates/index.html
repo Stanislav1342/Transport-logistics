@@ -959,6 +959,13 @@
 
     <!-- Правая рабочая область -->
     <main class="main-area">
+      <div id="portal-update-banner" style="display: none; align-items: center; justify-content: space-between; gap: 12px; background: #eff6ff; border: 1px solid #bfdbfe; border-left: 4px solid var(--primary); color: #1e3a8a; border-radius: 10px; padding: 10px 16px; margin-bottom: 16px; font-size: 13.5px;">
+        <div>
+          🔄 <b>Доступна новая версия портала (<span id="portal-update-ver"></span>).</b>
+          Страница обновится автоматически сразу после завершения текущей операции.
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" onclick="forcePortalReload()">Обновить сейчас</button>
+      </div>
 
       <!-- ===================================================== -->
       <!-- СЕКЦИЯ: ГЛАВНАЯ                                       -->
@@ -970,7 +977,7 @@
             <p>Единый корпоративный портал автоматизации транспортной логистики ФК «ПУЛЬС» (РЦ Черная Грязь)</p>
           </div>
           <span class="badge" id="portal-version-badge">
-            <span class="badge-dot"></span> Версия 1.15
+            <span class="badge-dot"></span> Версия 1.16
           </span>
         </div>
 
@@ -1867,10 +1874,123 @@
       }, 15000);
     }
 
+    // =========================================================================
+    // АВТООБНОВЛЕНИЕ СТРАНИЦЫ ПРИ ВЫХОДЕ НОВОЙ ВЕРСИИ ПОРТАЛА
+    // =========================================================================
+    let pendingServerVersion = null;
+    let pendingReloadWatcher = null;
+
+    function getClientPortalVersion() {
+      const badge = document.getElementById('portal-version-badge');
+      const m = (badge?.textContent || '').match(/(\d+\.\d+(?:\.\d+)?)/);
+      return m ? m[1] : '1.16';
+    }
+
+    function isPortalBusy() {
+      if (typeof pollInterval !== 'undefined' && pollInterval) return true;
+      if (typeof etrnPollInterval !== 'undefined' && etrnPollInterval) return true;
+      if (document.querySelector('.modal-backdrop.active')) return true;
+
+      const busyBtnIds = ['processBtn', 'processOrdersBtn', 'btn-start', 'btn-etrn-start-auto', 'btn-etrn-start-manual'];
+      for (const id of busyBtnIds) {
+        const el = document.getElementById(id);
+        if (el && el.disabled && el.offsetParent !== null) return true;
+      }
+
+      if (window.authToken) {
+        const mlInp = document.getElementById('ml-input');
+        if (mlInp && mlInp.value.trim().length > 0) return true;
+      } else {
+        const pinInp = document.getElementById('modal-pin-input');
+        if (pinInp && pinInp.value.trim().length > 0) return true;
+      }
+      return false;
+    }
+
+    function showPortalUpdateBanner(newVersion) {
+      const banner = document.getElementById('portal-update-banner');
+      const verSpan = document.getElementById('portal-update-ver');
+      if (verSpan) verSpan.textContent = newVersion ? `v${newVersion}` : '';
+      if (banner) banner.style.display = 'flex';
+    }
+
+    function forcePortalReload(targetVer) {
+      const ver = targetVer || pendingServerVersion || '';
+      const alreadyTried = ver && sessionStorage.getItem('puls_reloaded_ver') === ver;
+      if (ver) {
+        sessionStorage.setItem('puls_reloaded_ver', ver);
+      }
+      if (alreadyTried) {
+        window.location.href = '/?v=' + encodeURIComponent(ver) + '&_t=' + Date.now();
+      } else {
+        window.location.reload();
+      }
+    }
+
+    function startPendingReloadWatcher() {
+      if (pendingReloadWatcher) return;
+      pendingReloadWatcher = setInterval(() => {
+        if (!pendingServerVersion) {
+          clearInterval(pendingReloadWatcher);
+          pendingReloadWatcher = null;
+          return;
+        }
+        if (!isPortalBusy()) {
+          clearInterval(pendingReloadWatcher);
+          pendingReloadWatcher = null;
+          forcePortalReload(pendingServerVersion);
+        }
+      }, 10000);
+    }
+
+    async function checkPortalVersion() {
+      try {
+        const resp = await fetch('/api/status?_t=' + Date.now(), { cache: 'no-store' });
+        if (!resp.ok) return;
+        const data = await resp.json().catch(() => null);
+        if (!data || !data.version) return;
+
+        const clientVer = getClientPortalVersion();
+        const serverVer = String(data.version);
+        if (serverVer === clientVer) {
+          pendingServerVersion = null;
+          sessionStorage.removeItem('puls_reloaded_ver');
+          return;
+        }
+
+        pendingServerVersion = serverVer;
+        if (sessionStorage.getItem('puls_reloaded_ver') === serverVer) {
+          showPortalUpdateBanner(serverVer);
+          return;
+        }
+
+        if (!isPortalBusy()) {
+          sessionStorage.setItem('puls_reloaded_ver', serverVer);
+          window.location.reload();
+        } else {
+          showPortalUpdateBanner(serverVer);
+          startPendingReloadWatcher();
+        }
+      } catch (e) {
+        // Сервер временно перезагружается — повторим на следующем тике
+      }
+    }
+
+    function initPortalAutoUpdate() {
+      setTimeout(checkPortalVersion, 3000);
+      setInterval(checkPortalVersion, 60000);
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+          checkPortalVersion();
+        }
+      });
+    }
+
     window.addEventListener('DOMContentLoaded', () => {
       setEtrnPreset('yesterday');
       setEtrnManualPreset('yesterday');
       initIdleTracker();
+      initPortalAutoUpdate();
       updateMlCount();
 
       const savedLogin = localStorage.getItem('puls_last_login') || '';

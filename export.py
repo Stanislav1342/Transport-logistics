@@ -1973,6 +1973,74 @@ def _compute_nice_ticks(y_lo: float, y_hi: float, target_count: int = 8) -> list
     return ticks
 
 
+def _format_temp_short(val: float) -> str:
+    """Форматирует число температуры для подписи диапазона (+2, +15, -18, 0)."""
+    f = float(val)
+    if abs(f) < 1e-6:
+        return "0"
+    if abs(f - round(f)) < 1e-6:
+        i = int(round(f))
+        return f"+{i}" if i > 0 else str(i)
+    return f"+{f:g}" if f > 0 else f"{f:g}"
+
+
+def _get_wholesale_dual_regime(
+    shipment_full: dict[str, Any],
+    sensors_by_sec: dict[int, list[dict[str, Any]]],
+    active_sections: list[int],
+    sec1_t_min: float | None,
+    sec1_t_max: float | None,
+    sec1_restr: dict[str, Any],
+    chart_data: dict[str, Any],
+) -> tuple[float, float, dict[str, Any]] | None:
+    """
+    Возвращает (t2_min, t2_max, secondSectionRestrictions) для отрисовки второй
+    зелёной полосы нормы СТРОГО для одноотсечных оптовых рейсов с двумя разными
+    температурными режимами (как МСК554534).
+    """
+    # 1. Одноотсечная машина (нет датчиков от 2-го и других отсеков, даже пустых)
+    if set(sensors_by_sec.keys()) != {1} or active_sections != [1]:
+        return None
+
+    # 2. Строго оптовый рейс
+    ct_id = shipment_full.get("commercialTypeId")
+    ct_name = str(shipment_full.get("commercialTypeName") or "").lower()
+    if not (ct_id == 6 or "опт" in ct_name):
+        return None
+
+    # 3. Заданы два разных валидных температурных режима
+    t2_min = shipment_full.get("secondChamberTemperatureMin")
+    if t2_min is None:
+        t2_min = shipment_full.get("secondChamberTemperatureMinInCelsius")
+    t2_max = shipment_full.get("secondChamberTemperatureMax")
+    if t2_max is None:
+        t2_max = shipment_full.get("secondChamberTemperatureMaxInCelsius")
+
+    if not (
+        isinstance(sec1_t_min, (int, float))
+        and not isinstance(sec1_t_min, bool)
+        and isinstance(sec1_t_max, (int, float))
+        and not isinstance(sec1_t_max, bool)
+        and isinstance(t2_min, (int, float))
+        and not isinstance(t2_min, bool)
+        and isinstance(t2_max, (int, float))
+        and not isinstance(t2_max, bool)
+    ):
+        return None
+
+    f1_min, f1_max = float(sec1_t_min), float(sec1_t_max)
+    f2_min, f2_max = float(t2_min), float(t2_max)
+    if f2_min >= f2_max or (f1_min == f2_min and f1_max == f2_max):
+        return None
+
+    # 4. Нет плечевых интервалов от самого Advantum
+    if sec1_restr.get("sectionTemperatureLegControlParams"):
+        return None
+
+    sec2_restr = chart_data.get("secondSectionRestrictions") or {}
+    return f2_min, f2_max, sec2_restr
+
+
 def _build_compartment_svg(
     sec_sensors: list[dict[str, Any]],
     t_min: float | None,
@@ -1981,6 +2049,7 @@ def _build_compartment_svg(
     start_dt: datetime.datetime,
     finish_dt: datetime.datetime,
     tz_obj: datetime.timezone,
+    extra_regimes: list[tuple[float, float, dict[str, Any] | None]] | None = None,
 ) -> tuple[str, float | None, float | None]:
     """Строит SVG-график температуры одного отсека в точном стиле Advantum."""
     width = 960
@@ -2015,21 +2084,36 @@ def _build_compartment_svg(
     temp_max_val = max(all_vals)
 
     domain_vals = list(all_vals)
-    tol = restr.get("toleranceInDegreesCelsius")
-    dev_upper = restr.get("sensorDeviationUpper")
-    dev_lower = restr.get("sensorDeviationLower")
-    if isinstance(t_min, (int, float)):
-        domain_vals.append(float(t_min))
-        if isinstance(tol, (int, float)):
-            domain_vals.append(float(t_min) - float(tol))
-        if isinstance(dev_lower, (int, float)):
-            domain_vals.append(float(t_min) - float(dev_lower) - (float(tol) if isinstance(tol, (int, float)) else 0.0))
-    if isinstance(t_max, (int, float)):
-        domain_vals.append(float(t_max))
-        if isinstance(tol, (int, float)):
-            domain_vals.append(float(t_max) + float(tol))
-        if isinstance(dev_upper, (int, float)):
-            domain_vals.append(float(t_max) + float(dev_upper) + (float(tol) if isinstance(tol, (int, float)) else 0.0))
+
+    def _extend_domain(r_min: float | None, r_max: float | None, r_restr: dict[str, Any] | None) -> None:
+        r_dict = r_restr if r_restr is not None else restr
+        r_tol = r_dict.get("toleranceInDegreesCelsius")
+        r_dev_up = r_dict.get("sensorDeviationUpper")
+        r_dev_lo = r_dict.get("sensorDeviationLower")
+        if isinstance(r_min, (int, float)):
+            domain_vals.append(float(r_min))
+            if isinstance(r_tol, (int, float)):
+                domain_vals.append(float(r_min) - float(r_tol))
+            if isinstance(r_dev_lo, (int, float)):
+                domain_vals.append(
+                    float(r_min)
+                    - float(r_dev_lo)
+                    - (float(r_tol) if isinstance(r_tol, (int, float)) else 0.0)
+                )
+        if isinstance(r_max, (int, float)):
+            domain_vals.append(float(r_max))
+            if isinstance(r_tol, (int, float)):
+                domain_vals.append(float(r_max) + float(r_tol))
+            if isinstance(r_dev_up, (int, float)):
+                domain_vals.append(
+                    float(r_max)
+                    + float(r_dev_up)
+                    + (float(r_tol) if isinstance(r_tol, (int, float)) else 0.0)
+                )
+
+    _extend_domain(t_min, t_max, restr)
+    for ex_min, ex_max, ex_restr in extra_regimes or []:
+        _extend_domain(ex_min, ex_max, ex_restr if ex_restr is not None else restr)
 
     raw_lo = min(domain_vals)
     raw_hi = max(domain_vals)
@@ -2076,15 +2160,25 @@ def _build_compartment_svg(
             f'</g>'
         )
 
-    def _draw_regime_block(r_min: float | None, r_max: float | None, x_start: float = 0.0, x_w: float | None = None) -> None:
+    def _draw_regime_block(
+        r_min: float | None,
+        r_max: float | None,
+        x_start: float = 0.0,
+        x_w: float | None = None,
+        regime_restr: dict[str, Any] | None = None,
+    ) -> None:
         if not (isinstance(r_min, (int, float)) and isinstance(r_max, (int, float))):
             return
+        active_restr = regime_restr if regime_restr is not None else restr
+        r_tol = active_restr.get("toleranceInDegreesCelsius")
+        r_dev_up = active_restr.get("sensorDeviationUpper")
+        r_dev_lo = active_restr.get("sensorDeviationLower")
         fmin, fmax = float(r_min), float(r_max)
-        if isinstance(tol, (int, float)):
-            ftol = float(tol)
-            if isinstance(dev_upper, (int, float)) or isinstance(dev_lower, (int, float)):
-                du = float(dev_upper or 0.0)
-                dl = float(dev_lower or 0.0)
+        if isinstance(r_tol, (int, float)):
+            ftol = float(r_tol)
+            if isinstance(r_dev_up, (int, float)) or isinstance(r_dev_lo, (int, float)):
+                du = float(r_dev_up or 0.0)
+                dl = float(r_dev_lo or 0.0)
                 _draw_band(fmin - dl - ftol, fmax + du + ftol, "#fef3c7", "#ffa300", x_start, x_w)
             if ftol < 0:
                 _draw_band(fmin, fmax, "#F3FFCC", "#00CC00", x_start, x_w)
@@ -2099,6 +2193,7 @@ def _build_compartment_svg(
     valid_legs = [
         lg for lg in leg_params if lg.get("start") and lg.get("finish") and _parse_iso_utc(lg.get("start")) and _parse_iso_utc(lg.get("finish"))
     ]
+    drawn_band_labels: list[tuple[float, float]] = []
     if valid_legs:
         valid_legs.sort(key=lambda lg: _parse_iso_utc(lg["start"]))  # type: ignore[arg-type]
         for lg in valid_legs:
@@ -2110,7 +2205,13 @@ def _build_compartment_svg(
                 if xf > xs:
                     _draw_regime_block(lg.get("temperatureMin"), lg.get("temperatureMax"), xs, xf - xs)
     else:
-        _draw_regime_block(t_min, t_max)
+        _draw_regime_block(t_min, t_max, regime_restr=restr)
+        if extra_regimes:
+            if isinstance(t_min, (int, float)) and isinstance(t_max, (int, float)):
+                drawn_band_labels.append((float(t_min), float(t_max)))
+            for ex_min, ex_max, ex_restr in extra_regimes:
+                _draw_regime_block(ex_min, ex_max, regime_restr=ex_restr if ex_restr is not None else restr)
+                drawn_band_labels.append((float(ex_min), float(ex_max)))
 
     # 2. Сетка и метки оси Y
     for tick in _compute_nice_ticks(y_lo, y_hi):
@@ -2152,6 +2253,15 @@ def _build_compartment_svg(
     svg_parts.append(
         f'<line x1="0" y1="{plot_h}" x2="{plot_w}" y2="{plot_h}" stroke="#475569" stroke-width="1.2" />'
     )
+
+    if drawn_band_labels:
+        for b_min, b_max in drawn_band_labels:
+            y_mid = (y_px(b_min) + y_px(b_max)) / 2.0 + 4.0
+            lbl = f"{_format_temp_short(b_min)}..{_format_temp_short(b_max)} °C"
+            svg_parts.append(
+                f'<text x="{plot_w - 6:.2f}" y="{y_mid:.2f}" text-anchor="end" '
+                f'font-size="10.5" font-weight="600" fill="#166534">{html_lib.escape(lbl)}</text>'
+            )
 
     # 4. Разрывы данных > 60 минут ("нет показаний") и кривые датчиков
     gap_threshold_sec = 3600.0
@@ -2278,8 +2388,28 @@ def build_advantum_print_html(shipment_full: dict[str, Any], chart_data: dict[st
                 t_max = shipment_full.get("secondChamberTemperatureMaxInCelsius")
             restr = chart_data.get("secondSectionRestrictions") or {}
 
+        dual_regime = None
+        if sec_num == 1:
+            dual_regime = _get_wholesale_dual_regime(
+                shipment_full=shipment_full,
+                sensors_by_sec=sensors_by_sec,
+                active_sections=active_sections,
+                sec1_t_min=t_min,
+                sec1_t_max=t_max,
+                sec1_restr=restr,
+                chart_data=chart_data,
+            )
+        extra_regimes = [dual_regime] if dual_regime else None
+
         svg_markup, min_temp, max_temp = _build_compartment_svg(
-            sec_sensors, t_min, t_max, restr, start_dt, finish_dt, tz_obj
+            sec_sensors,
+            t_min,
+            t_max,
+            restr,
+            start_dt,
+            finish_dt,
+            tz_obj,
+            extra_regimes=extra_regimes,
         )
         if not svg_markup:
             continue
@@ -2288,7 +2418,16 @@ def build_advantum_print_html(shipment_full: dict[str, Any], chart_data: dict[st
         has_violation = any(bool(sen.get("hasViolation")) for sen in sec_sensors)
         min_temp_str = f"{min_temp:.1f}" if min_temp is not None else ""
         max_temp_str = f"{max_temp:.1f}" if max_temp is not None else ""
-        bounds_str = f"{t_min if t_min is not None else ''} {t_max if t_max is not None else ''}".strip()
+        if dual_regime is not None and t_min is not None and t_max is not None:
+            pairs = sorted(
+                [(float(t_min), float(t_max)), (dual_regime[0], dual_regime[1])],
+                key=lambda p: p[0],
+            )
+            bounds_str = " / ".join(
+                f"{_format_temp_short(a)}..{_format_temp_short(b)} °C" for a, b in pairs
+            )
+        else:
+            bounds_str = f"{t_min if t_min is not None else ''} {t_max if t_max is not None else ''}".strip()
 
         legend_items: list[str] = []
         for s_i, sen in enumerate(sec_sensors):

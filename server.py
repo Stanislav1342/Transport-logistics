@@ -36,7 +36,7 @@ from typing import Any, Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import uvicorn
@@ -72,7 +72,7 @@ except ImportError:
 
 # ─── Настройка FastAPI и CORS ─────────────────────────────────────────────────
 
-PORTAL_VERSION = "1.15"
+PORTAL_VERSION = "1.16"
 app = FastAPI(title="ПУЛЬС — Транспортная логистика", version=f"v{PORTAL_VERSION}")
 
 ALLOWED_ORIGIN_REGEX = (
@@ -1868,7 +1868,14 @@ async def serve_index():
         raise HTTPException(status_code=404, detail="Файл шаблона index.html не найден")
     with open(index_path, "r", encoding="utf-8") as f:
         content = f.read()
-    return HTMLResponse(content)
+    return HTMLResponse(
+        content,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @app.post("/api/tasks")
@@ -2153,13 +2160,19 @@ async def send_thermo_email(task_id: str, req: ThermoEmailRequest, request: Requ
 async def server_status():
     with _JOBS_LOCK:
         total_jobs = len(jobs_db)
-    return {
-        "status": "online",
-        "version": PORTAL_VERSION,
-        "queue_size": job_queue.qsize(),
-        "total_jobs": total_jobs,
-        "thermo_workers": THERMO_WORKERS,
-    }
+    return JSONResponse(
+        content={
+            "status": "online",
+            "version": PORTAL_VERSION,
+            "queue_size": job_queue.qsize(),
+            "total_jobs": total_jobs,
+            "thermo_workers": THERMO_WORKERS,
+        },
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
 
 
 # ==============================================================================
