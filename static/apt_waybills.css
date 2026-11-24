@@ -1,10 +1,11 @@
 /* ==========================================================================
-   Стили раздела «АПТ → Маршрутные листы» и админ-очереди дообучения (v1.17)
+   Стили раздела «АПТ → Маршрутные листы» и админ-очереди дообучения (v1.20)
    Совместимы с корпоративной палитрой «ПУЛЬС — Транспортная логистика».
    ========================================================================== */
 
 .main-area.wide-mode {
-  max-width: 1480px;
+  max-width: 1680px;
+  width: 100%;
 }
 
 .apt-sr-only {
@@ -256,18 +257,11 @@
   box-shadow: var(--shadow-sm);
 }
 
-/* ─── Рабочая область из 2 панелей ────────────────────────── */
+/* ─── Одноколоночная компоновка: крупное окно сверху + замечания снизу ─── */
 .apt-workspace-grid {
-  display: grid;
-  grid-template-columns: minmax(460px, 1.35fr) minmax(350px, 1fr);
-  gap: 18px;
-  align-items: start;
-}
-
-@media (max-width: 1080px) {
-  .apt-workspace-grid {
-    grid-template-columns: 1fr;
-  }
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .apt-pane-card {
@@ -282,12 +276,12 @@
   position: relative;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: #0f172a0d;
+  background: #f8fafc;
   overflow: hidden;
   display: flex;
   justify-content: center;
   align-items: center;
-  min-height: 240px;
+  min-height: 300px;
 }
 
 .apt-canvas-stage canvas {
@@ -297,6 +291,45 @@
   height: auto;
   cursor: default;
   touch-action: none;
+}
+
+.apt-finalize-banner {
+  margin-bottom: 12px;
+  padding: 11px 14px;
+  border-radius: 9px;
+  background: #f0fdf4;
+  border: 1px solid #86efac;
+  color: #166534;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.apt-q-guide-box {
+  background: #f8fafc;
+  border: 1px solid var(--border-light);
+  border-left: 4px solid var(--primary);
+  border-radius: 10px;
+  padding: 14px 18px;
+  margin-bottom: 18px;
+}
+
+.apt-q-guide-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--primary);
+  margin-bottom: 6px;
+}
+
+.apt-q-guide-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: #334155;
+  line-height: 1.55;
+}
+
+.apt-q-guide-list li + li {
+  margin-top: 3px;
 }
 
 .apt-canvas-stage.is-drawing canvas {
@@ -409,11 +442,11 @@
 
 .apt-hint-primary-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
   gap: 8px;
 }
 
-@media (max-width: 560px) {
+@media (max-width: 720px) {
   .apt-hint-primary-actions {
     grid-template-columns: 1fr;
   }

@@ -55,6 +55,7 @@
     filterErrorsOnly: true,
     currentPageId: null,
     currentWindowIdx: 0,
+    windowHistory: [], // стек { pageId, windowIdx } для кнопки «← Прошлое окно»
     selectedElementId: null,
     hoveredElementId: null,
     highlightedElementIds: new Set(),
@@ -70,7 +71,6 @@
     qItems: [],
     qActiveItem: null,
     qLoading: false,
-    confirmHintCommentKey: null,
   };
 
   function $(id) {
@@ -235,12 +235,24 @@
     return wins[state.currentWindowIdx] || wins[0] || null;
   }
 
-  // ─── Здоровье ML-сервиса и недавние сессии ──────────────────────────
-  async function checkMlHealth(silent = false) {
-    const pill = $('apt-ml-health-badge');
-    if (pill && !silent) {
-      pill.className = 'apt-health-pill';
-      pill.innerHTML = '<span class="apt-health-dot"></span> Проверка ML-сервиса...';
+  function formatSessionDate(isoStr) {
+    if (!isoStr) return 'дата не указана';
+    const dt = new Date(isoStr);
+    if (Number.isNaN(dt.getTime())) return String(isoStr).slice(0, 16).replace('T', ' ');
+    const dd = String(dt.getDate()).padStart(2, '0');
+    const mm = String(dt.getMonth() + 1).padStart(2, '0');
+    const yyyy = dt.getFullYear();
+    const hh = String(dt.getHours()).padStart(2, '0');
+    const mi = String(dt.getMinutes()).padStart(2, '0');
+    return `${dd}.${mm}.${yyyy} ${hh}:${mi}`;
+  }
+
+  // ─── Здоровье ML-сервиса и 5 недавних сессий ────────────────────────
+  async function checkMlHealth() {
+    const errBanner = $('apt-ml-error-banner');
+    if (errBanner) {
+      errBanner.style.display = 'none';
+      errBanner.textContent = '';
     }
     try {
       const data = await apiJson('/api/ml/health');
@@ -256,17 +268,11 @@
       if (Array.isArray(data.operator_add_labels)) {
         state.operatorAddLabels = data.operator_add_labels.filter(l => !state.protectedLabels.has(l));
       }
-      if (pill) {
-        pill.className = 'apt-health-pill is-ok';
-        const ver = data.version ? ` v${escapeHtml(data.version)}` : '';
-        pill.innerHTML = `<span class="apt-health-dot"></span> ML-сервис готов${ver}`;
-      }
       return true;
     } catch (err) {
-      if (pill) {
-        pill.className = 'apt-health-pill is-err';
-        pill.innerHTML = `<span class="apt-health-dot"></span> ML недоступен`;
-        pill.title = err.message || '';
+      if (errBanner) {
+        errBanner.style.display = 'block';
+        errBanner.textContent = `ML-сервис временно недоступен: ${err.message || 'проверьте запуск review_service.py'}`;
       }
       return false;
     }
@@ -276,9 +282,9 @@
     const bar = $('apt-sessions-bar');
     if (!bar) return;
     try {
-      const data = await apiJson('/api/ml/sessions?limit=15');
-      const items = Array.isArray(data) ? data : (Array.isArray(data?.sessions) ? data.sessions : []);
-      state.recentSessions = items;
+      const data = await apiJson('/api/ml/sessions?limit=5');
+      const rawItems = Array.isArray(data) ? data : (Array.isArray(data?.sessions) ? data.sessions : []);
+      state.recentSessions = rawItems.slice(0, 5);
       if (state.recentSessions.length === 0) {
         bar.innerHTML = '<span class="apt-muted">Пока нет сохранённых проверок PDF. Загрузите первый файл выше.</span>';
         return;
@@ -287,14 +293,13 @@
         const isActive = item.session_id === state.activeSessionId;
         const summary = item.summary || {};
         const errPages = summary.error_pages ?? 0;
-        const statusIcon = item.status === 'ready' ? (errPages > 0 ? '⚠️' : '✅') : (item.status === 'error' ? '❌' : '⏳');
+        const dateLabel = formatSessionDate(item.created_at || item.updated_at);
         const fname = escapeHtml(item.source_filename || item.session_id);
         const meta = item.status === 'ready'
-          ? `${summary.total_waybills ?? 0} МЛ / ош: ${summary.pending_pages ?? errPages}`
-          : `${item.progress ?? 0}%`;
+          ? `${dateLabel} · ${summary.total_waybills ?? 0} МЛ · ош: ${summary.pending_pages ?? errPages}`
+          : (item.status === 'error' ? `${dateLabel} · ошибка` : `${dateLabel} · ${item.progress ?? 0}%`);
         return `
           <button type="button" class="apt-session-chip ${isActive ? 'active' : ''}" data-session-id="${escapeHtml(item.session_id)}">
-            <span>${statusIcon}</span>
             <span>${fname}</span>
             <span style="opacity:0.8; font-weight:500;">(${escapeHtml(meta)})</span>
           </button>
@@ -338,8 +343,8 @@
       alert('Пожалуйста, выберите файл в формате PDF.');
       return;
     }
-    if (file.size > 100 * 1024 * 1024) {
-      alert('Файл превышает максимальный размер 100 МБ.');
+    if (file.size > 600 * 1024 * 1024) {
+      alert('Файл превышает максимальный размер 600 МБ.');
       return;
     }
     state.selectedFile = file;
@@ -422,18 +427,15 @@
     const startBtn = $('apt-start-check-btn');
     if (startBtn) {
       startBtn.disabled = true;
-      startBtn.textContent = '⏳ Загрузка PDF в ML-сервис...';
+      startBtn.textContent = 'Загрузка PDF в ML-сервис...';
     }
 
     try {
-      const maxPagesInp = $('apt-max-pages-input');
-      const maxPages = Math.max(1, Math.min(250, Number(maxPagesInp?.value || 150) || 150));
       const fd = new FormData();
       fd.append('file', state.selectedFile, state.selectedFile.name);
-      fd.append('max_pages', String(maxPages));
 
       const res = await apiJson(
-        `/api/ml/sessions/upload?filename=${encodeURIComponent(state.selectedFile.name)}&max_pages=${maxPages}`,
+        `/api/ml/sessions/upload?filename=${encodeURIComponent(state.selectedFile.name)}`,
         { method: 'POST', body: fd }
       );
 
@@ -447,7 +449,7 @@
       state.uploading = false;
       updateDropzoneUI();
       if (startBtn) {
-        startBtn.textContent = '🚀 Проверить маршрутные листы';
+        startBtn.textContent = 'Проверить маршрутные листы';
       }
     }
   }
@@ -501,6 +503,7 @@
     const data = await apiJson(`/api/ml/sessions/${encodeURIComponent(sessionId)}`);
     state.session = data;
     state.activeSessionId = data.session_id;
+    state.windowHistory = [];
     state.selectedElementId = null;
     state.hoveredElementId = null;
     state.highlightedElementIds.clear();
@@ -509,6 +512,11 @@
     state.currentWindowImg = null;
     state.currentWindowImgKey = null;
     revokeUrlPool(state.operatorUrls);
+    const finBanner = $('apt-finalize-banner');
+    if (finBanner) {
+      finBanner.style.display = 'none';
+      finBanner.textContent = '';
+    }
 
     const pages = data.pages || [];
     const hasProblemPages = pages.some(pageHasErrors);
@@ -569,8 +577,8 @@
     const btnErr = $('apt-filter-errors-btn');
     const btnAll = $('apt-filter-all-btn');
     if (btnErr && btnAll) {
-      btnErr.textContent = `⚠️ Только проблемные (${problemCount})`;
-      btnAll.textContent = `📄 Все страницы (${pages.length})`;
+      btnErr.textContent = `Только проблемные (${problemCount})`;
+      btnAll.textContent = `Все страницы (${pages.length})`;
       btnErr.className = state.filterErrorsOnly ? 'btn btn-primary btn-sm' : 'btn btn-outline btn-sm';
       btnAll.className = !state.filterErrorsOnly ? 'btn btn-primary btn-sm' : 'btn btn-outline btn-sm';
     }
@@ -615,19 +623,19 @@
     if (qPill && curPage) {
       if (curPage.quarantine_item_id) {
         qPill.style.display = 'inline-flex';
-        qPill.textContent = `✅ В карантине (${curPage.quarantine_item_id})`;
+        qPill.textContent = `В очереди дообучения (${curPage.quarantine_item_id})`;
       } else {
         qPill.style.display = 'none';
       }
     }
+  }
 
-    const qBtn = $('apt-btn-submit-quarantine');
-    if (qBtn && curPage) {
-      const changed = hasPageChanges(curPage);
-      qBtn.disabled = !changed || state.actionPending;
-      qBtn.textContent = curPage.quarantine_item_id
-        ? '🔄 Обновить исправления в дообучении'
-        : '🧠 Отправить исправления в дообучение';
+  function pushWindowHistory() {
+    if (state.currentPageId === null) return;
+    const prev = state.windowHistory[state.windowHistory.length - 1];
+    if (!prev || prev.pageId !== state.currentPageId || prev.windowIdx !== state.currentWindowIdx) {
+      state.windowHistory.push({ pageId: state.currentPageId, windowIdx: state.currentWindowIdx });
+      if (state.windowHistory.length > 100) state.windowHistory.shift();
     }
   }
 
@@ -640,37 +648,54 @@
       return;
     }
     const wins = page.windows || [];
+    const prevBtnHtml = `<button type="button" class="btn btn-outline btn-sm" id="apt-prev-window-btn">← Прошлое окно</button>`;
     if (wins.length === 0) {
-      wrap.innerHTML = '<div class="apt-muted">На этой странице окна аптек не найдены. Вы можете открыть «🔍 Весь лист с рамками».</div>';
+      wrap.innerHTML = `${prevBtnHtml}<div class="apt-muted">На этой странице окна аптек не найдены. Вы можете открыть «Весь лист с рамками».</div>`;
+      $('apt-prev-window-btn')?.addEventListener('click', goToPreviousWindow);
       return;
     }
     if (!wins.some(w => w.window_idx === state.currentWindowIdx)) {
       state.currentWindowIdx = wins[0].window_idx;
     }
 
-    wrap.innerHTML = wins.map(w => {
+    const tabsHtml = wins.map(w => {
       const errCnt = (w.errors || []).length + (w.warnings || []).length;
       const isActive = w.window_idx === state.currentWindowIdx;
-      const statusCls = errCnt > 0 ? 'has-errors' : 'is-clean';
-      const label = errCnt > 0 ? `Окно #${w.window_number} (ош: ${errCnt})` : `Окно #${w.window_number} (норма)`;
+      let statusCls = 'is-clean';
+      let label = `Окно #${w.window_number} (норма)`;
+      if (w.review_status === 'confirmed_error') {
+        statusCls = 'has-errors';
+        label = `Окно #${w.window_number} (ошибка подтв.)`;
+      } else if (w.review_status === 'dismissed_clean') {
+        statusCls = 'is-clean';
+        label = `Окно #${w.window_number} (ошибки нет)`;
+      } else if (errCnt > 0) {
+        statusCls = 'has-errors';
+        label = `Окно #${w.window_number} (ош: ${errCnt})`;
+      }
       return `<button type="button" class="apt-win-pill ${statusCls} ${isActive ? 'active' : ''}" data-win-idx="${w.window_idx}">${escapeHtml(label)}</button>`;
     }).join('');
+
+    wrap.innerHTML = prevBtnHtml + tabsHtml;
+    $('apt-prev-window-btn')?.addEventListener('click', goToPreviousWindow);
 
     wrap.querySelectorAll('.apt-win-pill').forEach(btn => {
       btn.addEventListener('click', () => {
         const idx = Number(btn.getAttribute('data-win-idx'));
-        selectWindow(idx);
+        selectWindow(idx, true);
       });
     });
   }
 
-  function selectPage(pageId, preferProblemWindow = true) {
+  function selectPage(pageId, preferProblemWindow = true, recordHistory = true) {
+    if (recordHistory && state.currentPageId !== null && pageId !== state.currentPageId) {
+      pushWindowHistory();
+    }
     state.currentPageId = pageId;
     state.selectedElementId = null;
     state.hoveredElementId = null;
     state.highlightedElementIds.clear();
     state.expandedHintKey = null;
-    state.confirmHintCommentKey = null;
     cancelDrawMode();
 
     const page = getCurrentPage();
@@ -687,13 +712,15 @@
     renderAllSessionUI();
   }
 
-  function selectWindow(winIdx) {
+  function selectWindow(winIdx, recordHistory = true) {
+    if (recordHistory && winIdx !== state.currentWindowIdx) {
+      pushWindowHistory();
+    }
     state.currentWindowIdx = winIdx;
     state.selectedElementId = null;
     state.hoveredElementId = null;
     state.highlightedElementIds.clear();
     state.expandedHintKey = null;
-    state.confirmHintCommentKey = null;
     cancelDrawMode();
     renderWindowTabs();
     renderRightPane();
@@ -701,35 +728,82 @@
     renderBoxInspector();
   }
 
-  function goToNextProblemWindow() {
+  function goToPreviousWindow() {
+    if (!state.session) return;
+    if (state.windowHistory.length > 0) {
+      const prev = state.windowHistory.pop();
+      if (prev && prev.pageId) {
+        if (prev.pageId !== state.currentPageId) {
+          state.currentPageId = prev.pageId;
+        }
+        state.currentWindowIdx = prev.windowIdx ?? 0;
+        state.selectedElementId = null;
+        state.hoveredElementId = null;
+        state.highlightedElementIds.clear();
+        state.expandedHintKey = null;
+        cancelDrawMode();
+        renderAllSessionUI();
+        return;
+      }
+    }
+
+    // Если стек пуст — шаг назад по порядку окон и страниц
+    const pages = getFilteredPages();
+    const curPageIdx = pages.findIndex(p => p.page_id === state.currentPageId);
+    const curPage = pages[curPageIdx];
+    if (curPage) {
+      const wins = curPage.windows || [];
+      const curWinPos = wins.findIndex(w => w.window_idx === state.currentWindowIdx);
+      if (curWinPos > 0) {
+        selectWindow(wins[curWinPos - 1].window_idx, false);
+        return;
+      }
+    }
+    if (curPageIdx > 0) {
+      const prevPage = pages[curPageIdx - 1];
+      const prevWins = prevPage.windows || [];
+      state.currentPageId = prevPage.page_id;
+      state.currentWindowIdx = prevWins.length > 0 ? prevWins[prevWins.length - 1].window_idx : 0;
+      state.selectedElementId = null;
+      state.expandedHintKey = null;
+      cancelDrawMode();
+      renderAllSessionUI();
+    }
+  }
+
+  function advanceAfterDecision() {
     if (!state.session) return;
     const pages = state.session.pages || [];
     const curPageIdx = Math.max(0, pages.findIndex(p => p.page_id === state.currentPageId));
 
-    // Сначала ищем на текущей странице после текущего окна
+    // Сначала ищем неразобранное окно на текущей странице после текущего окна
     const curPage = pages[curPageIdx];
     if (curPage) {
       const nextWin = (curPage.windows || []).find(
         w => w.window_idx > state.currentWindowIdx && (w.review_status === 'pending' || w.review_status === 'fixed_with_errors')
       );
       if (nextWin) {
-        selectWindow(nextWin.window_idx);
+        selectWindow(nextWin.window_idx, true);
         return;
       }
     }
 
-    // Затем ищем по следующим страницам (с переходом через конец)
+    // Затем по следующим страницам
     for (let offset = 1; offset <= pages.length; offset++) {
       const p = pages[(curPageIdx + offset) % pages.length];
       const pw = (p.windows || []).find(w => w.review_status === 'pending' || w.review_status === 'fixed_with_errors');
       if (pw) {
-        selectPage(p.page_id, false);
-        selectWindow(pw.window_idx);
+        selectPage(p.page_id, false, true);
+        selectWindow(pw.window_idx, false);
         return;
       }
     }
 
-    alert('Все проблемные окна в этой сессии уже разобраны!');
+    const finBanner = $('apt-finalize-banner');
+    if (finBanner) {
+      finBanner.style.display = 'block';
+      finBanner.textContent = 'Все спорные окна в сессии разобраны. Нажмите «Завершить проверку и сформировать отчёт» для фиксации итогов.';
+    }
   }
 
   // ─── HTML5 Canvas и координаты через crop_rect ──────────────────────
@@ -922,13 +996,14 @@
     };
   }
 
-  function findEditableElementAt(win, canvas, cx, cy) {
+  function findOperatorElementAt(win, canvas, cx, cy) {
     if (!win) return null;
     const m = getCanvasMetrics(win, canvas);
     let best = null;
     let bestArea = Infinity;
     for (const el of (win.elements || [])) {
-      if (!isElementEditable(el)) continue; // Защищённые классы запрещено выбирать и редактировать
+      // Кликом по холсту разрешаем выбирать только рамки, добавленные самим оператором
+      if (el.source !== 'operator' || !isElementEditable(el)) continue;
       const [x1, y1, x2, y2] = el.bbox;
       const dx = (x1 - m.cx1) * m.scaleX;
       const dy = (y1 - m.cy1) * m.scaleY;
@@ -1002,7 +1077,7 @@
         return;
       }
 
-      const hit = findEditableElementAt(win, canvas, pt.x, pt.y);
+      const hit = findOperatorElementAt(win, canvas, pt.x, pt.y);
       state.selectedElementId = hit ? hit.id : null;
       drawWindowCanvas();
       renderBoxInspector();
@@ -1021,7 +1096,7 @@
       }
 
       if (!state.drawMode) {
-        const hit = findEditableElementAt(win, canvas, pt.x, pt.y);
+        const hit = findOperatorElementAt(win, canvas, pt.x, pt.y);
         const newHover = hit ? hit.id : null;
         canvas.style.cursor = hit ? 'pointer' : 'default';
         if (newHover !== state.hoveredElementId) {
@@ -1053,13 +1128,29 @@
       if (!win || !page) return;
 
       const m = getCanvasMetrics(win, canvas);
-      const x1 = Math.max(0, Math.round(m.cx1 + rx / m.scaleX));
-      const y1 = Math.max(0, Math.round(m.cy1 + ry / m.scaleY));
-      const x2 = Math.min(page.width || 10000, Math.round(m.cx1 + (rx + rw) / m.scaleX));
-      const y2 = Math.min(page.height || 10000, Math.round(m.cy1 + (ry + rh) / m.scaleY));
+      let x1 = Math.max(0, Math.round(m.cx1 + rx / m.scaleX));
+      let y1 = Math.max(0, Math.round(m.cy1 + ry / m.scaleY));
+      let x2 = Math.min(page.width || 10000, Math.round(m.cx1 + (rx + rw) / m.scaleX));
+      let y2 = Math.min(page.height || 10000, Math.round(m.cy1 + (ry + rh) / m.scaleY));
 
-      if (x2 - x1 < 12 || y2 - y1 < 12) {
-        alert('Выделенная область слишком маленькая (минимум 12×12 пикселей). Протяните рамку чуть крупнее.');
+      // Жёсткое ограничение рамки границами текущего окна аптеки (допуск ±25 px)
+      if (Array.isArray(win.bbox) && win.bbox.length === 4) {
+        const [wx1, wy1, wx2, wy2] = win.bbox;
+        const pad = 25;
+        x1 = Math.max(Math.max(0, wx1 - pad), x1);
+        y1 = Math.max(Math.max(0, wy1 - pad), y1);
+        x2 = Math.min(wx2 + pad, x2);
+        y2 = Math.min(wy2 + pad, y2);
+        const winArea = Math.max(1, (wx2 - wx1) * (wy2 - wy1));
+        const boxArea = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+        if (boxArea > winArea * 0.85) {
+          alert('Нельзя обвести почти всё окно целиком. Выделите только конкретный пропущенный элемент.');
+          return;
+        }
+      }
+
+      if (x2 - x1 < 14 || y2 - y1 < 14) {
+        alert('Выделенная область слишком маленькая (минимум 14×14 пикселей). Протяните рамку чуть крупнее.');
         return;
       }
 
@@ -1068,15 +1159,15 @@
         new_label: targetLabel,
         bbox: [x1, y1, x2, y2],
       };
-      if (state.digitLabels.has(targetLabel) && optionalDigitRaw) {
+      if (state.digitLabels.has(targetLabel)) {
         const parsed = parseInt(optionalDigitRaw, 10);
         if (!Number.isInteger(parsed) || parsed < 1 || parsed > 99) {
-          alert('Введите целое число от 1 до 99.');
+          alert('Для добавления цифры обязательно укажите целое число от 1 до 99 в поле над снимком.');
           return;
         }
         body.new_value = parsed;
       }
-      await sendWindowAction(body);
+      await sendWindowAction(body, { autoAdvanceIfClean: true });
     };
 
     canvas.addEventListener('pointerup', finishDrag);
@@ -1092,8 +1183,8 @@
     });
   }
 
-  // ─── Выполнение действий и мини-панель выбранной рамки ──────────────
-  async function sendWindowAction(payload) {
+  // ─── Выполнение действий и удаление операторской рамки ──────────────
+  async function sendWindowAction(payload, options = {}) {
     const page = getCurrentPage();
     const win = getCurrentWindow();
     if (!state.activeSessionId || !page || !win || state.actionPending) return;
@@ -1126,9 +1217,14 @@
         state.selectedElementId = null;
       }
       state.highlightedElementIds.clear();
-      state.confirmHintCommentKey = null;
 
       renderAllSessionUI();
+
+      const updatedWin = resp.window || getCurrentWindow();
+      const noMoreIssues = updatedWin && !(updatedWin.errors && updatedWin.errors.length) && !(updatedWin.warnings && updatedWin.warnings.length);
+      if (options.autoAdvanceAlways || (options.autoAdvanceIfClean && noMoreIssues)) {
+        advanceAfterDecision();
+      }
     } catch (err) {
       alert('Ошибка действия: ' + err.message);
     } finally {
@@ -1144,7 +1240,7 @@
     const page = getCurrentPage();
     const win = getCurrentWindow();
     const el = win && state.selectedElementId
-      ? (win.elements || []).find(e => e.id === state.selectedElementId && isElementEditable(e))
+      ? (win.elements || []).find(e => e.id === state.selectedElementId && e.source === 'operator' && isElementEditable(e))
       : null;
 
     if (!el || !page) {
@@ -1153,39 +1249,18 @@
       return;
     }
 
-    const isDigit = state.digitLabels.has(el.label);
-    const safeLabels = getSafeOperatorLabels().filter(l => l !== el.label);
-    const quickBtns = safeLabels.slice(0, 6).map(lbl => `
-      <button type="button" class="btn btn-outline btn-sm apt-relabel-btn" data-label="${escapeHtml(lbl)}">
-        Это ${escapeHtml(lbl)}
-      </button>
-    `).join('');
-
     box.style.display = 'block';
     box.innerHTML = `
-      <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
         <div>
-          <span style="font-size:12px; color:var(--text-muted);">Выбрана рамка:</span>
-          <b>${escapeHtml(el.label)}</b>
-          ${isDigit ? `<span style="color:var(--primary); font-weight:700;">(значение: ${escapeHtml(el.ocr_value ?? '?')})</span>` : ''}
+          <span style="font-size:12px; color:var(--text-muted);">Добавленная вами рамка:</span>
+          <b>${escapeHtml(shortLabel(el))}</b>
         </div>
         <div style="display:flex; gap:6px;">
-          <button type="button" class="btn btn-danger btn-sm" id="apt-insp-del-btn">🗑️ Удалить (ложная рамка)</button>
+          <button type="button" class="btn btn-danger btn-sm" id="apt-insp-del-btn">Удалить рамку</button>
           <button type="button" class="btn btn-outline btn-sm" id="apt-insp-close-btn">✕</button>
         </div>
       </div>
-      ${isDigit ? `
-        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px; padding:8px; background:#fff; border-radius:8px; border:1px solid var(--border-light);">
-          <img id="apt-insp-crop-img" alt="Кроп цифры" style="width:54px; height:54px; object-fit:contain; border-radius:6px; border:1px solid var(--border-light); background:#f8fafc;">
-          <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-            <span style="font-size:12.5px; font-weight:600;">Верное число (1..99):</span>
-            <input type="number" min="1" max="99" class="apt-digit-input" id="apt-insp-digit-val" value="${escapeHtml(el.ocr_value ?? '')}">
-            <button type="button" class="btn btn-primary btn-sm" id="apt-insp-fix-btn">💾 Сохранить число</button>
-          </div>
-        </div>
-      ` : ''}
-      <div style="font-size:12px; color:var(--text-muted); margin-bottom:4px;">Быстрая смена класса:</div>
-      <div class="apt-quick-relabels">${quickBtns}</div>
     `;
 
     $('apt-insp-close-btn')?.addEventListener('click', () => {
@@ -1197,35 +1272,9 @@
     $('apt-insp-del-btn')?.addEventListener('click', () => {
       sendWindowAction({ action: 'delete_box', element_id: el.id });
     });
-
-    if (isDigit) {
-      const cropUrl = `/api/ml/sessions/${encodeURIComponent(state.activeSessionId)}/pages/${encodeURIComponent(page.page_id)}/elements/${encodeURIComponent(el.id)}/crop`;
-      fetchBlobUrl(cropUrl, state.operatorUrls)
-        .then(u => {
-          const img = $('apt-insp-crop-img');
-          if (img) img.src = u;
-        })
-        .catch(() => {});
-
-      $('apt-insp-fix-btn')?.addEventListener('click', () => {
-        const val = parseInt($('apt-insp-digit-val')?.value || '', 10);
-        if (!Number.isInteger(val) || val < 1 || val > 99) {
-          alert('Укажите целое число от 1 до 99.');
-          return;
-        }
-        sendWindowAction({ action: 'fix_digit', element_id: el.id, new_value: val });
-      });
-    }
-
-    box.querySelectorAll('.apt-relabel-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const target = btn.getAttribute('data-label');
-        if (target) sendWindowAction({ action: 'relabel_box', element_id: el.id, new_label: target });
-      });
-    });
   }
 
-  // ─── Правая панель: error_hints и 2-кнопочный UX ────────────────────
+  // ─── Панель замечаний под окном и 3-кнопочный UX ──────────────────
   function renderRightPane() {
     const banner = $('apt-win-status-banner');
     const warnBox = $('apt-win-warnings');
@@ -1241,49 +1290,63 @@
       return;
     }
 
-    banner.style.display = 'block';
     const hints = win.error_hints || [];
     const errs = win.errors || [];
     const warns = win.warnings || [];
 
-    if (errs.length === 0 && warns.length === 0) {
+    if (win.review_status === 'dismissed_clean') {
+      banner.style.display = 'block';
       banner.className = 'apt-win-status-banner is-clean';
       banner.innerHTML = `
         <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
-          <div>✅ <b>Окно в норме</b> — ошибок не обнаружено!</div>
-          <button type="button" class="btn btn-success btn-sm" id="apt-banner-next-prob-btn">➡️ Следующее проблемное окно</button>
+          <div><b>Отмечено: ошибки нет</b> — окно попадёт в отчёт и архив как валидное (без отправки в дообучение).</div>
+          <button type="button" class="btn btn-outline btn-sm" id="apt-banner-reset-decision-btn">Изменить решение</button>
         </div>
-        ${hasPageChanges(page) ? '<div style="margin-top:6px; font-size:12.5px; font-weight:500;">Модель на этой странице была исправлена — не забудьте нажать <b>«Отправить исправления в дообучение»</b>.</div>' : ''}
       `;
-      $('apt-banner-next-prob-btn')?.addEventListener('click', goToNextProblemWindow);
+      $('apt-banner-reset-decision-btn')?.addEventListener('click', () => sendWindowAction({ action: 'reset_window' }));
     } else if (win.review_status === 'confirmed_error') {
+      banner.style.display = 'block';
       banner.className = 'apt-win-status-banner is-confirmed';
-      const cmt = win.review_meta?.comment ? ` (комментарий: «${escapeHtml(win.review_meta.comment)}»)` : '';
       banner.innerHTML = `
         <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
-          <div>⚠️ <b>Ошибки подтверждены как реальные${cmt}</b> и попадут в итоговый отчёт.</div>
-          <button type="button" class="btn btn-primary btn-sm" id="apt-banner-next-prob-btn">➡️ Следующее окно</button>
+          <div><b>Реальная ошибка подтверждена</b> и зафиксирована для итогового отчёта.</div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button type="button" class="btn btn-outline btn-sm" id="apt-banner-mark-valid-btn">Ошибки нет</button>
+            <button type="button" class="btn btn-outline btn-sm" id="apt-banner-reset-decision-btn">Изменить решение</button>
+          </div>
         </div>
       `;
-      $('apt-banner-next-prob-btn')?.addEventListener('click', goToNextProblemWindow);
+      $('apt-banner-mark-valid-btn')?.addEventListener('click', () => sendWindowAction({ action: 'mark_valid' }, { autoAdvanceAlways: true }));
+      $('apt-banner-reset-decision-btn')?.addEventListener('click', () => sendWindowAction({ action: 'reset_window' }));
+    } else if (errs.length === 0 && warns.length === 0) {
+      banner.style.display = 'block';
+      banner.className = 'apt-win-status-banner is-clean';
+      banner.innerHTML = `<div><b>Окно в норме</b> — ошибок не обнаружено.</div>`;
     } else {
-      banner.className = 'apt-win-status-banner is-pending';
-      banner.innerHTML = `❗ Найдено замечаний: <b>${errs.length + warns.length}</b>. Подтвердите реальную ошибку или исправьте промах модели.`;
+      // Убрали красный отвлекающий баннер «Найдено замечаний...»
+      banner.style.display = 'none';
+      banner.innerHTML = '';
     }
 
     warnBox.innerHTML = warns.length > 0
-      ? warns.map(w => `<div style="background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:8px 12px; font-size:12.5px; color:#92400e; margin-bottom:10px;">⚠️ ${escapeHtml(w)}</div>`).join('')
+      ? warns.map(w => `<div style="background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:8px 12px; font-size:12.5px; color:#92400e; margin-bottom:10px;">${escapeHtml(w)}</div>`).join('')
       : '';
 
     if (hints.length === 0) {
       list.innerHTML = warns.length > 0
         ? `<div class="apt-hint-card" style="border-color:#fde68a; border-left-color:#f59e0b;">
              <div class="apt-hint-title" style="color:#92400e;">Предупреждения по окну</div>
-             <button type="button" class="btn btn-outline btn-sm" id="apt-warn-confirm-btn">✅ Подтвердить для отчёта</button>
+             <div class="apt-hint-primary-actions" style="grid-template-columns: repeat(2, minmax(160px, 1fr));">
+               <button type="button" class="btn btn-outline btn-sm" id="apt-warn-confirm-btn" style="border-color:#fca5a5; color:#991b1b;">Реальная ошибка</button>
+               <button type="button" class="btn btn-outline btn-sm" id="apt-warn-valid-btn" style="border-color:#86efac; color:#166534;">Ошибки нет</button>
+             </div>
            </div>`
-        : '<div class="apt-muted">Вы также можете кликнуть по любой зелёной/синей рамке на изображении слева, чтобы удалить её или поменять класс.</div>';
+        : '';
       $('apt-warn-confirm-btn')?.addEventListener('click', () => {
-        sendWindowAction({ action: 'confirm_real_error', comment: '' });
+        sendWindowAction({ action: 'confirm_real_error', comment: '' }, { autoAdvanceAlways: true });
+      });
+      $('apt-warn-valid-btn')?.addEventListener('click', () => {
+        sendWindowAction({ action: 'mark_valid' }, { autoAdvanceAlways: true });
       });
       return;
     }
@@ -1291,28 +1354,20 @@
     list.innerHTML = hints.map((hint, idx) => {
       const hintKey = `${win.window_idx}:${idx}:${hint.code}`;
       const isExpanded = state.expandedHintKey === hintKey;
-      const isConfirming = state.confirmHintCommentKey === hintKey;
       return `
         <div class="apt-hint-card" data-hint-idx="${idx}" data-hint-key="${escapeHtml(hintKey)}">
           <div class="apt-hint-title">${idx + 1}. ${escapeHtml(hint.message)}</div>
           <div class="apt-hint-primary-actions">
             <button type="button" class="btn btn-outline btn-sm apt-btn-real-err" style="border-color:#fca5a5; color:#991b1b;">
-              ✅ Реальная ошибка (в отчёт)
+              Реальная ошибка
+            </button>
+            <button type="button" class="btn btn-outline btn-sm apt-btn-no-err" style="border-color:#86efac; color:#166534;">
+              Ошибки нет
             </button>
             <button type="button" class="btn btn-primary btn-sm apt-btn-model-fix">
-              🤖 Модель ошиблась — исправить
+              Модель ошиблась — исправить
             </button>
           </div>
-          ${isConfirming ? `
-            <div class="apt-hint-drawer">
-              <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:6px;">При необходимости добавьте комментарий в отчёт:</div>
-              <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                <input type="text" class="form-control apt-confirm-comment-inp" placeholder="Например: нет подписи грузополучателя" style="flex:1; min-width:180px;">
-                <button type="button" class="btn btn-danger btn-sm apt-confirm-submit-btn">Подтвердить ошибку</button>
-                <button type="button" class="btn btn-outline btn-sm apt-confirm-cancel-btn">Отмена</button>
-              </div>
-            </div>
-          ` : ''}
           ${isExpanded ? `<div class="apt-hint-drawer" id="apt-hint-drawer-${idx}"></div>` : ''}
         </div>
       `;
@@ -1333,23 +1388,15 @@
       });
 
       card.querySelector('.apt-btn-real-err')?.addEventListener('click', () => {
-        state.confirmHintCommentKey = state.confirmHintCommentKey === hintKey ? null : hintKey;
-        state.expandedHintKey = null;
-        renderRightPane();
+        sendWindowAction({ action: 'confirm_real_error', comment: '' }, { autoAdvanceAlways: true });
       });
 
-      card.querySelector('.apt-confirm-submit-btn')?.addEventListener('click', () => {
-        const cmt = card.querySelector('.apt-confirm-comment-inp')?.value?.trim() || '';
-        sendWindowAction({ action: 'confirm_real_error', comment: cmt });
-      });
-      card.querySelector('.apt-confirm-cancel-btn')?.addEventListener('click', () => {
-        state.confirmHintCommentKey = null;
-        renderRightPane();
+      card.querySelector('.apt-btn-no-err')?.addEventListener('click', () => {
+        sendWindowAction({ action: 'mark_valid' }, { autoAdvanceAlways: true });
       });
 
       card.querySelector('.apt-btn-model-fix')?.addEventListener('click', () => {
         state.expandedHintKey = state.expandedHintKey === hintKey ? null : hintKey;
-        state.confirmHintCommentKey = null;
         state.highlightedElementIds = new Set(hint.related_element_ids || []);
         renderRightPane();
         drawWindowCanvas();
@@ -1410,6 +1457,7 @@
               </div>
               <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;">
                 <button type="button" class="btn btn-danger btn-sm apt-del-digit-btn" style="padding:5px 8px; font-size:11.5px;">Это не цифра — удалить</button>
+                ${el.label === 'Рукописная цифра' ? `<button type="button" class="btn btn-outline btn-sm apt-relab-sign-btn" style="padding:5px 8px; font-size:11.5px;">Это Подпись</button>` : ''}
                 ${el.label === 'Рукописная цифра' ? `<button type="button" class="btn btn-outline btn-sm apt-relab-dec-btn" style="padding:5px 8px; font-size:11.5px;">Это Расшифровка</button>` : ''}
               </div>
             </div>
@@ -1433,13 +1481,16 @@
             alert('Укажите целое число от 1 до 99.');
             return;
           }
-          sendWindowAction({ action: 'fix_digit', element_id: eid, new_value: val });
+          sendWindowAction({ action: 'fix_digit', element_id: eid, new_value: val }, { autoAdvanceIfClean: true });
         });
         card.querySelector('.apt-del-digit-btn')?.addEventListener('click', () => {
-          sendWindowAction({ action: 'delete_box', element_id: eid });
+          sendWindowAction({ action: 'delete_box', element_id: eid }, { autoAdvanceIfClean: true });
+        });
+        card.querySelector('.apt-relab-sign-btn')?.addEventListener('click', () => {
+          sendWindowAction({ action: 'relabel_box', element_id: eid, new_label: 'Подпись' }, { autoAdvanceIfClean: true });
         });
         card.querySelector('.apt-relab-dec-btn')?.addEventListener('click', () => {
-          sendWindowAction({ action: 'relabel_box', element_id: eid, new_label: 'Расшифровка' });
+          sendWindowAction({ action: 'relabel_box', element_id: eid, new_label: 'Расшифровка' }, { autoAdvanceIfClean: true });
         });
       });
       return;
@@ -1449,7 +1500,7 @@
     if (code === 'two_hw_digits') {
       const hwEls = getHintRelatedElements(win, hint, el => el.label === 'Рукописная цифра');
       drawer.innerHTML = `
-        <p class="apt-muted" style="margin-bottom:8px;">Найдено несколько рукописных цифр. Удалите лишнюю рамку, исправьте число или переведите в «Расшифровка».</p>
+        <p class="apt-muted" style="margin-bottom:8px;">Найдено несколько рукописных цифр. Удалите лишнюю рамку, исправьте число или переведите в «Подпись» / «Расшифровка».</p>
         <div class="apt-crops-row">
           ${hwEls.map((el, i) => `
             <div class="apt-crop-card" data-el-id="${escapeHtml(el.id)}">
@@ -1461,12 +1512,13 @@
               </div>
               <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;">
                 <button type="button" class="btn btn-danger btn-sm apt-del-digit-btn" style="padding:5px 8px; font-size:11.5px;">Это не цифра — удалить</button>
+                <button type="button" class="btn btn-outline btn-sm apt-relab-sign-btn" style="padding:5px 8px; font-size:11.5px;">Это Подпись</button>
                 <button type="button" class="btn btn-outline btn-sm apt-relab-dec-btn" style="padding:5px 8px; font-size:11.5px;">Это Расшифровка</button>
               </div>
             </div>
           `).join('')}
         </div>
-        <button type="button" class="btn btn-outline btn-sm" id="apt-twohw-add-stamp">✏️ Обвести вторую печать рядом (Печать)</button>
+        <button type="button" class="btn btn-outline btn-sm" id="apt-twohw-add-stamp">Обвести вторую печать рядом (Печать)</button>
       `;
 
       drawer.querySelectorAll('.apt-crop-card').forEach(card => {
@@ -1485,13 +1537,16 @@
             alert('Укажите целое число от 1 до 99.');
             return;
           }
-          sendWindowAction({ action: 'fix_digit', element_id: eid, new_value: val });
+          sendWindowAction({ action: 'fix_digit', element_id: eid, new_value: val }, { autoAdvanceIfClean: true });
         });
         card.querySelector('.apt-del-digit-btn')?.addEventListener('click', () => {
-          sendWindowAction({ action: 'delete_box', element_id: eid });
+          sendWindowAction({ action: 'delete_box', element_id: eid }, { autoAdvanceIfClean: true });
+        });
+        card.querySelector('.apt-relab-sign-btn')?.addEventListener('click', () => {
+          sendWindowAction({ action: 'relabel_box', element_id: eid, new_label: 'Подпись' }, { autoAdvanceIfClean: true });
         });
         card.querySelector('.apt-relab-dec-btn')?.addEventListener('click', () => {
-          sendWindowAction({ action: 'relabel_box', element_id: eid, new_label: 'Расшифровка' });
+          sendWindowAction({ action: 'relabel_box', element_id: eid, new_label: 'Расшифровка' }, { autoAdvanceIfClean: true });
         });
       });
 
@@ -1582,42 +1637,45 @@
     });
   }
 
-  // ─── Отправка в карантин и скачивание отчётов ──────────────────────
-  async function submitPageToQuarantine() {
-    const page = getCurrentPage();
-    if (!state.activeSessionId || !page || state.actionPending) return;
-    if (!hasPageChanges(page)) {
-      alert('На этой странице ещё нет правок разметки модели.');
-      return;
-    }
-    const comment = prompt('Комментарий к исправлению модели (необязательно):', '') ?? null;
-    if (comment === null) return;
-
+  // ─── Финализация проверки и скачивание отчёта / архива ZIP ─────────
+  async function finalizeSession() {
+    if (!state.activeSessionId || state.actionPending) return;
+    const btn = $('apt-btn-finalize');
+    const finBanner = $('apt-finalize-banner');
     state.actionPending = true;
-    renderNavigationControls();
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Формирование отчёта и сохранение...';
+    }
     try {
       const res = await apiJson(
-        `/api/ml/sessions/${encodeURIComponent(state.activeSessionId)}/pages/${encodeURIComponent(page.page_id)}/submit-quarantine`,
+        `/api/ml/sessions/${encodeURIComponent(state.activeSessionId)}/finalize`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ comment }),
+          body: JSON.stringify({}),
         }
       );
-      page.quarantine_item_id = res.item_id;
-      if (res.session_summary) {
+      if (res.session_summary && state.session) {
         state.session.summary = res.session_summary;
       }
-      renderSessionSummary();
-      renderNavigationControls();
-      renderRightPane();
+      await loadFullSession(state.activeSessionId);
       refreshQuarantineBadge();
-      alert(`Страница отправлена в очередь дообучения (${res.item_id}). Кропов цифр: ${res.digit_crops_count ?? 0}.`);
+      if (finBanner) {
+        const subPages = Number(res.submitted_pages || res.quarantined_pages || 0);
+        finBanner.style.display = 'block';
+        finBanner.textContent = subPages > 0
+          ? `Проверка завершена. Отчёт и архив МЛ готовы к скачиванию; в очередь дообучения передано страниц: ${subPages}.`
+          : 'Проверка завершена. Итоговый отчёт (.txt) и архив МЛ (.zip) готовы к скачиванию.';
+      }
     } catch (err) {
-      alert('Ошибка отправки в карантин: ' + err.message);
+      alert('Ошибка завершения проверки: ' + err.message);
     } finally {
       state.actionPending = false;
-      renderNavigationControls();
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Завершить проверку и сформировать отчёт';
+      }
     }
   }
 
@@ -2032,41 +2090,41 @@
   async function exportApprovedDataset() {
     const btn = $('apt-q-export-btn');
     const resBox = $('apt-q-export-result');
-    const includeExported = Boolean($('apt-q-include-exported')?.checked);
     if (btn) {
       btn.disabled = true;
-      btn.textContent = '⏳ Выгрузка датасета...';
+      btn.textContent = 'Выгрузка датасета...';
     }
     try {
       const res = await apiJson('/api/ml/admin/export-approved', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ include_exported: includeExported }),
+        body: JSON.stringify({ include_exported: false }),
       });
       if (resBox) {
         resBox.style.display = 'block';
         if (res.exported_pages > 0) {
           resBox.innerHTML = `
             <div style="background:#f0fdf4; border:1px solid #86efac; border-radius:10px; padding:12px 16px; color:#166534; font-size:13.5px;">
-              ✅ <b>Выгрузка завершена!</b> Страниц: <b>${Number(res.exported_pages)}</b>, кропов цифр: <b>${Number(res.exported_crops || 0)}</b>.<br>
+              <b>Выгрузка завершена.</b> Страниц: <b>${Number(res.exported_pages)}</b>, кропов цифр: <b>${Number(res.exported_crops || 0)}</b>.<br>
               <span style="font-size:12.5px;">Папка: <code>${escapeHtml(res.export_dir || '')}</code></span>
             </div>
           `;
         } else {
           resBox.innerHTML = `
             <div style="background:#f8fafc; border:1px solid var(--border); border-radius:10px; padding:12px 16px; font-size:13.5px;">
-              ℹ️ ${escapeHtml(res.message || 'Нет новых одобренных записей для выгрузки.')}
+              ${escapeHtml(res.message || 'Нет новых одобренных записей для выгрузки.')}
             </div>
           `;
         }
       }
       loadQuarantineList();
+      refreshQuarantineBadge();
     } catch (err) {
       alert('Ошибка выгрузки: ' + err.message);
     } finally {
       if (btn) {
         btn.disabled = false;
-        btn.textContent = '📦 Выгрузить одобренные в датасет';
+        btn.textContent = 'Выгрузить одобренные в датасет';
       }
     }
   }
@@ -2143,8 +2201,6 @@
       if (idx >= 0 && idx < list.length - 1) selectPage(list[idx + 1].page_id, true);
     });
 
-    $('apt-next-problem-btn')?.addEventListener('click', goToNextProblemWindow);
-
     $('apt-btn-full-page')?.addEventListener('click', () => {
       const page = getCurrentPage();
       if (!state.activeSessionId || !page) return;
@@ -2155,15 +2211,15 @@
     $('aptFullPageCloseBtn')?.addEventListener('click', () => $('aptFullPageDialog')?.close());
     $('aptFullPageCloseFooterBtn')?.addEventListener('click', () => $('aptFullPageDialog')?.close());
 
-    $('apt-btn-submit-quarantine')?.addEventListener('click', submitPageToQuarantine);
     $('apt-btn-reset-window')?.addEventListener('click', () => sendWindowAction({ action: 'reset_window' }));
     $('apt-draw-cancel-btn')?.addEventListener('click', cancelDrawMode);
 
+    $('apt-btn-finalize')?.addEventListener('click', finalizeSession);
     $('apt-btn-download-report')?.addEventListener('click', e => {
       downloadSessionBlob('report', `report_${state.activeSessionId || 'ml'}.txt`, e.currentTarget);
     });
-    $('apt-btn-download-pdf')?.addEventListener('click', e => {
-      downloadSessionBlob('archive-pdf', `checked_${state.activeSessionId || 'ml'}.pdf`, e.currentTarget);
+    $('apt-btn-download-zip')?.addEventListener('click', e => {
+      downloadSessionBlob('export-zip', `waybills_${state.activeSessionId || 'ml'}.zip`, e.currentTarget);
     });
 
     // Админ: табы и диалог карантина
@@ -2207,7 +2263,7 @@
   window.AptWaybills = {
     async onOpenOperator() {
       initOnce();
-      await checkMlHealth(false);
+      await checkMlHealth();
       await loadRecentSessions();
     },
 

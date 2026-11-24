@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ПУЛЬС — Транспортная логистика</title>
-  <link rel="stylesheet" href="/static/apt_waybills.css?v=1.19">
+  <link rel="stylesheet" href="/static/apt_waybills.css?v=1.20">
   <style>
     :root {
       --primary: #174ea6;
@@ -64,6 +64,101 @@
       position: sticky;
       top: 0;
       height: 100vh;
+      transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.2s ease;
+    }
+
+    /* Автоскрытие меню на рабочих разделах (открыто только на Главной) */
+    .portal-layout.sidebar-collapsed .sidebar {
+      position: fixed;
+      inset: 0 auto 0 0;
+      z-index: 950;
+      transform: translateX(-100%);
+      box-shadow: none;
+    }
+
+    .portal-layout.sidebar-collapsed.drawer-open .sidebar {
+      transform: translateX(0);
+      box-shadow: 12px 0 36px rgba(15, 23, 42, 0.38);
+    }
+
+    .sidebar-hover-edge {
+      display: none;
+      position: fixed;
+      inset: 0 auto 0 0;
+      width: 10px;
+      z-index: 940;
+      background: transparent;
+    }
+
+    .portal-layout.sidebar-collapsed .sidebar-hover-edge {
+      display: block;
+    }
+
+    .sidebar-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.28);
+      backdrop-filter: blur(1px);
+      z-index: 945;
+    }
+
+    .portal-layout.sidebar-collapsed.drawer-open .sidebar-backdrop {
+      display: block;
+    }
+
+    .workspace-topbar {
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .portal-layout.sidebar-collapsed .workspace-topbar {
+      display: flex;
+    }
+
+    .sidebar-drawer-trigger {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      padding: 8px 14px;
+      border-radius: 9px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: var(--shadow-sm);
+      transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+    }
+
+    .sidebar-drawer-trigger:hover,
+    .sidebar-drawer-trigger:focus-visible {
+      border-color: var(--primary);
+      background: var(--primary-light);
+      color: var(--primary);
+      outline: none;
+    }
+
+    .workspace-breadcrumb {
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+
+    .nav-svg-icon {
+      width: 17px;
+      height: 17px;
+      flex-shrink: 0;
+      opacity: 0.88;
+    }
+
+    .portal-layout.sidebar-collapsed .main-area {
+      max-width: 1320px;
+      width: 100%;
     }
 
     .sidebar-brand {
@@ -833,7 +928,7 @@
 
     @media (max-width: 820px) {
       .portal-layout { flex-direction: column; }
-      .sidebar { width: 100%; height: auto; position: relative; }
+      .portal-layout:not(.sidebar-collapsed) .sidebar { width: 100%; height: auto; position: relative; }
       .main-area { padding: 18px 14px; }
       .date-row, .actions-grid { grid-template-columns: 1fr; }
     }
@@ -885,9 +980,11 @@
 
   <!-- ─── ОСНОВНОЙ ИНТЕРФЕЙС ПОРТАЛА ──────────────────────────── -->
   <div class="portal-layout" id="app-content" style="display: none;">
+    <div class="sidebar-hover-edge" id="sidebar-hover-edge" aria-hidden="true"></div>
+    <div class="sidebar-backdrop" id="sidebar-backdrop" aria-hidden="true"></div>
 
     <!-- Боковая панель навигации (Sidebar) -->
-    <aside class="sidebar">
+    <aside class="sidebar" id="portal-sidebar">
       <div class="sidebar-brand">
         <img src="/static/logo.png" alt="ПУЛЬС" class="sidebar-logo">
         <div class="sidebar-brand-text">
@@ -900,46 +997,55 @@
         <div class="nav-section-label">Навигация</div>
 
         <button class="nav-item active" id="nav-home" onclick="openSection('home')">
-          <span>🏠</span>
+          <svg class="nav-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
           <span>Главная</span>
         </button>
 
         <!-- Раздел ОПТ (раскрывающаяся группа с отдельными окнами) -->
         <button class="nav-item" id="nav-opt" onclick="toggleOptMenu()" style="display: none; justify-content: space-between;">
-          <span style="display:flex;align-items:center;gap:11px;"><span>🚛</span> <span>ОПТ</span></span>
+          <span style="display:flex;align-items:center;gap:11px;">
+            <svg class="nav-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
+            <span>ОПТ</span>
+          </span>
           <span id="opt-chevron" style="font-size: 11px; transition: transform 0.2s;">▼</span>
         </button>
         <div class="nav-subitems open" id="subnav-opt" style="display: none;">
           <button class="nav-subitem" id="subnav-opt-schedules" onclick="openSection('opt-schedules')">
-            <span>📊</span> <span>Графики РК</span>
+            <span>Графики РК</span>
           </button>
           <button class="nav-subitem" id="subnav-opt-orders" onclick="openSection('opt-orders')">
-            <span>📝</span> <span>Заявки перевозчикам</span>
+            <span>Заявки перевозчикам</span>
           </button>
         </div>
 
         <!-- Раздел АПТ (раскрывающаяся группа: Маршрутные листы) -->
         <button class="nav-item" id="nav-apt" onclick="toggleAptMenu()" style="display: none; justify-content: space-between;">
-          <span style="display:flex;align-items:center;gap:11px;"><span>🏥</span> <span>АПТ</span></span>
+          <span style="display:flex;align-items:center;gap:11px;">
+            <svg class="nav-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+            <span>АПТ</span>
+          </span>
           <span id="apt-chevron" style="font-size: 11px; transition: transform 0.2s;">▼</span>
         </button>
         <div class="nav-subitems open" id="subnav-apt" style="display: none;">
           <button class="nav-subitem" id="subnav-apt-waybills" onclick="openSection('apt-waybills')">
-            <span>📋</span> <span>Маршрутные листы</span>
+            <span>Маршрутные листы</span>
           </button>
         </div>
 
         <!-- Раздел Мониторинг (раскрывающаяся группа: Температурные графики и ЭТРН) -->
         <button class="nav-item" id="nav-monitoring" onclick="toggleMonitoringMenu()" style="display: none; justify-content: space-between;">
-          <span style="display:flex;align-items:center;gap:11px;"><span>📡</span> <span>Мониторинг</span></span>
+          <span style="display:flex;align-items:center;gap:11px;">
+            <svg class="nav-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            <span>Мониторинг</span>
+          </span>
           <span id="monitoring-chevron" style="font-size: 11px; transition: transform 0.2s;">▼</span>
         </button>
         <div class="nav-subitems open" id="subnav-monitoring" style="display: none;">
           <button class="nav-subitem" id="subnav-monitoring-thermo" onclick="openSection('thermo')">
-            <span>🌡️</span> <span>Температурные графики</span>
+            <span>Температурные графики</span>
           </button>
           <button class="nav-subitem" id="subnav-monitoring-etrn" onclick="openSection('etrn')">
-            <span>📑</span> <span>Отчет по ЭТРН</span>
+            <span>Отчет по ЭТРН</span>
           </button>
         </div>
 
@@ -947,11 +1053,14 @@
         <div id="admin-nav-group" style="display: none; margin-top: 14px;">
           <div class="nav-section-label">Администрирование</div>
           <button class="nav-item" id="nav-admin-quarantine" onclick="openSection('admin-quarantine')" style="justify-content: space-between;">
-            <span style="display:flex;align-items:center;gap:11px;"><span>🧠</span> <span>Очередь дообучения</span></span>
+            <span style="display:flex;align-items:center;gap:11px;">
+              <svg class="nav-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+              <span>Очередь дообучения</span>
+            </span>
             <span id="nav-quarantine-badge" style="display:none; background:#dc2626; color:#fff; font-size:11px; font-weight:700; padding:1px 7px; border-radius:999px;">0</span>
           </button>
           <button class="nav-item" id="nav-admin" onclick="openSection('admin')">
-            <span>⚙️</span>
+            <svg class="nav-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
             <span>Управление доступом</span>
           </button>
         </div>
@@ -968,16 +1077,23 @@
           </span>
         </div>
         <button type="button" class="btn-sidebar-logout" onclick="logoutPortal()">
-          🔒 Заблокировать / Выйти
+          Заблокировать / Выйти
         </button>
       </div>
     </aside>
 
     <!-- Правая рабочая область -->
     <main class="main-area">
+      <div class="workspace-topbar" id="workspace-topbar">
+        <button type="button" class="sidebar-drawer-trigger" id="sidebar-drawer-trigger" aria-expanded="false" aria-controls="portal-sidebar">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          <span>Разделы</span>
+        </button>
+        <span class="workspace-breadcrumb" id="workspace-breadcrumb"></span>
+      </div>
       <div id="portal-update-banner" style="display: none; align-items: center; justify-content: space-between; gap: 12px; background: #eff6ff; border: 1px solid #bfdbfe; border-left: 4px solid var(--primary); color: #1e3a8a; border-radius: 10px; padding: 10px 16px; margin-bottom: 16px; font-size: 13.5px;">
         <div>
-          🔄 <b>Доступна новая версия портала (<span id="portal-update-ver"></span>).</b>
+          <b>Доступна новая версия портала (<span id="portal-update-ver"></span>).</b>
           Страница обновится автоматически сразу после завершения текущей операции.
         </div>
         <button type="button" class="btn btn-primary btn-sm" onclick="forcePortalReload()">Обновить сейчас</button>
@@ -993,22 +1109,22 @@
             <p>Единый корпоративный портал автоматизации транспортной логистики ФК «ПУЛЬС» (РЦ Черная Грязь)</p>
           </div>
           <span class="badge" id="portal-version-badge">
-            <span class="badge-dot"></span> Версия 1.19
+            <span class="badge-dot"></span> Версия 1.20
           </span>
         </div>
 
         <div class="card">
-          <div class="card-title">📌 О корпоративном портале</div>
+          <div class="card-title">О корпоративном портале</div>
           <p style="font-size: 14.5px; color: var(--text); margin-bottom: 14px; line-height: 1.65;">
             Добро пожаловать в единую систему автоматизации транспортного отдела <b>ФК «ПУЛЬС»</b>.
             Портал объединяет рабочие инструменты и сервисы отдела для удобной, быстрой и централизованной ежедневной работы.
           </p>
           <div style="background: #f8fafc; border: 1px solid var(--border-light); border-left: 4px solid var(--primary); border-radius: 8px; padding: 14px 18px; margin-bottom: 18px;">
             <div style="font-size: 13.5px; font-weight: 700; color: var(--primary); margin-bottom: 6px;">
-              👈 Навигация по сервису
+              Навигация по сервису
             </div>
             <div style="font-size: 13.5px; color: #334155; line-height: 1.55;">
-              Для перехода к нужному рабочему инструменту выберите соответствующий раздел в <b>боковом меню слева</b>.
+              Для перехода к нужному рабочему инструменту выберите раздел в <b>боковом меню слева</b>. Внутри рабочих разделов меню автоматически скрывается, чтобы не занимать место, и открывается при наведении на кнопку «Разделы» или левый край экрана.
             </div>
           </div>
 
@@ -1035,13 +1151,13 @@
       <section id="section-opt-schedules" class="section-view">
         <div class="page-header">
           <div>
-            <h2>📊 ОПТ: Графики РК (Отгрузки филиалов)</h2>
+            <h2>ОПТ: Графики РК (Отгрузки филиалов)</h2>
             <p>Автоматизированная подготовка недельных графиков отгрузки филиалов с РЦ Черная Грязь и рассылка перевозчикам в Outlook</p>
           </div>
         </div>
 
         <div class="card">
-            <div class="card-title">📁 1. Загрузите файл плана отгрузок (.xlsx / .xlsm)</div>
+            <div class="card-title">1. Загрузите файл плана отгрузок (.xlsx / .xlsm)</div>
             <div class="dropzone-wrapper">
               <input type="file" id="fileInput" class="visually-hidden" accept=".xlsm,.xlsx" onchange="handleFileSelected(event)">
               <label for="fileInput" class="dropzone" id="dropzone">
@@ -1180,13 +1296,13 @@
       <section id="section-opt-orders" class="section-view">
         <div class="page-header">
           <div>
-            <h2>📝 ОПТ: Заявки перевозчикам</h2>
+            <h2>ОПТ: Заявки перевозчикам</h2>
             <p>Формирование индивидуальных транспортных заявок Word (.docx) из суточного реестра отгрузок и рассылка в Outlook</p>
           </div>
         </div>
 
         <div class="card">
-            <div class="card-title">📝 Формирование транспортных заявок</div>
+            <div class="card-title">Формирование транспортных заявок</div>
             <div class="dropzone-wrapper">
               <input type="file" id="ordersFileInput" class="visually-hidden" accept=".xlsx,.xlsm" onchange="handleOrdersFileSelected(event)">
               <label for="ordersFileInput" class="dropzone" id="ordersDropzone">
@@ -1300,7 +1416,7 @@
       <section id="section-thermo" class="section-view">
         <div class="page-header">
           <div>
-            <h2>🌡️ Температурные графики Advantum</h2>
+            <h2>Температурные графики Advantum</h2>
             <p>Автоматическая выгрузка температурных графиков по маршрутным листам в PDF и ZIP</p>
           </div>
         </div>
@@ -1364,7 +1480,7 @@
       <section id="section-etrn" class="section-view">
         <div class="page-header">
           <div>
-            <h2>📑 Отчет по подписанию ЭТРН</h2>
+            <h2>Отчет по подписанию ЭТРН</h2>
             <p>Автоматическое сведение реестров ЭТРН, расчет среднего времени подписания перевозчиками и рассылка отчетов в Outlook</p>
           </div>
         </div>
@@ -1491,13 +1607,13 @@
       <section id="section-admin" class="section-view">
         <div class="page-header">
           <div>
-            <h2>⚙️ Управление учетными записями и доступом</h2>
+            <h2>Управление учетными записями и доступом</h2>
             <p>Создание именных учеток сотрудников (формат и.фамилия), управление PIN-кодами и доступом к разделам портала</p>
           </div>
         </div>
 
         <div class="card">
-          <div class="card-title">➕ Добавить нового сотрудника</div>
+          <div class="card-title">Добавить нового сотрудника</div>
           <form onsubmit="event.preventDefault(); createNewUser();">
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: 14px; margin-bottom: 14px;">
               <div>
@@ -1575,19 +1691,18 @@
       <section id="section-apt-waybills" class="section-view">
         <div class="page-header">
           <div>
-            <h2>📋 АПТ: Проверка маршрутных листов</h2>
-            <p>Автоматический поиск недочётов в окнах аптек (печати, подписи, расшифровки, места) и быстрая допроверка</p>
+            <h2>АПТ: Проверка маршрутных листов</h2>
+            <p>Автоматический поиск недочётов в окнах аптек (печати, подписи, расшифровки, цифры) и допроверка оператором</p>
           </div>
           <div class="apt-header-actions">
-            <span class="apt-health-pill" id="apt-ml-health-badge">
-              <span class="apt-health-dot"></span> Проверка ML-сервиса...
-            </span>
-            <button type="button" class="btn btn-outline btn-sm" id="apt-toggle-history-btn">🕒 Недавние проверки</button>
+            <button type="button" class="btn btn-outline btn-sm" id="apt-toggle-history-btn">Недавние проверки (5)</button>
           </div>
         </div>
 
+        <div id="apt-ml-error-banner" class="alert-warning" style="display: none;"></div>
+
         <div class="card" id="apt-history-card" style="display: none;">
-          <div class="card-title">🕒 Последние загруженные пачки PDF</div>
+          <div class="card-title">Последние 5 проверок PDF</div>
           <div class="apt-sessions-bar" id="apt-sessions-bar">
             <span class="apt-muted">Загрузка списка...</span>
           </div>
@@ -1598,17 +1713,26 @@
           <div class="dropzone-wrapper" id="apt-pdf-dropzone-wrapper">
             <input type="file" id="apt-pdf-input" class="visually-hidden" accept=".pdf,application/pdf">
             <label for="apt-pdf-input" class="dropzone" id="apt-pdf-dropzone">
-              <div class="dropzone-icon-wrap" aria-hidden="true">📄</div>
+              <div class="dropzone-icon-wrap" aria-hidden="true">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="17 8 12 3 7 8"></polyline>
+                  <line x1="12" y1="3" x2="12" y2="15"></line>
+                </svg>
+              </div>
               <div class="dropzone-text">Перетащите PDF с маршрутными листами сюда или нажмите для выбора</div>
-              <div class="dropzone-subtext">Поддерживаются многостраничные сканы PDF до 100 МБ</div>
+              <div class="dropzone-subtext">Поддерживаются многостраничные сканы PDF до 600 МБ</div>
             </label>
             <div class="dropzone-loaded" id="apt-pdf-loaded" hidden>
               <div class="dropzone-file-badge" aria-hidden="true">
-                <span>📄</span>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                  <polyline points="14 2 14 8 20 8"></polyline>
+                </svg>
                 <span class="dropzone-file-ext">PDF</span>
               </div>
               <div class="dropzone-file-info">
-                <div class="dropzone-file-status">✓ PDF-файл выбран</div>
+                <div class="dropzone-file-status">PDF-файл выбран</div>
                 <div class="dropzone-file-name" id="apt-pdf-name">—</div>
                 <div class="dropzone-file-meta">
                   <span class="dropzone-file-chip" id="apt-pdf-size">—</span>
@@ -1621,17 +1745,13 @@
             </div>
           </div>
 
-          <div class="apt-toolbar-row" style="margin-top: 14px;">
-            <label style="display:inline-flex; align-items:center; gap:8px; font-size:13px; color:var(--text-muted);">
-              <span>Лимит страниц (1–250):</span>
-              <input type="number" id="apt-max-pages-input" min="1" max="250" value="150" style="width:82px; padding:6px 8px; border:1px solid var(--border); border-radius:8px; font-weight:600;">
-            </label>
-            <button type="button" class="btn btn-primary" id="apt-start-check-btn" disabled>🚀 Проверить маршрутные листы</button>
+          <div class="apt-toolbar-row" style="margin-top: 14px; justify-content: flex-end;">
+            <button type="button" class="btn btn-primary" id="apt-start-check-btn" disabled>Проверить маршрутные листы</button>
           </div>
         </div>
 
         <div class="card apt-progress-card" id="apt-progress-card" style="display: none;">
-          <div class="card-title">⏳ Идёт ML-анализ маршрутных листов</div>
+          <div class="card-title">Выполняется ML-анализ маршрутных листов</div>
           <div class="apt-stepper">
             <div class="apt-step" id="apt-step-render"><span>1.</span> <span>Рендер PDF</span></div>
             <div class="apt-step" id="apt-step-detect"><span>2.</span> <span>Детекция объектов</span></div>
@@ -1647,26 +1767,27 @@
         <div id="apt-session-workspace" style="display: none;">
           <div class="card">
             <div class="apt-toolbar-row" style="margin-bottom: 12px;">
-              <div class="card-title" style="margin-bottom:0;">2. Сводка и выгрузка итогов</div>
-              <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                <button type="button" class="btn btn-outline btn-sm" id="apt-btn-download-report">📄 Скачать итоговый отчёт (.txt)</button>
-                <button type="button" class="btn btn-primary btn-sm" id="apt-btn-download-pdf">📑 Скачать PDF с проверкой</button>
+              <div class="card-title" style="margin-bottom:0;">2. Сводка, завершение проверки и выгрузка</div>
+              <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                <button type="button" class="btn btn-success btn-sm" id="apt-btn-finalize">Завершить проверку и сформировать отчёт</button>
+                <button type="button" class="btn btn-outline btn-sm" id="apt-btn-download-report">Скачать отчёт (.txt)</button>
+                <button type="button" class="btn btn-primary btn-sm" id="apt-btn-download-zip">Скачать архив МЛ (.zip)</button>
               </div>
             </div>
+            <div id="apt-finalize-banner" class="apt-finalize-banner" style="display: none;"></div>
             <div class="apt-kpi-grid" id="apt-kpi-grid"></div>
           </div>
 
           <div class="apt-nav-strip">
             <div class="apt-nav-group">
-              <button type="button" class="btn btn-primary btn-sm" id="apt-filter-errors-btn">⚠️ Только проблемные</button>
-              <button type="button" class="btn btn-outline btn-sm" id="apt-filter-all-btn">📄 Все страницы</button>
+              <button type="button" class="btn btn-primary btn-sm" id="apt-filter-errors-btn">Только проблемные</button>
+              <button type="button" class="btn btn-outline btn-sm" id="apt-filter-all-btn">Все страницы</button>
               <select class="apt-select" id="apt-waybill-select" aria-label="Выбор маршрутного листа"></select>
             </div>
             <div class="apt-nav-group">
-              <button type="button" class="btn btn-outline btn-sm" id="apt-prev-page-btn">◀ Назад</button>
+              <button type="button" class="btn btn-outline btn-sm" id="apt-prev-page-btn">← Назад</button>
               <span style="font-size:13px; font-weight:700;" id="apt-page-counter">—</span>
-              <button type="button" class="btn btn-outline btn-sm" id="apt-next-page-btn">Вперёд ▶</button>
-              <button type="button" class="btn btn-outline btn-sm" id="apt-next-problem-btn">⚡ Следующая ошибка</button>
+              <button type="button" class="btn btn-outline btn-sm" id="apt-next-page-btn">Вперёд →</button>
             </div>
           </div>
 
@@ -1676,25 +1797,24 @@
               <span class="badge-status status-success" id="apt-quarantine-status-pill" style="display:none;"></span>
             </div>
             <div class="apt-nav-group">
-              <button type="button" class="btn btn-outline btn-sm" id="apt-btn-full-page">🔍 Весь лист с рамками</button>
-              <button type="button" class="btn btn-success btn-sm" id="apt-btn-submit-quarantine" disabled>🧠 Отправить исправления в дообучение</button>
+              <button type="button" class="btn btn-outline btn-sm" id="apt-btn-full-page">Весь лист с рамками</button>
             </div>
           </div>
 
           <div class="apt-window-tabs" id="apt-window-tabs"></div>
 
           <div class="apt-workspace-grid">
-            <!-- ЛЕВАЯ ПАНЕЛЬ: Снимок окна + HTML5 Canvas + мини-панель рамки -->
-            <div class="apt-pane-card">
+            <!-- ВЕРХНЯЯ ПАНЕЛЬ НА ВСЮ ШИРИНУ: Крупный снимок окна + HTML5 Canvas -->
+            <div class="apt-pane-card apt-canvas-pane">
               <div class="apt-draw-banner" id="apt-draw-banner" style="display: none;">
                 <div>
-                  ✏️ Обведите на фото один прямоугольник: <b id="apt-draw-label-name">—</b>
+                  Обведите на фото один прямоугольник: <b id="apt-draw-label-name">—</b>
                   <span style="font-weight:500; opacity:0.85;">(Esc — отмена)</span>
                 </div>
                 <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
                   <span id="apt-draw-digit-wrap" style="display:none; align-items:center; gap:6px;">
-                    <span style="font-size:12px;">Число (необяз.):</span>
-                    <input type="number" min="1" max="99" id="apt-draw-digit-val" style="width:62px; padding:4px 6px; border:1px solid #93c5fd; border-radius:6px; font-weight:700;">
+                    <span style="font-size:12px;">Число (1..99):</span>
+                    <input type="number" min="1" max="99" id="apt-draw-digit-val" style="width:66px; padding:4px 6px; border:1px solid #93c5fd; border-radius:6px; font-weight:700;">
                   </span>
                   <button type="button" class="btn btn-outline btn-sm" id="apt-draw-cancel-btn">Отмена</button>
                 </div>
@@ -1711,14 +1831,14 @@
                   <span class="apt-legend-item"><span class="apt-legend-swatch" style="border-color:#0284c7; background:rgba(2,132,199,0.15);"></span> Правка оператора</span>
                   <span class="apt-legend-item"><span class="apt-legend-swatch" style="border-color:#64748b; border-style:dashed;"></span> Защищённый слой</span>
                 </div>
-                <button type="button" class="btn btn-outline btn-sm" id="apt-btn-reset-window" disabled>↩️ Сбросить правки окна</button>
+                <button type="button" class="btn btn-outline btn-sm" id="apt-btn-reset-window" disabled>Сбросить правки окна</button>
               </div>
 
               <div class="apt-box-inspector" id="apt-box-inspector" style="display: none;"></div>
             </div>
 
-            <!-- ПРАВАЯ ПАНЕЛЬ: Список ошибок error_hints -->
-            <div class="apt-pane-card">
+            <!-- НИЖНЯЯ ПАНЕЛЬ: Статус окна и список замечаний -->
+            <div class="apt-pane-card apt-hints-pane">
               <div class="apt-win-status-banner" id="apt-win-status-banner" style="display: none;"></div>
               <div id="apt-win-warnings"></div>
               <div id="apt-hints-list"></div>
@@ -1733,36 +1853,42 @@
       <section id="section-admin-quarantine" class="section-view">
         <div class="page-header">
           <div>
-            <h2>🧠 Очередь дообучения маршрутных листов</h2>
+            <h2>Очередь дообучения маршрутных листов</h2>
             <p>Модерация исправлений операторов («было → стало»), проверка кропов цифр и экспорт одобренного датасета</p>
           </div>
           <div class="apt-header-actions">
-            <button type="button" class="btn btn-outline btn-sm" id="apt-q-refresh-btn">🔄 Обновить</button>
+            <button type="button" class="btn btn-outline btn-sm" id="apt-q-refresh-btn">Обновить</button>
           </div>
+        </div>
+
+        <div class="apt-q-guide-box">
+          <div class="apt-q-guide-title">Как работает очередь дообучения</div>
+          <ul class="apt-q-guide-list">
+            <li><b>Откуда приходят записи:</b> автоматически при нажатии оператором <b>«Завершить проверку и сформировать отчёт»</b> — попадают только страницы, где оператор исправил ошибку модели и в окне не осталось замечаний.</li>
+            <li><b>На проверке:</b> новые правки операторов, ожидающие подтверждения администратора (откройте «Проверить» для сравнения «Было / Стало»).</li>
+            <li><b>Одобрено / Отклонено:</b> проверенные записи; после выгрузки одобренных в датасет обработанные и отклонённые записи автоматически очищаются.</li>
+          </ul>
         </div>
 
         <div class="card">
           <div class="apt-toolbar-row" style="margin-bottom: 14px;">
             <div class="apt-q-tablist" id="apt-q-tablist" role="tablist" aria-label="Фильтр статусов карантина">
               <button type="button" class="apt-q-tab" role="tab" id="apt-q-tab-pending" data-status="pending" aria-selected="true" tabindex="0">
-                ⏳ На проверке <span id="apt-q-tab-pending-count">(0)</span>
+                На проверке <span id="apt-q-tab-pending-count">(0)</span>
               </button>
               <button type="button" class="apt-q-tab" role="tab" id="apt-q-tab-approved" data-status="approved" aria-selected="false" tabindex="-1">
-                ✅ Одобрено
+                Одобрено
               </button>
               <button type="button" class="apt-q-tab" role="tab" id="apt-q-tab-rejected" data-status="rejected" aria-selected="false" tabindex="-1">
-                ❌ Отклонено
+                Отклонено
               </button>
               <button type="button" class="apt-q-tab" role="tab" id="apt-q-tab-all" data-status="all" aria-selected="false" tabindex="-1">
-                📋 Все записи
+                Все записи
               </button>
             </div>
 
             <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
-              <label style="display:inline-flex; align-items:center; gap:6px; font-size:12.5px; cursor:pointer; color:var(--text-muted);">
-                <input type="checkbox" id="apt-q-include-exported"> Включать выгруженные ранее
-              </label>
-              <button type="button" class="btn btn-primary btn-sm" id="apt-q-export-btn">📦 Выгрузить одобренные в датасет</button>
+              <button type="button" class="btn btn-primary btn-sm" id="apt-q-export-btn">Выгрузить одобренные в датасет</button>
             </div>
           </div>
 
@@ -2166,7 +2292,7 @@
     function getClientPortalVersion() {
       const badge = document.getElementById('portal-version-badge');
       const m = (badge?.textContent || '').match(/(\d+\.\d+(?:\.\d+)?)/);
-      return m ? m[1] : '1.19';
+      return m ? m[1] : '1.20';
     }
 
     function isPortalBusy() {
@@ -2503,10 +2629,110 @@
       }
     }
 
+    const SECTION_TITLES = {
+      'home': 'Главная',
+      'opt-schedules': 'ОПТ / Графики РК',
+      'opt-orders': 'ОПТ / Заявки перевозчикам',
+      'apt-waybills': 'АПТ / Проверка маршрутных листов',
+      'thermo': 'Мониторинг / Температурные графики',
+      'etrn': 'Мониторинг / Отчет по ЭТРН',
+      'admin-quarantine': 'Администрирование / Очередь дообучения',
+      'admin': 'Администрирование / Управление доступом',
+    };
+
+    let sidebarCloseTimer = null;
+
+    function openSidebarDrawer() {
+      if (sidebarCloseTimer) {
+        clearTimeout(sidebarCloseTimer);
+        sidebarCloseTimer = null;
+      }
+      const layout = document.getElementById('app-content');
+      const trigger = document.getElementById('sidebar-drawer-trigger');
+      if (layout && layout.classList.contains('sidebar-collapsed')) {
+        layout.classList.add('drawer-open');
+        if (trigger) trigger.setAttribute('aria-expanded', 'true');
+      }
+    }
+
+    function closeSidebarDrawer() {
+      if (sidebarCloseTimer) {
+        clearTimeout(sidebarCloseTimer);
+        sidebarCloseTimer = null;
+      }
+      const layout = document.getElementById('app-content');
+      const trigger = document.getElementById('sidebar-drawer-trigger');
+      if (layout) layout.classList.remove('drawer-open');
+      if (trigger) trigger.setAttribute('aria-expanded', 'false');
+    }
+
+    function scheduleCloseSidebarDrawer() {
+      if (sidebarCloseTimer) clearTimeout(sidebarCloseTimer);
+      sidebarCloseTimer = setTimeout(closeSidebarDrawer, 200);
+    }
+
+    function initSidebarDrawerInteractions() {
+      const sidebar = document.getElementById('portal-sidebar');
+      const trigger = document.getElementById('sidebar-drawer-trigger');
+      const edge = document.getElementById('sidebar-hover-edge');
+      const backdrop = document.getElementById('sidebar-backdrop');
+
+      if (trigger) {
+        trigger.addEventListener('pointerenter', e => {
+          if (e.pointerType === 'mouse') openSidebarDrawer();
+        });
+        trigger.addEventListener('pointerleave', e => {
+          if (e.pointerType === 'mouse') scheduleCloseSidebarDrawer();
+        });
+        trigger.addEventListener('click', () => {
+          const layout = document.getElementById('app-content');
+          if (layout && layout.classList.contains('drawer-open')) {
+            closeSidebarDrawer();
+          } else {
+            openSidebarDrawer();
+          }
+        });
+      }
+      if (edge) {
+        edge.addEventListener('pointerenter', e => {
+          if (e.pointerType === 'mouse') openSidebarDrawer();
+        });
+      }
+      if (sidebar) {
+        sidebar.addEventListener('pointerenter', e => {
+          if (e.pointerType === 'mouse' && sidebarCloseTimer) {
+            clearTimeout(sidebarCloseTimer);
+            sidebarCloseTimer = null;
+          }
+        });
+        sidebar.addEventListener('pointerleave', e => {
+          if (e.pointerType === 'mouse') scheduleCloseSidebarDrawer();
+        });
+      }
+      if (backdrop) {
+        backdrop.addEventListener('click', closeSidebarDrawer);
+      }
+      document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') closeSidebarDrawer();
+      });
+    }
+
+    initSidebarDrawerInteractions();
+
     function openSection(section) {
       if (section === 'opt') section = 'opt-schedules';
       if (section === 'apt') section = 'apt-waybills';
       if (section === 'monitoring') section = 'thermo';
+
+      closeSidebarDrawer();
+      const layout = document.getElementById('app-content');
+      if (layout) {
+        layout.classList.toggle('sidebar-collapsed', section !== 'home');
+      }
+      const crumb = document.getElementById('workspace-breadcrumb');
+      if (crumb) {
+        crumb.textContent = SECTION_TITLES[section] || '';
+      }
 
       document.querySelectorAll('.section-view').forEach(el => el.classList.remove('active'));
       document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
@@ -4178,6 +4404,6 @@
       }
     }
   </script>
-  <script src="/static/apt_waybills.js?v=1.19"></script>
+  <script src="/static/apt_waybills.js?v=1.20"></script>
 </body>
 </html>

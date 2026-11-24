@@ -36,7 +36,7 @@ logger = logging.getLogger("server.ml_waybills")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_ML_HOST = "127.0.0.1"
 DEFAULT_ML_PORT = 8765
-MAX_PDF_UPLOAD_BYTES = 100 * 1024 * 1024
+MAX_PDF_UPLOAD_BYTES = 600 * 1024 * 1024
 ALLOWED_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 ALLOWED_QUARANTINE_STATUSES = frozenset({"pending", "approved", "rejected", "all"})
 
@@ -567,7 +567,7 @@ def create_ml_router(check_auth_fn: Callable[..., dict[str, Any]]) -> APIRouter:
         return result
 
     @router.get("/api/ml/sessions")
-    def ml_list_sessions(request: Request, limit: int = Query(20, ge=1, le=200)):
+    def ml_list_sessions(request: Request, limit: int = Query(5, ge=1, le=50)):
         check_auth_fn(request, required_section="apt_waybills")
         resp = _upstream_request("GET", "/api/ml/sessions", params={"limit": limit}, timeout=15.0)
         return JSONResponse(status_code=resp.status_code, content=resp.json())
@@ -576,7 +576,7 @@ def create_ml_router(check_auth_fn: Callable[..., dict[str, Any]]) -> APIRouter:
     async def ml_upload_pdf(
         request: Request,
         filename: Optional[str] = Query(None),
-        max_pages: int = Query(150, ge=1, le=250),
+        max_pages: int = Query(3500, ge=1, le=5000),
     ):
         check_auth_fn(request, required_section="apt_waybills")
         content_type = (request.headers.get("content-type") or "").lower()
@@ -597,7 +597,7 @@ def create_ml_router(check_auth_fn: Callable[..., dict[str, Any]]) -> APIRouter:
                 resolved_name = str(getattr(file_field, "filename", "") or "waybills.pdf")
             if "max_pages" in form:
                 try:
-                    max_pages = max(1, min(250, int(str(form.get("max_pages")))))
+                    max_pages = max(1, min(5000, int(str(form.get("max_pages")))))
                 except ValueError:
                     pass
         else:
@@ -610,7 +610,7 @@ def create_ml_router(check_auth_fn: Callable[..., dict[str, Any]]) -> APIRouter:
         if len(raw_bytes) > MAX_PDF_UPLOAD_BYTES:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail="Размер PDF превышает допустимый лимит 100 МБ.",
+                detail="Размер PDF превышает допустимый лимит 600 МБ.",
             )
         if not raw_bytes.startswith(b"%PDF-"):
             raise HTTPException(
@@ -621,14 +621,30 @@ def create_ml_router(check_auth_fn: Callable[..., dict[str, Any]]) -> APIRouter:
         safe_filename = os.path.basename(resolved_name.replace("\\", "/")) or "waybills.pdf"
 
         def _forward_upload() -> requests.Response:
-            return _upstream_request(
-                "POST",
-                "/api/ml/sessions/upload",
-                params={"filename": safe_filename, "max_pages": max_pages},
-                raw_body=raw_bytes,
-                headers={"Content-Type": "application/pdf"},
-                timeout=120.0,
-            )
+            try:
+                return _upstream_request(
+                    "POST",
+                    "/api/ml/sessions/upload",
+                    params={"filename": safe_filename, "max_pages": max_pages},
+                    raw_body=raw_bytes,
+                    headers={"Content-Type": "application/pdf"},
+                    timeout=180.0,
+                )
+            except HTTPException as exc:
+                if exc.status_code == 400 and max_pages > 250 and "250" in str(exc.detail):
+                    logger.warning(
+                        "ML-сервис отклонил max_pages=%s (старый лимит 250) — повторяем с max_pages=250.",
+                        max_pages,
+                    )
+                    return _upstream_request(
+                        "POST",
+                        "/api/ml/sessions/upload",
+                        params={"filename": safe_filename, "max_pages": 250},
+                        raw_body=raw_bytes,
+                        headers={"Content-Type": "application/pdf"},
+                        timeout=180.0,
+                    )
+                raise
 
         resp = await asyncio.to_thread(_forward_upload)
         return JSONResponse(status_code=resp.status_code, content=resp.json())
@@ -676,6 +692,88 @@ def create_ml_router(check_auth_fn: Callable[..., dict[str, Any]]) -> APIRouter:
                 "Cache-Control": "no-store",
             },
         )
+
+    @router.get("/api/ml/sessions/{session_id}/export-zip")
+    def ml_download_export_zip(request: Request, session_id: str):
+        check_auth_fn(request, required_section="apt_waybills")
+        sid = _validate_id(session_id, "session_id")
+        resp = _upstream_request("GET", f"/api/ml/sessions/{sid}/export-zip", timeout=300.0)
+        cd = _safe_content_disposition(resp.headers.get("Content-Disposition"), f"waybills_{sid}.zip")
+        return Response(
+            content=resp.content,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": cd,
+                "Cache-Control": "no-store",
+            },
+        )
+
+    @router.post("/api/ml/sessions/{session_id}/finalize")
+    async def ml_finalize_session(request: Request, session_id: str):
+        user = check_auth_fn(request, required_section="apt_waybills")
+        sid = _validate_id(session_id, "session_id")
+        payload = await _parse_json_object(request, allow_empty=True)
+        payload.pop("actor", None)
+        payload["user"] = user["login"]
+        payload["user_name"] = user.get("full_name") or user["login"]
+
+        def _do_finalize() -> dict[str, Any]:
+            try:
+                resp = _upstream_request(
+                    "POST",
+                    f"/api/ml/sessions/{sid}/finalize",
+                    json_body=payload,
+                    timeout=120.0,
+                )
+                return resp.json()
+            except HTTPException as exc:
+                if exc.status_code != 404:
+                    raise
+
+            # Fallback для старой версии review_service.py без /finalize:
+            # отправляем в карантин только страницы с правками оператора, где не осталось ошибок.
+            sess_resp = _upstream_request("GET", f"/api/ml/sessions/{sid}", timeout=30.0)
+            sess_data = sess_resp.json()
+            submitted_pages = 0
+            submitted_crops = 0
+            last_summary = sess_data.get("summary")
+
+            for page in sess_data.get("pages") or []:
+                if page.get("quarantine_item_id"):
+                    continue
+                windows = page.get("windows") or []
+                has_diff = any(
+                    (w.get("original_elements") or []) != (w.get("elements") or [])
+                    for w in windows
+                )
+                all_clean = all(not (w.get("errors") or []) for w in windows)
+                if has_diff and all_clean and page.get("page_id"):
+                    sub_resp = _upstream_request(
+                        "POST",
+                        f"/api/ml/sessions/{sid}/pages/{page['page_id']}/submit-quarantine",
+                        json_body={
+                            "user": payload["user"],
+                            "user_name": payload["user_name"],
+                            "comment": payload.get("comment") or "",
+                        },
+                        timeout=30.0,
+                    )
+                    sub_json = sub_resp.json()
+                    submitted_pages += 1
+                    submitted_crops += int(sub_json.get("digit_crops_count") or 0)
+                    if sub_json.get("session_summary"):
+                        last_summary = sub_json["session_summary"]
+
+            return {
+                "status": "finalized",
+                "fallback": True,
+                "submitted_pages": submitted_pages,
+                "submitted_crops": submitted_crops,
+                "session_summary": last_summary,
+            }
+
+        data = await asyncio.to_thread(_do_finalize)
+        return JSONResponse(status_code=200, content=data)
 
     @router.get("/api/ml/sessions/{session_id}/pages/{page_id}/image")
     def ml_get_page_image(
@@ -762,13 +860,28 @@ def create_ml_router(check_auth_fn: Callable[..., dict[str, Any]]) -> APIRouter:
         payload["user"] = user["login"]
         payload["user_name"] = user.get("full_name") or user["login"]
 
-        resp = await asyncio.to_thread(
-            _upstream_request,
-            "POST",
-            f"/api/ml/sessions/{sid}/pages/{pid}/windows/{window_idx}/action",
-            json_body=payload,
-            timeout=30.0,
-        )
+        try:
+            resp = await asyncio.to_thread(
+                _upstream_request,
+                "POST",
+                f"/api/ml/sessions/{sid}/pages/{pid}/windows/{window_idx}/action",
+                json_body=payload,
+                timeout=30.0,
+            )
+        except HTTPException as exc:
+            if (
+                exc.status_code == 400
+                and payload.get("action") == "mark_valid"
+                and "mark_valid" in str(exc.detail)
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"{exc.detail}. Обновите ML-модуль (review_service.py) "
+                        "для поддержки действия mark_valid."
+                    ),
+                ) from exc
+            raise
         return JSONResponse(status_code=resp.status_code, content=resp.json())
 
     @router.post("/api/ml/sessions/{session_id}/pages/{page_id}/submit-quarantine")
