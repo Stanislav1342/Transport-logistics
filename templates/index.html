@@ -1,0 +1,4183 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ПУЛЬС — Транспортная логистика</title>
+  <link rel="stylesheet" href="/static/apt_waybills.css?v=1.19">
+  <style>
+    :root {
+      --primary: #174ea6;
+      --primary-hover: #123d82;
+      --primary-light: #e8f0fe;
+      --success: #15803d;
+      --success-hover: #166534;
+      --success-bg: #dcfce7;
+      --warning: #b45309;
+      --warning-bg: #fef3c7;
+      --warning-border: #f59e0b;
+      --error: #b91c1c;
+      --error-bg: #fee2e2;
+      --surface: #ffffff;
+      --bg: #f1f5f9;
+      --sidebar-bg: #0f172a;
+      --sidebar-hover: #1e293b;
+      --sidebar-active: #174ea6;
+      --border: #cbd5e1;
+      --border-light: #e2e8f0;
+      --text: #0f172a;
+      --text-muted: #64748b;
+      --radius: 12px;
+      --shadow-sm: 0 1px 3px rgba(0,0,0,0.05);
+      --shadow-md: 0 4px 20px -2px rgba(23, 78, 166, 0.08), 0 2px 8px -1px rgba(0,0,0,0.04);
+      --shadow-lg: 0 10px 25px -3px rgba(23, 78, 166, 0.12), 0 4px 10px -2px rgba(0,0,0,0.05);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    /* ─── Макет с боковым меню (Sidebar Layout) ──────────────── */
+    .portal-layout {
+      display: flex;
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      width: 280px;
+      background: var(--sidebar-bg);
+      color: #f8fafc;
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      border-right: 1px solid #1e293b;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+    }
+
+    .sidebar-brand {
+      padding: 20px 18px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .sidebar-logo {
+      height: 44px;
+      width: auto;
+      background: #fff;
+      padding: 4px 8px;
+      border-radius: 8px;
+      object-fit: contain;
+    }
+
+    .sidebar-brand-text h1 {
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: 0.3px;
+      color: #ffffff;
+      line-height: 1.2;
+    }
+
+    .sidebar-brand-text span {
+      font-size: 11.5px;
+      color: #94a3b8;
+      display: block;
+      margin-top: 2px;
+    }
+
+    .sidebar-nav {
+      padding: 16px 12px;
+      flex: 1;
+      overflow-y: auto;
+    }
+
+    .nav-section-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: #64748b;
+      padding: 8px 12px 6px;
+    }
+
+    .nav-item {
+      width: 100%;
+      background: transparent;
+      border: none;
+      color: #cbd5e1;
+      padding: 11px 14px;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      text-align: left;
+      transition: all 0.18s ease;
+      margin-bottom: 4px;
+    }
+
+    .nav-item:hover {
+      background: var(--sidebar-hover);
+      color: #ffffff;
+    }
+
+    .nav-item.active {
+      background: var(--sidebar-active);
+      color: #ffffff;
+      box-shadow: 0 4px 12px rgba(23, 78, 166, 0.4);
+    }
+
+    .nav-subitems {
+      padding-left: 34px;
+      margin-bottom: 8px;
+      display: none;
+    }
+
+    .nav-subitems.open {
+      display: block;
+    }
+
+    .nav-subitem {
+      width: 100%;
+      background: transparent;
+      border: none;
+      color: #94a3b8;
+      padding: 7px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      text-align: left;
+      transition: all 0.15s;
+      margin-bottom: 2px;
+    }
+
+    .nav-subitem:hover {
+      color: #ffffff;
+      background: rgba(255,255,255,0.05);
+    }
+
+    .nav-subitem.active {
+      color: #60a5fa;
+      font-weight: 700;
+      background: rgba(59, 130, 246, 0.12);
+    }
+
+    .sidebar-footer {
+      padding: 14px 16px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      background: rgba(15, 23, 42, 0.6);
+    }
+
+    .user-info-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .user-name-box {
+      overflow: hidden;
+    }
+
+    .user-fullname {
+      font-size: 13px;
+      font-weight: 700;
+      color: #fff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .user-login-tag {
+      font-size: 11.5px;
+      color: #94a3b8;
+      font-family: ui-monospace, monospace;
+    }
+
+    .btn-sidebar-logout {
+      width: 100%;
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #fca5a5;
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .btn-sidebar-logout:hover {
+      background: rgba(239, 68, 68, 0.25);
+      color: #ffffff;
+    }
+
+    /* ─── Основная рабочая область ───────────────────────────── */
+    .main-area {
+      flex: 1;
+      padding: 28px 32px 48px;
+      overflow-y: auto;
+      max-width: 1120px;
+      margin: 0 auto;
+    }
+
+    .section-view {
+      display: none;
+      animation: fadeIn 0.2s ease-out;
+    }
+
+    .section-view.active {
+      display: block;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .page-header {
+      background: var(--surface);
+      border-radius: var(--radius);
+      padding: 20px 26px;
+      margin-bottom: 22px;
+      box-shadow: var(--shadow-sm);
+      border: 1px solid var(--border-light);
+      border-bottom: 3px solid var(--primary);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 14px;
+    }
+
+    .page-header h2 {
+      font-size: 21px;
+      font-weight: 700;
+      color: var(--primary);
+    }
+
+    .page-header p {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 3px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 12.5px;
+      font-weight: 600;
+      background: #ecfdf5;
+      color: #065f46;
+      border: 1px solid #a7f3d0;
+    }
+
+    .badge-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: #10b981;
+    }
+
+    /* ─── Внутренние табы раздела ОПТ ────────────────────────── */
+    .tabs-nav {
+      display: flex;
+      gap: 8px;
+      background: var(--surface);
+      padding: 6px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border-light);
+      box-shadow: var(--shadow-sm);
+      margin-bottom: 22px;
+    }
+
+    .tab-btn {
+      flex: 1;
+      padding: 12px 18px;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 14px;
+      font-weight: 700;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .tab-btn:hover { background: #f1f5f9; color: var(--text); }
+    .tab-btn.active { background: var(--primary); color: #fff; box-shadow: var(--shadow-sm); }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* ─── Карточки ───────────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-sm);
+      padding: 24px 28px;
+      margin-bottom: 22px;
+      border: 1px solid var(--border-light);
+    }
+
+    .card-title {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text);
+    }
+
+    /* Карточки на Главной */
+    .home-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 20px;
+      margin-top: 10px;
+    }
+
+    .module-card {
+      background: var(--surface);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius);
+      padding: 24px;
+      box-shadow: var(--shadow-sm);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .module-card:hover {
+      border-color: var(--primary);
+      box-shadow: var(--shadow-md);
+      transform: translateY(-2px);
+    }
+
+    .module-icon {
+      font-size: 32px;
+      margin-bottom: 12px;
+    }
+
+    .module-card h3 {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--primary);
+      margin-bottom: 8px;
+    }
+
+    .module-card p {
+      font-size: 13.5px;
+      color: var(--text-muted);
+      margin-bottom: 18px;
+    }
+
+    /* ─── Элементы управления ────────────────────────────────── */
+    .visually-hidden {
+      position: absolute;
+      clip-path: inset(50%);
+      overflow: hidden;
+      width: 1px;
+      height: 1px;
+      margin: -1px;
+      padding: 0;
+      border: 0;
+      white-space: nowrap;
+    }
+
+    .dropzone-wrapper {
+      position: relative;
+    }
+
+    .dropzone {
+      display: block;
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 28px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      background: #f8fafc;
+    }
+    .dropzone:hover, .dropzone.dragover {
+      border-color: var(--primary);
+      background: var(--primary-light);
+    }
+    .dropzone-icon-wrap {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: var(--primary-light);
+      color: var(--primary);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 10px;
+      transition: transform 0.2s ease, background-color 0.2s ease;
+    }
+    .dropzone:hover .dropzone-icon-wrap,
+    .dropzone.dragover .dropzone-icon-wrap {
+      transform: translateY(-2px);
+      background: #dbeafe;
+    }
+    .dropzone-icon { font-size: 38px; margin-bottom: 8px; }
+    .dropzone-text { font-size: 15px; font-weight: 600; color: var(--text); }
+    .dropzone-subtext { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+    .dropzone-loaded {
+      border: 2px solid #86efac;
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      background: linear-gradient(180deg, #f0fdf4 0%, #f8fffb 100%);
+      box-shadow: var(--shadow-sm);
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      transition: all 0.2s ease;
+    }
+    .dropzone-loaded.dragover {
+      border-color: var(--primary);
+      border-style: dashed;
+      background: var(--primary-light);
+    }
+    .dropzone-loaded.is-processed {
+      border-color: #22c55e;
+      box-shadow: 0 2px 10px rgba(21, 128, 61, 0.08);
+    }
+    .dropzone[hidden], .dropzone-loaded[hidden] {
+      display: none;
+    }
+
+    .dropzone-file-badge {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      background: #dcfce7;
+      border: 1px solid #bbf7d0;
+      color: #15803d;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      gap: 1px;
+    }
+    .dropzone-file-ext {
+      font-size: 9px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      line-height: 1;
+      text-transform: uppercase;
+    }
+
+    .dropzone-file-info {
+      flex: 1;
+      min-width: 220px;
+    }
+    .dropzone-file-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #15803d;
+      margin-bottom: 4px;
+    }
+    .dropzone-file-name {
+      font-size: 15.5px;
+      font-weight: 700;
+      color: var(--text);
+      line-height: 1.35;
+      word-break: break-word;
+    }
+    .dropzone-file-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 6px;
+    }
+    .dropzone-file-chip {
+      display: inline-flex;
+      align-items: center;
+      font-size: 11.5px;
+      font-weight: 600;
+      color: #166534;
+      background: #ffffff;
+      border: 1px solid #bbf7d0;
+      border-radius: 999px;
+      padding: 2px 10px;
+    }
+
+    .dropzone-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+      margin-left: auto;
+    }
+    .dropzone-actions .dropzone-replace-btn {
+      background: #ffffff;
+      min-height: 36px;
+      padding: 7px 14px;
+      font-size: 13px;
+      margin-bottom: 0;
+    }
+    .dropzone-actions .dropzone-replace-btn:hover {
+      background: #f1f5f9;
+      border-color: #94a3b8;
+    }
+    .dropzone-clear-btn {
+      width: 36px;
+      height: 36px;
+      min-width: 36px;
+      min-height: 36px;
+      border-radius: 8px;
+      border: 1px solid #fecaca;
+      background: #fff5f5;
+      color: #b91c1c;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+    }
+    .dropzone-clear-btn:hover {
+      background: #fee2e2;
+      border-color: #f87171;
+    }
+
+    .dropzone-wrapper input[type="file"]:focus-visible ~ .dropzone,
+    .dropzone-wrapper input[type="file"]:focus-visible ~ .dropzone-loaded .dropzone-replace-btn,
+    .dropzone-clear-btn:focus-visible {
+      outline: 3px solid var(--primary);
+      outline-offset: 2px;
+    }
+
+    .path-badge {
+      background: #f8fafc;
+      border: 1px solid var(--border-light);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      word-break: break-all;
+    }
+    .path-badge.network { background: #f0fdf4; border-color: #bbf7d0; color: #166534; }
+    .path-badge b { color: var(--text); }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      font-size: 13.5px;
+      font-weight: 600;
+      padding: 10px 18px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-decoration: none;
+    }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
+    .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+    .btn-success { background: var(--success); color: #fff; }
+    .btn-success:hover { background: var(--success-hover); }
+    .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
+    .btn-outline:hover { background: #f1f5f9; border-color: #94a3b8; }
+    .btn-danger { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
+    .btn-danger:hover { background: #fecaca; }
+    .btn-sm { padding: 6px 12px; font-size: 12px; border-radius: 6px; }
+
+    .actions-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
+    .stats-row { display: flex; gap: 12px; margin: 14px 0; flex-wrap: wrap; }
+    .stat-box { flex: 1; min-width: 140px; background: #f8fafc; border: 1px solid var(--border-light); padding: 12px 14px; border-radius: 8px; }
+    .stat-label { font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; }
+    .stat-value { font-size: 18px; font-weight: 700; color: var(--primary); margin-top: 2px; }
+
+    .carriers-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .carrier-tag { background: #f1f5f9; border: 1px solid var(--border-light); padding: 4px 10px; border-radius: 6px; font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
+    .carrier-tag span { background: #e2e8f0; font-weight: 700; border-radius: 10px; padding: 1px 6px; font-size: 11px; }
+
+    /* Формы и таблицы */
+    .form-group { margin-bottom: 18px; }
+    .form-label, .form-group label { display: block; font-size: 13.5px; font-weight: 600; color: #1e293b; margin-bottom: 6px; }
+    .form-control, input[type="date"], input[type="text"], input[type="password"], textarea, select {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 14px;
+      color: var(--text);
+      background: #fff;
+    }
+    .form-control:focus, input:focus, textarea:focus, select:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(23, 78, 166, 0.15);
+    }
+
+    .date-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .presets { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+    .btn-chip {
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 5px 13px;
+      font-size: 12.5px;
+      font-weight: 500;
+      cursor: pointer;
+      color: #334155;
+    }
+    .btn-chip:hover { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+    textarea {
+      min-height: 120px;
+      resize: vertical;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 13px;
+    }
+    .textarea-hint { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+
+    .alert-warning {
+      background-color: #fffbeb;
+      border: 1px solid #fde68a;
+      border-left: 4px solid var(--warning-border);
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-bottom: 18px;
+      color: #92400e;
+      font-size: 13.5px;
+    }
+
+    .alert-info {
+      background-color: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-left: 4px solid var(--primary);
+      border-radius: 8px;
+      padding: 13px 16px;
+      margin-bottom: 18px;
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      color: #1e3a8a;
+      font-size: 13.5px;
+      line-height: 1.45;
+    }
+    .alert-info .alert-icon {
+      flex-shrink: 0;
+      width: 20px;
+      height: 20px;
+      fill: var(--primary);
+      margin-top: 1px;
+    }
+
+    .table-responsive, .table-container {
+      overflow-x: auto;
+      margin-top: 15px;
+      border: 1px solid var(--border-light);
+      border-radius: 8px;
+    }
+    table, .data-table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
+    th, .data-table th { background: #f8fafc; padding: 11px 14px; font-weight: 600; color: var(--text-muted); border-bottom: 1px solid var(--border-light); }
+    td, .data-table td { padding: 11px 14px; border-bottom: 1px solid var(--border-light); vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+
+    .badge-status { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 11.5px; font-weight: 600; }
+    .status-success { background: var(--success-bg); color: var(--success); }
+    .status-not_found { background: var(--warning-bg); color: var(--warning); }
+    .status-error { background: var(--error-bg); color: var(--error); }
+    .status-processing { background: #e0f2fe; color: #0284c7; }
+
+    .progress-bar-container { background: #e2e8f0; height: 12px; border-radius: 6px; overflow: hidden; margin: 16px 0; }
+    .progress-bar { height: 100%; background: linear-gradient(90deg, var(--primary) 0%, #3b82f6 100%); width: 0%; transition: width 0.3s ease; }
+
+    .download-link { color: var(--primary); font-weight: 600; cursor: pointer; background: none; border: none; }
+    .download-link:hover { text-decoration: underline; }
+
+    /* Модальные окна */
+    .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55); backdrop-filter: blur(4px); z-index: 999; align-items: center; justify-content: center; }
+    .modal-backdrop.active { display: flex; }
+    .modal { background: #fff; width: 95%; max-width: 540px; border-radius: var(--radius); box-shadow: var(--shadow-lg); overflow: hidden; }
+    .modal-header { padding: 16px 22px; border-bottom: 1px solid var(--border-light); display: flex; justify-content: space-between; align-items: center; }
+    .modal-header h3 { font-size: 16px; font-weight: 700; }
+    .modal-close { background: none; border: none; font-size: 22px; color: var(--text-muted); cursor: pointer; }
+    .modal-body { padding: 18px 22px; }
+    .modal-footer { padding: 14px 22px; background: #f8fafc; border-top: 1px solid var(--border-light); display: flex; justify-content: flex-end; gap: 10px; }
+
+    .file-item { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--border-light); cursor: pointer; }
+    .file-item:hover { background: #f8fafc; }
+    .file-item.active { background: #eff6ff; }
+    .choice-box { border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 10px; cursor: pointer; display: flex; align-items: center; gap: 10px; }
+    .choice-box:hover { border-color: var(--primary); background: #f8fafc; }
+    .choice-text b { display: block; font-size: 13px; }
+    .choice-text small { color: var(--text-muted); font-size: 12px; }
+
+    /* ─── Окно входа (Логин + 6-значный PIN) ─────────────────── */
+    .pin-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.8);
+      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10000;
+      padding: 20px;
+    }
+
+    .pin-card {
+      background: #ffffff;
+      border-radius: 18px;
+      box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.35);
+      padding: 34px 32px 30px;
+      width: 100%;
+      max-width: 410px;
+      text-align: center;
+    }
+
+    .pin-logo {
+      height: 58px;
+      width: auto;
+      margin-bottom: 12px;
+      object-fit: contain;
+    }
+
+    .pin-card h2 { font-size: 20px; font-weight: 800; color: var(--primary); margin-bottom: 4px; }
+    .pin-subtitle { font-size: 13px; color: var(--text-muted); margin-bottom: 20px; }
+
+    .login-field-wrap { text-align: left; margin-bottom: 14px; }
+    .login-field-wrap label { font-size: 12.5px; font-weight: 700; color: #334155; margin-bottom: 5px; display: block; }
+
+    #modal-login-input {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 15px;
+      font-weight: 600;
+      padding: 11px 14px;
+      border-radius: 10px;
+      border: 1.5px solid var(--border);
+    }
+
+    #modal-pin-input {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      letter-spacing: 10px;
+      font-size: 24px;
+      text-align: center;
+      font-weight: 700;
+      padding: 10px 14px;
+      border-radius: 10px;
+      border: 1.5px solid var(--border);
+      background: #f8fafc;
+    }
+
+    .pin-error {
+      color: #991b1b;
+      background: #fee2e2;
+      border: 1px solid #fecaca;
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 14px;
+    }
+
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border: 2.5px solid rgba(255,255,255,0.3);
+      border-radius: 50%;
+      border-top-color: #fff;
+      animation: spin 0.8s linear infinite;
+      display: inline-block;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    @media (max-width: 820px) {
+      .portal-layout { flex-direction: column; }
+      .sidebar { width: 100%; height: auto; position: relative; }
+      .main-area { padding: 18px 14px; }
+      .date-row, .actions-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ─── ОКНО АВТОРИЗАЦИИ (Логин сотрудника + 6-значный PIN) ─── -->
+  <div id="pin-auth-overlay" class="pin-overlay">
+    <div class="pin-card">
+      <img src="/static/logo.png" alt="ПУЛЬС" class="pin-logo">
+      <h2>ПУЛЬС — Транспортная логистика</h2>
+      <p class="pin-subtitle">Введите ваш корпоративный логин и 6-значный PIN-код</p>
+
+      <form id="pin-form" onsubmit="event.preventDefault(); submitPortalLogin();">
+        <div class="login-field-wrap">
+          <label for="modal-login-input">Логин сотрудника (формат и.фамилия):</label>
+          <input
+            type="text"
+            id="modal-login-input"
+            placeholder="i.ivanov"
+            autocomplete="username"
+            required
+          >
+        </div>
+
+        <div class="login-field-wrap">
+          <label for="modal-pin-input">Персональный PIN-код (6 цифр):</label>
+          <input
+            type="password"
+            id="modal-pin-input"
+            maxlength="6"
+            pattern="[0-9]{6}"
+            inputmode="numeric"
+            placeholder="••••••"
+            autocomplete="off"
+            required
+          >
+        </div>
+
+        <div id="modal-pin-error" class="pin-error" style="display: none;"></div>
+
+        <button type="submit" id="btn-submit-pin" class="btn btn-primary" style="width: 100%; padding: 12px;">
+          <span>Войти в портал</span>
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ─── ОСНОВНОЙ ИНТЕРФЕЙС ПОРТАЛА ──────────────────────────── -->
+  <div class="portal-layout" id="app-content" style="display: none;">
+
+    <!-- Боковая панель навигации (Sidebar) -->
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <img src="/static/logo.png" alt="ПУЛЬС" class="sidebar-logo">
+        <div class="sidebar-brand-text">
+          <h1>ПУЛЬС</h1>
+          <span>Транспортная логистика</span>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <div class="nav-section-label">Навигация</div>
+
+        <button class="nav-item active" id="nav-home" onclick="openSection('home')">
+          <span>🏠</span>
+          <span>Главная</span>
+        </button>
+
+        <!-- Раздел ОПТ (раскрывающаяся группа с отдельными окнами) -->
+        <button class="nav-item" id="nav-opt" onclick="toggleOptMenu()" style="display: none; justify-content: space-between;">
+          <span style="display:flex;align-items:center;gap:11px;"><span>🚛</span> <span>ОПТ</span></span>
+          <span id="opt-chevron" style="font-size: 11px; transition: transform 0.2s;">▼</span>
+        </button>
+        <div class="nav-subitems open" id="subnav-opt" style="display: none;">
+          <button class="nav-subitem" id="subnav-opt-schedules" onclick="openSection('opt-schedules')">
+            <span>📊</span> <span>Графики РК</span>
+          </button>
+          <button class="nav-subitem" id="subnav-opt-orders" onclick="openSection('opt-orders')">
+            <span>📝</span> <span>Заявки перевозчикам</span>
+          </button>
+        </div>
+
+        <!-- Раздел АПТ (раскрывающаяся группа: Маршрутные листы) -->
+        <button class="nav-item" id="nav-apt" onclick="toggleAptMenu()" style="display: none; justify-content: space-between;">
+          <span style="display:flex;align-items:center;gap:11px;"><span>🏥</span> <span>АПТ</span></span>
+          <span id="apt-chevron" style="font-size: 11px; transition: transform 0.2s;">▼</span>
+        </button>
+        <div class="nav-subitems open" id="subnav-apt" style="display: none;">
+          <button class="nav-subitem" id="subnav-apt-waybills" onclick="openSection('apt-waybills')">
+            <span>📋</span> <span>Маршрутные листы</span>
+          </button>
+        </div>
+
+        <!-- Раздел Мониторинг (раскрывающаяся группа: Температурные графики и ЭТРН) -->
+        <button class="nav-item" id="nav-monitoring" onclick="toggleMonitoringMenu()" style="display: none; justify-content: space-between;">
+          <span style="display:flex;align-items:center;gap:11px;"><span>📡</span> <span>Мониторинг</span></span>
+          <span id="monitoring-chevron" style="font-size: 11px; transition: transform 0.2s;">▼</span>
+        </button>
+        <div class="nav-subitems open" id="subnav-monitoring" style="display: none;">
+          <button class="nav-subitem" id="subnav-monitoring-thermo" onclick="openSection('thermo')">
+            <span>🌡️</span> <span>Температурные графики</span>
+          </button>
+          <button class="nav-subitem" id="subnav-monitoring-etrn" onclick="openSection('etrn')">
+            <span>📑</span> <span>Отчет по ЭТРН</span>
+          </button>
+        </div>
+
+        <!-- Админ-панель (только для администратора) -->
+        <div id="admin-nav-group" style="display: none; margin-top: 14px;">
+          <div class="nav-section-label">Администрирование</div>
+          <button class="nav-item" id="nav-admin-quarantine" onclick="openSection('admin-quarantine')" style="justify-content: space-between;">
+            <span style="display:flex;align-items:center;gap:11px;"><span>🧠</span> <span>Очередь дообучения</span></span>
+            <span id="nav-quarantine-badge" style="display:none; background:#dc2626; color:#fff; font-size:11px; font-weight:700; padding:1px 7px; border-radius:999px;">0</span>
+          </button>
+          <button class="nav-item" id="nav-admin" onclick="openSection('admin')">
+            <span>⚙️</span>
+            <span>Управление доступом</span>
+          </button>
+        </div>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="user-info-row">
+          <div class="user-name-box">
+            <div class="user-fullname" id="sidebar-user-name">—</div>
+            <div class="user-login-tag" id="sidebar-user-login">—</div>
+          </div>
+          <span class="badge" style="padding: 3px 8px; font-size: 11px;">
+            <span class="badge-dot"></span> Онлайн
+          </span>
+        </div>
+        <button type="button" class="btn-sidebar-logout" onclick="logoutPortal()">
+          🔒 Заблокировать / Выйти
+        </button>
+      </div>
+    </aside>
+
+    <!-- Правая рабочая область -->
+    <main class="main-area">
+      <div id="portal-update-banner" style="display: none; align-items: center; justify-content: space-between; gap: 12px; background: #eff6ff; border: 1px solid #bfdbfe; border-left: 4px solid var(--primary); color: #1e3a8a; border-radius: 10px; padding: 10px 16px; margin-bottom: 16px; font-size: 13.5px;">
+        <div>
+          🔄 <b>Доступна новая версия портала (<span id="portal-update-ver"></span>).</b>
+          Страница обновится автоматически сразу после завершения текущей операции.
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" onclick="forcePortalReload()">Обновить сейчас</button>
+      </div>
+
+      <!-- ===================================================== -->
+      <!-- СЕКЦИЯ: ГЛАВНАЯ                                       -->
+      <!-- ===================================================== -->
+      <section id="section-home" class="section-view active">
+        <div class="page-header">
+          <div>
+            <h2 id="welcome-title">Добро пожаловать!</h2>
+            <p>Единый корпоративный портал автоматизации транспортной логистики ФК «ПУЛЬС» (РЦ Черная Грязь)</p>
+          </div>
+          <span class="badge" id="portal-version-badge">
+            <span class="badge-dot"></span> Версия 1.19
+          </span>
+        </div>
+
+        <div class="card">
+          <div class="card-title">📌 О корпоративном портале</div>
+          <p style="font-size: 14.5px; color: var(--text); margin-bottom: 14px; line-height: 1.65;">
+            Добро пожаловать в единую систему автоматизации транспортного отдела <b>ФК «ПУЛЬС»</b>.
+            Портал объединяет рабочие инструменты и сервисы отдела для удобной, быстрой и централизованной ежедневной работы.
+          </p>
+          <div style="background: #f8fafc; border: 1px solid var(--border-light); border-left: 4px solid var(--primary); border-radius: 8px; padding: 14px 18px; margin-bottom: 18px;">
+            <div style="font-size: 13.5px; font-weight: 700; color: var(--primary); margin-bottom: 6px;">
+              👈 Навигация по сервису
+            </div>
+            <div style="font-size: 13.5px; color: #334155; line-height: 1.55;">
+              Для перехода к нужному рабочему инструменту выберите соответствующий раздел в <b>боковом меню слева</b>.
+            </div>
+          </div>
+
+          <div class="stats-row" style="margin-top: 8px;">
+            <div class="stat-box">
+              <div class="stat-label">Текущий сотрудник</div>
+              <div class="stat-value" id="home-user-fullname" style="font-size: 15px;">—</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">Корпоративный логин</div>
+              <div class="stat-value" id="home-user-login" style="font-size: 15px; font-family: ui-monospace, monospace;">—</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">Должность</div>
+              <div class="stat-value" id="home-user-position" style="font-size: 15px; color: #15803d;">—</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================================================== -->
+      <!-- СЕКЦИЯ: ОПТ — ГРАФИКИ РК (ОТГРУЗКИ ФИЛИАЛОВ)           -->
+      <!-- ===================================================== -->
+      <section id="section-opt-schedules" class="section-view">
+        <div class="page-header">
+          <div>
+            <h2>📊 ОПТ: Графики РК (Отгрузки филиалов)</h2>
+            <p>Автоматизированная подготовка недельных графиков отгрузки филиалов с РЦ Черная Грязь и рассылка перевозчикам в Outlook</p>
+          </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">📁 1. Загрузите файл плана отгрузок (.xlsx / .xlsm)</div>
+            <div class="dropzone-wrapper">
+              <input type="file" id="fileInput" class="visually-hidden" accept=".xlsm,.xlsx" onchange="handleFileSelected(event)">
+              <label for="fileInput" class="dropzone" id="dropzone">
+                <div class="dropzone-icon-wrap" aria-hidden="true">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="17 8 12 3 7 8"></polyline>
+                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                  </svg>
+                </div>
+                <div class="dropzone-text" id="dropzoneText">Нажмите или перетащите сюда файл плана (.xlsx / .xlsm)</div>
+              </label>
+
+              <div class="dropzone-loaded" id="dropzoneLoaded" role="status" aria-live="polite" hidden>
+                <div class="dropzone-file-badge" aria-hidden="true">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="8" y1="13" x2="16" y2="13"></line>
+                    <line x1="8" y1="17" x2="16" y2="17"></line>
+                  </svg>
+                  <span class="dropzone-file-ext" id="dropzoneExtBadge">XLSX</span>
+                </div>
+                <div class="dropzone-file-info">
+                  <div class="dropzone-file-status" id="dropzoneStatusText">✓ Файл выбран — готов к обработке</div>
+                  <div class="dropzone-file-name" id="dropzoneFileName"></div>
+                  <div class="dropzone-file-meta" id="dropzoneFileMeta"></div>
+                </div>
+                <div class="dropzone-actions">
+                  <label for="fileInput" class="btn btn-outline dropzone-replace-btn">🔄 Заменить файл</label>
+                  <button type="button" class="dropzone-clear-btn" aria-label="Убрать выбранный файл плана" onclick="clearDropzoneFile('schedule')">✕</button>
+                </div>
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; margin-top: 14px; background: #f8fafc; border: 1px solid var(--border-light); border-radius: 8px; padding: 12px 14px;">
+              <div style="flex: 1; min-width: 170px;">
+                <label for="scheduleStartDate" class="form-label" style="margin-bottom: 4px; font-size: 12px;">📅 Дата начала периода (С):</label>
+                <input type="date" id="scheduleStartDate" class="form-control" onchange="onScheduleStartDateChange()">
+              </div>
+              <div style="flex: 1; min-width: 170px;">
+                <label for="scheduleEndDate" class="form-label" style="margin-bottom: 4px; font-size: 12px;">📅 Дата окончания периода (По):</label>
+                <input type="date" id="scheduleEndDate" class="form-control">
+              </div>
+            </div>
+
+            <div class="path-badge" id="schedulesPathBadge">
+              <span>📁 Папка сохранения:</span> <b id="schedulesPathText">Загрузка...</b>
+            </div>
+
+            <div style="margin-top: 15px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+              <button class="btn btn-outline" onclick="openFileSelectModal()">
+                📂 Выбрать готовый график из папки...
+              </button>
+              <button class="btn btn-primary" id="processBtn" style="display:none;" onclick="uploadAndProcess()">
+                ⚡ Обработать файл
+              </button>
+            </div>
+          </div>
+
+          <div class="card" id="resultCard" style="display:none;">
+            <div class="card-title">✅ 2. Готовый результат недели</div>
+            <div class="stats-row">
+              <div class="stat-box">
+                <div class="stat-label">Период недели</div>
+                <div class="stat-value" id="statWeek">-</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-label">Всего рейсов</div>
+                <div class="stat-value" id="statTotal">-</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-label">Перевозчиков</div>
+                <div class="stat-value" id="statCarriers">-</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-label">Рейсов 3PL</div>
+                <div class="stat-value" id="stat3pl" style="color: #dc2626;">0</div>
+              </div>
+            </div>
+
+            <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 14px 18px; margin: 15px 0;">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 15px; flex-wrap: wrap;">
+                <div style="flex: 1; min-width: 250px;">
+                  <div style="font-size: 14px; font-weight: 700; color: #166534;">📁 Активный файл недели</div>
+                  <div style="font-size: 12px; color: #1e293b; margin-top: 3px;" id="schedulesActiveFolderLabel"></div>
+                  <div style="font-size: 13px; font-weight: 600; color: var(--primary); margin-top: 4px;" id="currentFileLabel">Файл: -</div>
+                </div>
+                <div style="display:flex; gap: 8px; flex-wrap: wrap;">
+                  <button class="btn btn-primary" id="directReloadBtn" onclick="reloadCurrentActiveFile()" style="display:none;">
+                    ⚡ Пересобрать и обновить график
+                  </button>
+                  <button class="btn btn-outline" onclick="openFileSelectModal()" style="background: #fff;">
+                    🔄 Выбрать / Обновить из Excel
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div id="reloadNotice" style="display:none; padding: 10px 14px; background: #e0f2fe; border: 1px solid #7dd3fc; border-radius: 8px; font-size: 13px; color: #0369a1; margin-bottom: 15px;"></div>
+
+            <div style="font-size: 13px; font-weight: 600; margin-top: 18px; color: var(--text-muted);">
+              Распределение рейсов по перевозчикам:
+            </div>
+            <div class="carriers-list" id="carriersContainer"></div>
+          </div>
+
+          <div class="card" id="emailCard" style="display:none;">
+            <div class="card-title">✉️ 3. Персональная отправка через Outlook</div>
+            <div class="actions-grid">
+              <button class="btn btn-primary" onclick="openSendModal(null)">
+                ✉️ Отправить ВСЕМ перевозчикам
+              </button>
+              <button class="btn btn-outline" onclick="openSendModal('select')">
+                👤 Выбрать конкретного перевозчика...
+              </button>
+            </div>
+            <div id="freeTripsBlock" style="display:none; margin-top: 14px; padding: 14px 16px; background: #fffbeb; border: 1px solid #fde68a; border-left: 4px solid #f59e0b; border-radius: 8px; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;">
+              <div>
+                <div style="font-size: 13.5px; font-weight: 700; color: #92400e;" id="freeTripsLabel">
+                  ❓ В графике обнаружены свободные рейсы со знаком «?»
+                </div>
+                <div style="font-size: 12.5px; color: #b45309; margin-top: 2px;">
+                  Разослать уведомление об этих свободных рейсах всем перевозчикам из базы контактов
+                </div>
+              </div>
+              <button class="btn btn-primary" style="background: #d97706;" onclick="openSendModal('free')">
+                📢 Разослать свободные рейсы («?») всем
+              </button>
+            </div>
+          </div>
+      </section>
+
+      <!-- ===================================================== -->
+      <!-- СЕКЦИЯ: ОПТ — ЗАЯВКИ ПЕРЕВОЗЧИКАМ                     -->
+      <!-- ===================================================== -->
+      <section id="section-opt-orders" class="section-view">
+        <div class="page-header">
+          <div>
+            <h2>📝 ОПТ: Заявки перевозчикам</h2>
+            <p>Формирование индивидуальных транспортных заявок Word (.docx) из суточного реестра отгрузок и рассылка в Outlook</p>
+          </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">📝 Формирование транспортных заявок</div>
+            <div class="dropzone-wrapper">
+              <input type="file" id="ordersFileInput" class="visually-hidden" accept=".xlsx,.xlsm" onchange="handleOrdersFileSelected(event)">
+              <label for="ordersFileInput" class="dropzone" id="ordersDropzone">
+                <div class="dropzone-icon-wrap" aria-hidden="true">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="17 8 12 3 7 8"></polyline>
+                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                  </svg>
+                </div>
+                <div class="dropzone-text" id="ordersDropzoneText">Нажмите или перетащите сюда суточный реестр отгрузок (.xlsx)</div>
+              </label>
+
+              <div class="dropzone-loaded" id="ordersDropzoneLoaded" role="status" aria-live="polite" hidden>
+                <div class="dropzone-file-badge" aria-hidden="true">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="8" y1="13" x2="16" y2="13"></line>
+                    <line x1="8" y1="17" x2="16" y2="17"></line>
+                  </svg>
+                  <span class="dropzone-file-ext" id="ordersDropzoneExtBadge">XLSX</span>
+                </div>
+                <div class="dropzone-file-info">
+                  <div class="dropzone-file-status" id="ordersDropzoneStatusText">✓ Файл выбран — готов к обработке</div>
+                  <div class="dropzone-file-name" id="ordersDropzoneFileName"></div>
+                  <div class="dropzone-file-meta" id="ordersDropzoneFileMeta"></div>
+                </div>
+                <div class="dropzone-actions">
+                  <label for="ordersFileInput" class="btn btn-outline dropzone-replace-btn">🔄 Заменить файл</label>
+                  <button type="button" class="dropzone-clear-btn" aria-label="Убрать выбранный файл реестра" onclick="clearDropzoneFile('orders')">✕</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="path-badge" id="ordersPathBadge">
+              <span>📁 Папка сохранения заявок:</span> <b id="ordersPathText">Загрузка...</b>
+            </div>
+
+            <div style="margin-top: 15px; display: flex; justify-content: flex-end;">
+              <button class="btn btn-primary" id="processOrdersBtn" style="display:none;" onclick="uploadAndProcessOrders()">
+                ⚡ Сформировать заявки
+              </button>
+            </div>
+          </div>
+
+          <div class="card" id="ordersResultCard" style="display:none;">
+            <div class="card-title">✅ Готовые транспортные заявки</div>
+            <div class="stats-row">
+              <div class="stat-box">
+                <div class="stat-label">Перевозчиков</div>
+                <div class="stat-value" id="statOrdersCarriers">-</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-label">Всего паллет</div>
+                <div class="stat-value" id="statOrdersPallets">-</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-label">Дата отгрузки</div>
+                <div class="stat-value" id="statOrdersDate">-</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-label">Документов Word</div>
+                <div class="stat-value" id="statOrdersDocsCount">-</div>
+              </div>
+            </div>
+
+            <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 14px 18px; margin: 15px 0;">
+              <div style="font-size: 14px; font-weight: 700; color: #166534;">✅ Все файлы заявок успешно сформированы и сохранены</div>
+              <div style="font-size: 12px; color: #1e293b; margin-top: 4px;" id="ordersSavedFolderLabel"></div>
+            </div>
+
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th style="width: 40px;">#</th>
+                    <th>Перевозчик</th>
+                    <th style="text-align: center; width: 75px;">Машин</th>
+                    <th style="text-align: right; width: 85px;">Паллеты</th>
+                    <th>Маршрут</th>
+                    <th style="text-align: center; width: 95px;">Режим</th>
+                    <th>Файл заявки (.docx)</th>
+                    <th style="text-align: center; width: 110px;">Статус</th>
+                  </tr>
+                </thead>
+                <tbody id="ordersTableBody"></tbody>
+              </table>
+            </div>
+
+            <div class="card" id="ordersEmailCard" style="display:none; margin-top: 20px;">
+              <div class="card-title">✉️ Отправка заявок через Outlook</div>
+              <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 14px;">
+                К каждому письму перевозчика будут автоматически прикреплены файлы сформированных для него транспортных заявок (.docx).
+              </p>
+              <div class="actions-grid">
+                <button class="btn btn-primary" onclick="openOrdersSendModal(null)">
+                  ✉️ Отправить ВСЕМ перевозчикам
+                </button>
+                <button class="btn btn-outline" onclick="openOrdersSendModal('select')">
+                  👤 Выбрать конкретного перевозчика...
+                </button>
+              </div>
+            </div>
+          </div>
+      </section>
+
+      <!-- ===================================================== -->
+      <!-- СЕКЦИЯ: ТЕМПЕРАТУРНЫЕ ГРАФИКИ (ADVANTUM)              -->
+      <!-- ===================================================== -->
+      <section id="section-thermo" class="section-view">
+        <div class="page-header">
+          <div>
+            <h2>🌡️ Температурные графики Advantum</h2>
+            <p>Автоматическая выгрузка температурных графиков по маршрутным листам в PDF и ZIP</p>
+          </div>
+        </div>
+
+        <div class="card" id="form-card">
+          <div class="card-title">Параметры выгрузки</div>
+
+          <div class="form-group">
+            <label for="ml-input">Номера маршрутных листов (МЛ):</label>
+            <textarea id="ml-input" placeholder="Вставьте номера МЛ (колонкой из Excel, через запятую или пробел)..." oninput="updateMlCount()"></textarea>
+            <div class="textarea-hint">
+              <span>Пример: МСК541192, МСК538028</span>
+              <span id="ml-count">Распознано: 0 МЛ</span>
+            </div>
+          </div>
+
+          <button type="button" id="btn-start" class="btn btn-primary" style="width:100%;padding:13px;" onclick="startExport()">
+            <span>Запустить выгрузку</span>
+          </button>
+        </div>
+
+        <div class="card" id="progress-card" style="display: none;">
+          <div class="card-title" style="justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+            <span id="progress-title">Выполнение выгрузки...</span>
+            <div id="zip-download-container" style="display: none; align-items: center; gap: 8px; flex-wrap: wrap;">
+              <a id="btn-zip-download" class="btn btn-success" href="#">
+                <span>Скачать все графики (ZIP)</span>
+              </a>
+              <button type="button" id="btn-thermo-send-email" class="btn btn-primary" onclick="openThermoSendModal()">
+                <span>✉️ Отправить на приемку</span>
+              </button>
+            </div>
+          </div>
+
+          <div id="progress-desc" style="font-size:14px;font-weight:500;">Инициализация фонового браузера...</div>
+          <div class="progress-bar-container">
+            <div class="progress-bar" id="progress-bar"></div>
+          </div>
+
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 40px;">#</th>
+                  <th>Маршрутный лист</th>
+                  <th>Статус</th>
+                  <th>Водитель</th>
+                  <th>ТС</th>
+                  <th>Файл</th>
+                </tr>
+              </thead>
+              <tbody id="results-table-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================================================== -->
+      <!-- СЕКЦИЯ: МОНИТОРИНГ — ОТЧЕТЫ ЭТРН                      -->
+      <!-- ===================================================== -->
+      <section id="section-etrn" class="section-view">
+        <div class="page-header">
+          <div>
+            <h2>📑 Отчет по подписанию ЭТРН</h2>
+            <p>Автоматическое сведение реестров ЭТРН, расчет среднего времени подписания перевозчиками и рассылка отчетов в Outlook</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Параметры формирования отчета</div>
+
+          <!-- Вкладки режимов -->
+          <div style="display: flex; gap: 10px; margin-bottom: 18px; border-bottom: 1px solid var(--border-light); padding-bottom: 12px;">
+            <button type="button" class="btn btn-primary btn-sm" id="tab-etrn-auto" onclick="switchEtrnMode('auto')">
+              Полный автосбор отчета
+            </button>
+            <button type="button" class="btn btn-outline btn-sm" id="tab-etrn-manual" onclick="switchEtrnMode('manual')">
+              Загрузка файлов вручную
+            </button>
+          </div>
+
+          <!-- РЕЖИМ 1: Автосбор из 1С -->
+          <div id="etrn-pane-auto">
+            <div class="form-group">
+              <label>Период отгрузок ЭТРН (включительно):</label>
+              <div class="date-row">
+                <div>
+                  <span style="font-size:12px;color:var(--text-muted);">Дата с:</span>
+                  <input type="date" id="etrn-date-from">
+                </div>
+                <div>
+                  <span style="font-size:12px;color:var(--text-muted);">Дата по:</span>
+                  <input type="date" id="etrn-date-to">
+                </div>
+              </div>
+              <div class="presets">
+                <button type="button" class="btn-chip" onclick="setEtrnPreset('today')">Сегодня</button>
+                <button type="button" class="btn-chip" onclick="setEtrnPreset('yesterday')">Вчера</button>
+                <button type="button" class="btn-chip" onclick="setEtrnPreset('3days')">Последние 3 дня</button>
+                <button type="button" class="btn-chip" onclick="setEtrnPreset('7days')">Последние 7 дней</button>
+                <button type="button" class="btn-chip" onclick="setEtrnPreset('current_month')">Текущий месяц</button>
+              </div>
+            </div>
+
+            <button id="btn-etrn-start-auto" class="btn btn-primary" style="width:100%;padding:13px;" onclick="startEtrnAutoTask()">
+              <span>⚡ Сформировать отчет из 1С</span>
+            </button>
+          </div>
+
+          <!-- РЕЖИМ 2: Ручная загрузка 3 файлов -->
+          <div id="etrn-pane-manual" style="display: none;">
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-bottom: 16px;">
+              <div style="border: 1px dashed var(--border); padding: 12px; border-radius: 8px; background: #fafafa;">
+                <label style="font-weight: 700; font-size: 13px; display: block; margin-bottom: 6px;">1. «ЭТРН 1с.xlsx»</label>
+                <input type="file" id="etrn-file-1" accept=".xlsx,.csv" class="form-control" style="font-size: 12px;">
+              </div>
+              <div style="border: 1px dashed var(--border); padding: 12px; border-radius: 8px; background: #fafafa;">
+                <label style="font-weight: 700; font-size: 13px; display: block; margin-bottom: 6px;">2. «Модель расчетов.xlsx»</label>
+                <input type="file" id="etrn-file-2" accept=".xlsx" class="form-control" style="font-size: 12px;">
+              </div>
+              <div style="border: 1px dashed var(--border); padding: 12px; border-radius: 8px; background: #fafafa;">
+                <label style="font-weight: 700; font-size: 13px; display: block; margin-bottom: 6px;">3. «Процент.xlsx»</label>
+                <input type="file" id="etrn-file-3" accept=".xlsx" class="form-control" style="font-size: 12px;">
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 16px;">
+              <label>Выберите период отчета:</label>
+              <div class="date-row">
+                <div>
+                  <span style="font-size:12px;color:var(--text-muted);">Дата с:</span>
+                  <input type="date" id="etrn-manual-date-from">
+                </div>
+                <div>
+                  <span style="font-size:12px;color:var(--text-muted);">Дата по:</span>
+                  <input type="date" id="etrn-manual-date-to">
+                </div>
+              </div>
+              <div class="presets">
+                <button type="button" class="btn-chip" onclick="setEtrnManualPreset('today')">Сегодня</button>
+                <button type="button" class="btn-chip" onclick="setEtrnManualPreset('yesterday')">Вчера</button>
+                <button type="button" class="btn-chip" onclick="setEtrnManualPreset('3days')">Последние 3 дня</button>
+                <button type="button" class="btn-chip" onclick="setEtrnManualPreset('7days')">Последние 7 дней</button>
+                <button type="button" class="btn-chip" onclick="setEtrnManualPreset('current_month')">Текущий месяц</button>
+              </div>
+            </div>
+
+            <button id="btn-etrn-start-manual" class="btn btn-primary" style="width:100%;padding:13px;" onclick="submitEtrnFilesManual()">
+              <span>⚡ Собрать отчет из файлов</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Прогресс-бар -->
+        <div class="card" id="etrn-progress-card" style="display: none;">
+          <div class="card-title">
+            <span id="etrn-progress-title">Формирование отчета ЭТРН...</span>
+          </div>
+          <div id="etrn-progress-desc" style="font-size:14px;font-weight:500;">Инициализация задачи...</div>
+          <div class="progress-bar-container">
+            <div class="progress-bar" id="etrn-progress-bar"></div>
+          </div>
+        </div>
+
+        <!-- Блок готового результата -->
+        <div class="card" id="etrn-result-card" style="display: none;">
+          <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px 18px; margin-bottom: 16px;">
+            <div style="font-size: 15px; font-weight: 700; color: #166534; display: flex; align-items: center; gap: 8px;">
+              <span>✅</span> <span>Сводный отчет по ЭТРН успешно сформирован!</span>
+            </div>
+            <div style="font-size: 13px; color: #334155; margin-top: 6px;" id="etrnResultDetails">—</div>
+          </div>
+
+          <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+            <a id="btn-etrn-download" class="btn btn-primary" href="#" download style="text-decoration: none;">
+              📥 Скачать отчет (.xlsx)
+            </a>
+            <button class="btn btn-outline" style="border-color: #0284c7; color: #0284c7;" onclick="openEtrnSendModal()">
+              ✉️ Отправить отчет в Outlook
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================================================== -->
+      <!-- СЕКЦИЯ: АДМИН-ПАНЕЛЬ УПРАВЛЕНИЯ УЧЕТКАМИ              -->
+      <!-- ===================================================== -->
+      <section id="section-admin" class="section-view">
+        <div class="page-header">
+          <div>
+            <h2>⚙️ Управление учетными записями и доступом</h2>
+            <p>Создание именных учеток сотрудников (формат и.фамилия), управление PIN-кодами и доступом к разделам портала</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">➕ Добавить нового сотрудника</div>
+          <form onsubmit="event.preventDefault(); createNewUser();">
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: 14px; margin-bottom: 14px;">
+              <div>
+                <label class="form-label">Логин (формат и.фамилия):</label>
+                <input type="text" id="new-user-login" placeholder="i.ivanov" required>
+              </div>
+              <div>
+                <label class="form-label">ФИО сотрудника:</label>
+                <input type="text" id="new-user-name" placeholder="Иванов Иван" required>
+              </div>
+              <div>
+                <label class="form-label">Должность сотрудника:</label>
+                <input type="text" id="new-user-position" placeholder="Логист по транспорту" required>
+              </div>
+              <div>
+                <label class="form-label">PIN-код (6 цифр, автогенерация):</label>
+                <div style="display: flex; gap: 8px;">
+                  <input type="text" id="new-user-pin" maxlength="6" pattern="[0-9]{6}" placeholder="Автогенерация" required style="font-family: ui-monospace, monospace; font-weight: 700; letter-spacing: 2px;">
+                  <button type="button" class="btn btn-outline" style="padding: 8px 12px; flex-shrink: 0;" title="Сгенерировать новый уникальный PIN-код" onclick="generateRandomPinForInput()">🎲 Сгенерировать</button>
+                </div>
+              </div>
+            </div>
+
+            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; background: #f8fafc; padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border-light);">
+              <div style="display: flex; align-items: center; gap: 18px; flex-wrap: wrap;">
+                <span style="font-size: 13px; font-weight: 700;">Доступные разделы и подразделы:</span>
+                <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                  <input type="checkbox" id="new-perm-opt-schedules" checked> 📊 ОПТ: Графики РК
+                </label>
+                <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                  <input type="checkbox" id="new-perm-opt-orders" checked> 📝 ОПТ: Заявки перевозчикам
+                </label>
+                <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                  <input type="checkbox" id="new-perm-apt-waybills" checked> 📋 АПТ: Маршрутные листы
+                </label>
+                <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                  <input type="checkbox" id="new-perm-thermo" checked> 🌡️ Температурные графики
+                </label>
+                <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                  <input type="checkbox" id="new-perm-etrn" checked> 📑 Отчет по ЭТРН
+                </label>
+              </div>
+              <button type="submit" class="btn btn-primary">Создать учетную запись</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="card">
+          <div class="card-title" style="justify-content: space-between;">
+            <span>👥 Список учетных записей сотрудников</span>
+            <button class="btn btn-outline btn-sm" onclick="loadAdminUsers()">🔄 Обновить список</button>
+          </div>
+
+          <div class="table-responsive">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Логин</th>
+                  <th>ФИО сотрудника</th>
+                  <th>Должность</th>
+                  <th>Доступ к разделам</th>
+                  <th>Статус</th>
+                  <th style="text-align: right;">Действия</th>
+                </tr>
+              </thead>
+              <tbody id="admin-users-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================================================== -->
+      <!-- СЕКЦИЯ: АПТ → МАРШРУТНЫЕ ЛИСТЫ                       -->
+      <!-- ===================================================== -->
+      <section id="section-apt-waybills" class="section-view">
+        <div class="page-header">
+          <div>
+            <h2>📋 АПТ: Проверка маршрутных листов</h2>
+            <p>Автоматический поиск недочётов в окнах аптек (печати, подписи, расшифровки, места) и быстрая допроверка</p>
+          </div>
+          <div class="apt-header-actions">
+            <span class="apt-health-pill" id="apt-ml-health-badge">
+              <span class="apt-health-dot"></span> Проверка ML-сервиса...
+            </span>
+            <button type="button" class="btn btn-outline btn-sm" id="apt-toggle-history-btn">🕒 Недавние проверки</button>
+          </div>
+        </div>
+
+        <div class="card" id="apt-history-card" style="display: none;">
+          <div class="card-title">🕒 Последние загруженные пачки PDF</div>
+          <div class="apt-sessions-bar" id="apt-sessions-bar">
+            <span class="apt-muted">Загрузка списка...</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">1. Загрузка пачки маршрутных листов (PDF)</div>
+          <div class="dropzone-wrapper" id="apt-pdf-dropzone-wrapper">
+            <input type="file" id="apt-pdf-input" class="visually-hidden" accept=".pdf,application/pdf">
+            <label for="apt-pdf-input" class="dropzone" id="apt-pdf-dropzone">
+              <div class="dropzone-icon-wrap" aria-hidden="true">📄</div>
+              <div class="dropzone-text">Перетащите PDF с маршрутными листами сюда или нажмите для выбора</div>
+              <div class="dropzone-subtext">Поддерживаются многостраничные сканы PDF до 100 МБ</div>
+            </label>
+            <div class="dropzone-loaded" id="apt-pdf-loaded" hidden>
+              <div class="dropzone-file-badge" aria-hidden="true">
+                <span>📄</span>
+                <span class="dropzone-file-ext">PDF</span>
+              </div>
+              <div class="dropzone-file-info">
+                <div class="dropzone-file-status">✓ PDF-файл выбран</div>
+                <div class="dropzone-file-name" id="apt-pdf-name">—</div>
+                <div class="dropzone-file-meta">
+                  <span class="dropzone-file-chip" id="apt-pdf-size">—</span>
+                </div>
+              </div>
+              <div class="dropzone-actions">
+                <label for="apt-pdf-input" class="btn btn-outline dropzone-replace-btn" id="apt-pdf-replace">Заменить файл</label>
+                <button type="button" class="dropzone-clear-btn" id="apt-pdf-clear" title="Убрать файл" aria-label="Убрать файл">&times;</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="apt-toolbar-row" style="margin-top: 14px;">
+            <label style="display:inline-flex; align-items:center; gap:8px; font-size:13px; color:var(--text-muted);">
+              <span>Лимит страниц (1–250):</span>
+              <input type="number" id="apt-max-pages-input" min="1" max="250" value="150" style="width:82px; padding:6px 8px; border:1px solid var(--border); border-radius:8px; font-weight:600;">
+            </label>
+            <button type="button" class="btn btn-primary" id="apt-start-check-btn" disabled>🚀 Проверить маршрутные листы</button>
+          </div>
+        </div>
+
+        <div class="card apt-progress-card" id="apt-progress-card" style="display: none;">
+          <div class="card-title">⏳ Идёт ML-анализ маршрутных листов</div>
+          <div class="apt-stepper">
+            <div class="apt-step" id="apt-step-render"><span>1.</span> <span>Рендер PDF</span></div>
+            <div class="apt-step" id="apt-step-detect"><span>2.</span> <span>Детекция объектов</span></div>
+            <div class="apt-step" id="apt-step-analyze"><span>3.</span> <span>Проверка окон и цифр</span></div>
+          </div>
+          <div class="apt-progress-track">
+            <div class="apt-progress-fill" id="apt-progress-fill"></div>
+          </div>
+          <div style="margin-top:8px; font-size:13px; font-weight:600; color:var(--primary);" id="apt-progress-text">Запуск...</div>
+          <div id="apt-progress-error" style="display:none; margin-top:10px; padding:10px 14px; border-radius:8px; background:var(--error-bg); color:var(--error); font-size:13px; font-weight:600;"></div>
+        </div>
+
+        <div id="apt-session-workspace" style="display: none;">
+          <div class="card">
+            <div class="apt-toolbar-row" style="margin-bottom: 12px;">
+              <div class="card-title" style="margin-bottom:0;">2. Сводка и выгрузка итогов</div>
+              <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <button type="button" class="btn btn-outline btn-sm" id="apt-btn-download-report">📄 Скачать итоговый отчёт (.txt)</button>
+                <button type="button" class="btn btn-primary btn-sm" id="apt-btn-download-pdf">📑 Скачать PDF с проверкой</button>
+              </div>
+            </div>
+            <div class="apt-kpi-grid" id="apt-kpi-grid"></div>
+          </div>
+
+          <div class="apt-nav-strip">
+            <div class="apt-nav-group">
+              <button type="button" class="btn btn-primary btn-sm" id="apt-filter-errors-btn">⚠️ Только проблемные</button>
+              <button type="button" class="btn btn-outline btn-sm" id="apt-filter-all-btn">📄 Все страницы</button>
+              <select class="apt-select" id="apt-waybill-select" aria-label="Выбор маршрутного листа"></select>
+            </div>
+            <div class="apt-nav-group">
+              <button type="button" class="btn btn-outline btn-sm" id="apt-prev-page-btn">◀ Назад</button>
+              <span style="font-size:13px; font-weight:700;" id="apt-page-counter">—</span>
+              <button type="button" class="btn btn-outline btn-sm" id="apt-next-page-btn">Вперёд ▶</button>
+              <button type="button" class="btn btn-outline btn-sm" id="apt-next-problem-btn">⚡ Следующая ошибка</button>
+            </div>
+          </div>
+
+          <div class="apt-nav-strip" style="background:#f8fafc;">
+            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+              <span style="font-size:13.5px;" id="apt-page-meta-text">—</span>
+              <span class="badge-status status-success" id="apt-quarantine-status-pill" style="display:none;"></span>
+            </div>
+            <div class="apt-nav-group">
+              <button type="button" class="btn btn-outline btn-sm" id="apt-btn-full-page">🔍 Весь лист с рамками</button>
+              <button type="button" class="btn btn-success btn-sm" id="apt-btn-submit-quarantine" disabled>🧠 Отправить исправления в дообучение</button>
+            </div>
+          </div>
+
+          <div class="apt-window-tabs" id="apt-window-tabs"></div>
+
+          <div class="apt-workspace-grid">
+            <!-- ЛЕВАЯ ПАНЕЛЬ: Снимок окна + HTML5 Canvas + мини-панель рамки -->
+            <div class="apt-pane-card">
+              <div class="apt-draw-banner" id="apt-draw-banner" style="display: none;">
+                <div>
+                  ✏️ Обведите на фото один прямоугольник: <b id="apt-draw-label-name">—</b>
+                  <span style="font-weight:500; opacity:0.85;">(Esc — отмена)</span>
+                </div>
+                <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                  <span id="apt-draw-digit-wrap" style="display:none; align-items:center; gap:6px;">
+                    <span style="font-size:12px;">Число (необяз.):</span>
+                    <input type="number" min="1" max="99" id="apt-draw-digit-val" style="width:62px; padding:4px 6px; border:1px solid #93c5fd; border-radius:6px; font-weight:700;">
+                  </span>
+                  <button type="button" class="btn btn-outline btn-sm" id="apt-draw-cancel-btn">Отмена</button>
+                </div>
+              </div>
+
+              <div class="apt-canvas-stage" id="apt-canvas-stage">
+                <canvas id="apt-window-canvas"></canvas>
+              </div>
+
+              <div class="apt-toolbar-row" style="margin-top:10px;">
+                <div class="apt-canvas-legend">
+                  <span class="apt-legend-item"><span class="apt-legend-swatch" style="border-color:#16a34a; background:rgba(22,163,74,0.12);"></span> Элемент в норме</span>
+                  <span class="apt-legend-item"><span class="apt-legend-swatch" style="border-color:#dc2626; background:rgba(220,38,38,0.15);"></span> Спорный / ошибка</span>
+                  <span class="apt-legend-item"><span class="apt-legend-swatch" style="border-color:#0284c7; background:rgba(2,132,199,0.15);"></span> Правка оператора</span>
+                  <span class="apt-legend-item"><span class="apt-legend-swatch" style="border-color:#64748b; border-style:dashed;"></span> Защищённый слой</span>
+                </div>
+                <button type="button" class="btn btn-outline btn-sm" id="apt-btn-reset-window" disabled>↩️ Сбросить правки окна</button>
+              </div>
+
+              <div class="apt-box-inspector" id="apt-box-inspector" style="display: none;"></div>
+            </div>
+
+            <!-- ПРАВАЯ ПАНЕЛЬ: Список ошибок error_hints -->
+            <div class="apt-pane-card">
+              <div class="apt-win-status-banner" id="apt-win-status-banner" style="display: none;"></div>
+              <div id="apt-win-warnings"></div>
+              <div id="apt-hints-list"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================================================== -->
+      <!-- СЕКЦИЯ АДМИНА: ОЧЕРЕДЬ ДООБУЧЕНИЯ ML                  -->
+      <!-- ===================================================== -->
+      <section id="section-admin-quarantine" class="section-view">
+        <div class="page-header">
+          <div>
+            <h2>🧠 Очередь дообучения маршрутных листов</h2>
+            <p>Модерация исправлений операторов («было → стало»), проверка кропов цифр и экспорт одобренного датасета</p>
+          </div>
+          <div class="apt-header-actions">
+            <button type="button" class="btn btn-outline btn-sm" id="apt-q-refresh-btn">🔄 Обновить</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="apt-toolbar-row" style="margin-bottom: 14px;">
+            <div class="apt-q-tablist" id="apt-q-tablist" role="tablist" aria-label="Фильтр статусов карантина">
+              <button type="button" class="apt-q-tab" role="tab" id="apt-q-tab-pending" data-status="pending" aria-selected="true" tabindex="0">
+                ⏳ На проверке <span id="apt-q-tab-pending-count">(0)</span>
+              </button>
+              <button type="button" class="apt-q-tab" role="tab" id="apt-q-tab-approved" data-status="approved" aria-selected="false" tabindex="-1">
+                ✅ Одобрено
+              </button>
+              <button type="button" class="apt-q-tab" role="tab" id="apt-q-tab-rejected" data-status="rejected" aria-selected="false" tabindex="-1">
+                ❌ Отклонено
+              </button>
+              <button type="button" class="apt-q-tab" role="tab" id="apt-q-tab-all" data-status="all" aria-selected="false" tabindex="-1">
+                📋 Все записи
+              </button>
+            </div>
+
+            <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+              <label style="display:inline-flex; align-items:center; gap:6px; font-size:12.5px; cursor:pointer; color:var(--text-muted);">
+                <input type="checkbox" id="apt-q-include-exported"> Включать выгруженные ранее
+              </label>
+              <button type="button" class="btn btn-primary btn-sm" id="apt-q-export-btn">📦 Выгрузить одобренные в датасет</button>
+            </div>
+          </div>
+
+          <div id="apt-q-export-result" style="display:none; margin-bottom:14px;"></div>
+
+          <div id="apt-q-tabpanel" role="tabpanel" aria-labelledby="apt-q-tab-pending">
+            <div tabindex="0" role="region" aria-labelledby="apt-q-table-caption" class="apt-table-wrapper" id="apt-q-table-wrapper">
+              <table class="apt-q-table">
+                <caption id="apt-q-table-caption" class="apt-sr-only">Очередь исправлений маршрутных листов на модерацию</caption>
+                <thead>
+                  <tr>
+                    <th>МЛ / Страница</th>
+                    <th>Статус</th>
+                    <th>Сотрудник</th>
+                    <th>Отправлено</th>
+                    <th>Правки (+ / - / ~ / #)</th>
+                    <th>Бизнес-правила</th>
+                    <th>Кропы цифр</th>
+                    <th>Действие</th>
+                  </tr>
+                </thead>
+                <tbody id="apt-q-tbody">
+                  <tr><td colspan="8" style="text-align:center; padding:24px; color:var(--text-muted);">Откройте раздел для загрузки данных...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- ─── МОДАЛЬНЫЕ ОКНА ОПТ (OUTLOOK И ВЫБОР ФАЙЛА) ─────────── -->
+  <div class="modal-backdrop" id="sendModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modalTitle">Отправка графика через Outlook</h3>
+        <button class="modal-close" onclick="closeSendModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group" id="carrierSelectGroup" style="display:none;">
+          <label class="form-label">Выберите перевозчика:</label>
+          <select id="carrierSelect" class="form-control" onchange="updateModalTargetInfo()"></select>
+        </div>
+        <div style="background: #f1f5f9; padding: 12px; border-radius: 8px; margin-bottom: 16px; font-size: 13px;">
+          <div id="modalTargetInfo"><b>Кому:</b> Все перевозчики</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Выберите режим отправки в Outlook:</label>
+          <label class="choice-box">
+            <input type="radio" name="sendMode" value="draft" checked>
+            <div class="choice-text">
+              <b>📝 Создать черновики (Рекомендуется)</b>
+              <small>Письма сохранятся в папке «Черновики» вашего Outlook. Вы сможете проверить каждое письмо перед отправкой.</small>
+            </div>
+          </label>
+          <label class="choice-box">
+            <input type="radio" name="sendMode" value="send">
+            <div class="choice-text">
+              <b>🚀 Отправить сразу</b>
+              <small>Письма будут сразу отправлены адресатам с вашей почты через приложение Outlook.</small>
+            </div>
+          </label>
+        </div>
+        <div id="sendingStatus" style="display:none; text-align:center; padding: 10px; color: var(--primary); font-weight:600;">
+          ⏳ Подключение к Outlook и формирование писем...
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="closeSendModal()">Отмена</button>
+        <button class="btn btn-primary" id="confirmSendBtn" onclick="executeEmailSend()">Подтвердить</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="ordersSendModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="ordersModalTitle">Отправка заявок через Outlook</h3>
+        <button class="modal-close" onclick="closeOrdersSendModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group" id="ordersCarrierSelectGroup" style="display:none;">
+          <label class="form-label">Выберите перевозчика:</label>
+          <select id="ordersCarrierSelect" class="form-control" onchange="updateOrdersModalTargetInfo()"></select>
+        </div>
+        <div style="background: #f1f5f9; padding: 12px; border-radius: 8px; margin-bottom: 16px; font-size: 13px;">
+          <div id="ordersModalTargetInfo"><b>Кому:</b> Все перевозчики</div>
+          <div id="ordersModalFilesInfo" style="margin-top: 4px; color: var(--text-muted); font-size: 12px;"></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Выберите режим отправки в Outlook:</label>
+          <label class="choice-box">
+            <input type="radio" name="ordersSendMode" value="draft" checked>
+            <div class="choice-text">
+              <b>📝 Создать черновики (Рекомендуется)</b>
+              <small>Письма с вложенными заявками (.docx) сохранятся в папке «Черновики» вашего Outlook.</small>
+            </div>
+          </label>
+          <label class="choice-box">
+            <input type="radio" name="ordersSendMode" value="send">
+            <div class="choice-text">
+              <b>🚀 Отправить сразу</b>
+              <small>Письма с файлами заявок (.docx) будут сразу отправлены перевозчикам через ваш Outlook.</small>
+            </div>
+          </label>
+        </div>
+        <div id="ordersSendingStatus" style="display:none; text-align:center; padding: 10px; color: var(--primary); font-weight:600;">
+          ⏳ Подключение к Outlook и прикрепление файлов заявок...
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="closeOrdersSendModal()">Отмена</button>
+        <button class="btn btn-primary" id="confirmOrdersSendBtn" onclick="executeOrdersEmailSend()">Подтвердить</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="fileSelectModal">
+    <div class="modal" style="max-width: 600px;">
+      <div class="modal-header">
+        <h3>🔄 Выбор файла графика</h3>
+        <button class="modal-close" onclick="closeFileSelectModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 12px;">
+          Файлы отсортированы по дате изменения (новые — сверху). Выберите нужный файл:
+        </p>
+        <div id="filesLoading" style="text-align: center; padding: 25px; color: var(--text-muted); font-size: 13px;">
+          ⏳ Чтение файлов в папке...
+        </div>
+        <div id="filesContainer" style="display:none; max-height: 280px; overflow-y: auto; border: 1px solid var(--border-light); border-radius: 8px;"></div>
+        <div id="noFilesMsg" style="display:none; text-align: center; padding: 20px; color: var(--text-muted); font-size: 13px;">
+          В папке пока нет файлов Excel. Сначала загрузите и обработайте файл плана.
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="closeFileSelectModal()">Отмена</button>
+        <button class="btn btn-primary" id="confirmFileSelectBtn" onclick="confirmSelectedFile()" disabled>Выбрать и обновить данные</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── МОДАЛЬНОЕ ОКНО ПОДКЛЮЧЕНИЯ OUTLOOK НА ПК СОТРУДНИКА ────── -->
+  <div class="modal-backdrop" id="bridgeRequiredModal">
+    <div class="modal" style="max-width: 560px;">
+      <div class="modal-header">
+        <h3>✉️ Подключение к вашему личному Outlook</h3>
+        <button class="modal-close" onclick="closeBridgeRequiredModal()">&times;</button>
+      </div>
+      <div class="modal-body" style="font-size: 13.5px; line-height: 1.6; color: var(--text);">
+        <div style="background: #fffbeb; border: 1px solid #fde68a; border-left: 4px solid #f59e0b; border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; color: #92400e;">
+          <b>Почему появилось это окно:</b><br>
+          Портал открыт на вашем компьютере удаленно, а браузер не может управлять программой Microsoft Outlook напрямую без запущенного локального помощника.
+        </div>
+        <p style="margin-bottom: 10px;">
+          Чтобы черновики и письма создавались <b>именно в вашем личном Outlook на вашем компьютере</b> (а не на сервере):
+        </p>
+        <ol style="padding-left: 20px; margin-bottom: 16px;">
+          <li style="margin-bottom: 6px;">Скачайте на свой компьютер (например, на Рабочий стол) два маленьких файла по кнопкам ниже (это нужно сделать <b>только один раз</b>).</li>
+          <li style="margin-bottom: 6px;">Запустите скачанный файл <b><code>Start_Outlook_Bridge.bat</code></b> двойным кликом — откроется небольшое черное окно помощника Outlook.</li>
+          <li>Не закрывая его, вернитесь сюда и снова нажмите <b>«Подтвердить»</b> — все черновики мгновенно появятся в вашем личном Outlook!</li>
+        </ol>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap; background: #f8fafc; padding: 14px; border-radius: 10px; border: 1px solid var(--border);">
+          <a href="/api/outlook-bridge/download" download="outlook_bridge.py" class="btn btn-primary" style="text-decoration: none; flex: 1; justify-content: center;">
+            📥 1. Скачать outlook_bridge.py
+          </a>
+          <a href="/api/outlook-bridge/download-bat" download="Start_Outlook_Bridge.bat" class="btn btn-outline" style="text-decoration: none; flex: 1; justify-content: center;">
+            ⚙️ 2. Скачать Start_Outlook_Bridge.bat
+          </a>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" onclick="closeBridgeRequiredModal()">Понятно</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── МОДАЛЬНОЕ ОКНО КАРТОЧКИ СОТРУДНИКА ДЛЯ ОТПРАВКИ ────── -->
+  <div class="modal-backdrop" id="userInfoModal">
+    <div class="modal" style="max-width: 480px;">
+      <div class="modal-header">
+        <h3>ℹ️ Данные сотрудника для входа</h3>
+        <button class="modal-close" onclick="closeUserInfoModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 12px;">
+          Карточка доступа сотрудника (нажмите «Скопировать для отправки», чтобы переслать коллеге в мессенджер или почту):
+        </p>
+        <div id="userInfoCardBox" style="background: #f8fafc; border: 1px solid var(--border); border-radius: 10px; padding: 16px; font-size: 14px; line-height: 1.7;">
+          <div><span style="color: var(--text-muted);">ФИО сотрудника:</span> <b id="info-user-name">—</b></div>
+          <div><span style="color: var(--text-muted);">Должность:</span> <b id="info-user-pos">—</b></div>
+          <div style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border);">
+            <div><span style="color: var(--text-muted);">Логин для входа:</span> <b id="info-user-login" style="font-family: ui-monospace, monospace; color: var(--primary); font-size: 15px;">—</b></div>
+            <div><span style="color: var(--text-muted);">Персональный PIN-код:</span> <b id="info-user-pin" style="font-family: ui-monospace, monospace; color: #15803d; font-size: 16px; letter-spacing: 1px;">—</b></div>
+          </div>
+        </div>
+        <div id="copyUserInfoSuccess" style="display: none; margin-top: 10px; text-align: center; font-size: 13px; font-weight: 600; color: #15803d;">
+          ✅ Данные скопированы в буфер обмена!
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="closeUserInfoModal()">Закрыть</button>
+        <button class="btn btn-primary" onclick="copyUserInfoToClipboard()">📋 Скопировать для отправки</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── МОДАЛЬНОЕ ОКНО ОТПРАВКИ ОТЧЕТА ЭТРН В OUTLOOK ────── -->
+  <div class="modal-backdrop" id="etrnSendModal">
+    <div class="modal" style="max-width: 520px;">
+      <div class="modal-header">
+        <h3>✉️ Отправка отчета ЭТРН через Outlook</h3>
+        <button class="modal-close" onclick="closeEtrnSendModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div style="background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 14px; font-size: 13px; line-height: 1.6; margin-bottom: 16px;">
+          <div><b>Кому:</b> <span id="etrnModalTo" style="color: #0369a1;">—</span></div>
+          <div style="margin-top: 4px;"><b>Копия:</b> <span id="etrnModalCc" style="color: #475569;">—</span></div>
+          <div style="margin-top: 4px;"><b>Тема:</b> <b id="etrnModalSubject" style="color: var(--text);">ЭТРН отчет (...)</b></div>
+          <div style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border);">
+            <b>Текст письма:</b>
+            <div style="background: #ffffff; padding: 8px 10px; border-radius: 6px; border: 1px solid #e2e8f0; margin-top: 4px; font-size: 12.5px; color: #334155;">
+              Добрый день<br><br>Во вложении список с нарушениями
+            </div>
+          </div>
+          <div style="margin-top: 6px;">
+            <b>Вложение:</b> <span id="etrnModalAttachment" style="color: #15803d; font-weight: 600;">—</span>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Выберите режим отправки в Outlook:</label>
+          <label class="choice-box">
+            <input type="radio" name="etrnSendMode" value="draft" checked>
+            <div class="choice-text">
+              <b>📝 Создать черновик (Рекомендуется)</b>
+              <small>Письмо с вложенным файлом отчета (.xlsx) сохранится в папке «Черновики» вашего личного Outlook.</small>
+            </div>
+          </label>
+          <label class="choice-box">
+            <input type="radio" name="etrnSendMode" value="send">
+            <div class="choice-text">
+              <b>🚀 Отправить сразу</b>
+              <small>Письмо будет сразу отправлено адресатам с вашей личной почты через приложение Outlook.</small>
+            </div>
+          </label>
+        </div>
+
+        <div id="etrnSendingStatus" style="display:none; text-align:center; padding: 10px; color: var(--primary); font-weight:600;">
+          ⏳ Подключение к Outlook и прикрепление отчета...
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="closeEtrnSendModal()">Отмена</button>
+        <button class="btn btn-primary" id="confirmEtrnSendBtn" onclick="executeEtrnEmailSend()">Подтвердить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── МОДАЛЬНОЕ ОКНО ОТПРАВКИ ТЕМПЕРАТУРНЫХ ГРАФИКОВ НА ПРИЕМКУ В OUTLOOK ────── -->
+  <div class="modal-backdrop" id="thermoSendModal">
+    <div class="modal" style="max-width: 520px;">
+      <div class="modal-header">
+        <h3>✉️ Отправить на приемку через Outlook</h3>
+        <button class="modal-close" onclick="closeThermoSendModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div style="background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 14px; font-size: 13px; line-height: 1.6; margin-bottom: 16px;">
+          <div><b>Кому:</b> <span id="thermoModalTo" style="color: #0369a1;">—</span></div>
+          <div style="margin-top: 4px;"><b>Копия:</b> <span id="thermoModalCc" style="color: #475569;">—</span></div>
+          <div style="margin-top: 4px;"><b>Тема:</b> <b id="thermoModalSubject" style="color: var(--text);">Температурные графики</b></div>
+          <div style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border);">
+            <b>Текст письма:</b>
+            <div id="thermoModalBody" style="background: #ffffff; padding: 8px 10px; border-radius: 6px; border: 1px solid #e2e8f0; margin-top: 4px; font-size: 12.5px; color: #334155;">
+              Добрый день,<br><br>Графики по рейсам
+            </div>
+          </div>
+          <div style="margin-top: 6px;">
+            <b>Вложения:</b> <span id="thermoModalAttachment" style="color: #15803d; font-weight: 600;">—</span>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Выберите режим отправки в Outlook:</label>
+          <label class="choice-box">
+            <input type="radio" name="thermoSendMode" value="draft" checked>
+            <div class="choice-text">
+              <b>📝 Создать черновик (Рекомендуется)</b>
+              <small>Письмо с вложенными PDF-файлами графиков сохранится в папке «Черновики» вашего личного Outlook.</small>
+            </div>
+          </label>
+          <label class="choice-box">
+            <input type="radio" name="thermoSendMode" value="send">
+            <div class="choice-text">
+              <b>🚀 Отправить сразу</b>
+              <small>Письмо будет сразу отправлено на приемку с вашей личной почты через приложение Outlook.</small>
+            </div>
+          </label>
+        </div>
+
+        <div id="thermoSendingStatus" style="display:none; text-align:center; padding: 10px; color: var(--primary); font-weight:600;">
+          ⏳ Подключение к Outlook и прикрепление графиков...
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="closeThermoSendModal()">Отмена</button>
+        <button class="btn btn-primary" id="confirmThermoSendBtn" onclick="executeThermoEmailSend()">Подтвердить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── НАТИВНЫЕ <dialog> РАЗДЕЛА АПТ И КАРАНТИНА ДООБУЧЕНИЯ ──────── -->
+  <dialog id="aptFullPageDialog" class="apt-dialog" closedby="any" aria-labelledby="aptFullPageDialogTitle">
+    <div class="apt-dialog-header">
+      <h1 id="aptFullPageDialogTitle">Полный лист с разметкой</h1>
+      <button type="button" class="modal-close" id="aptFullPageCloseBtn" aria-label="Закрыть окно">&times;</button>
+    </div>
+    <div class="apt-dialog-body" style="text-align:center; background:#f8fafc;">
+      <img id="aptFullPageImg" alt="Аннотированная страница маршрутного листа" style="max-width:100%; height:auto; border-radius:8px; border:1px solid var(--border-light);">
+    </div>
+    <div class="apt-dialog-footer" style="justify-content:flex-end;">
+      <button type="button" class="btn btn-outline" id="aptFullPageCloseFooterBtn">Закрыть</button>
+    </div>
+  </dialog>
+
+  <dialog id="aptQuarantineDialog" class="apt-dialog" closedby="any" aria-labelledby="aptQuarantineDialogTitle">
+    <div class="apt-dialog-header">
+      <h1 id="aptQuarantineDialogTitle">Проверка исправлений для дообучения</h1>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <button type="button" class="btn btn-outline btn-sm" id="aptQOpenFullPageBtn">🔍 Полный лист</button>
+        <button type="button" class="modal-close" id="aptQCloseBtn" aria-label="Закрыть окно">&times;</button>
+      </div>
+    </div>
+    <div class="apt-dialog-body">
+      <div id="aptQMetaBox" style="background:#f8fafc; border:1px solid var(--border-light); border-radius:10px; padding:12px 14px; margin-bottom:14px;"></div>
+      <div id="aptQWindowsCompare"></div>
+      <div style="margin-top:10px;">
+        <div style="font-size:14px; font-weight:700; margin-bottom:8px;">Вырезанные кропы цифр для классификатора</div>
+        <div class="apt-crops-row" id="aptQCropsGallery"></div>
+      </div>
+    </div>
+    <div class="apt-dialog-footer">
+      <textarea id="aptQAdminComment" rows="2" placeholder="Комментарий администратора (необязательно)..." style="flex:1; min-width:240px; padding:8px 10px; border:1px solid var(--border); border-radius:8px; font-size:13px;"></textarea>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button type="button" class="btn btn-outline" id="aptQCancelBtn" autofocus>Закрыть</button>
+        <button type="button" class="btn btn-danger" id="aptQRejectBtn">❌ Отклонить</button>
+        <button type="button" class="btn btn-success" id="aptQApproveBtn">✅ Одобрить</button>
+      </div>
+    </div>
+  </dialog>
+
+  <script>
+    // ─── Глобальное состояние авторизации и сессии ──────────────────────────
+    window.authToken = null;
+    window.currentUser = null;
+
+    const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 минут автоблокировки
+    let lastActivityTime = Date.now();
+    let idleCheckInterval = null;
+
+    function authHeaders(extra = {}) {
+      const h = { ...extra };
+      if (window.authToken) {
+        h['X-Auth-Token'] = window.authToken;
+      }
+      return h;
+    }
+
+    function resetIdleTimer() {
+      lastActivityTime = Date.now();
+    }
+
+    function initIdleTracker() {
+      const activityEvents = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'];
+      let lastThrottle = 0;
+      const onActivity = () => {
+        const now = Date.now();
+        if (now - lastThrottle > 1000) {
+          lastThrottle = now;
+          resetIdleTimer();
+        }
+      };
+      activityEvents.forEach(evt => window.addEventListener(evt, onActivity, { passive: true }));
+
+      if (idleCheckInterval) clearInterval(idleCheckInterval);
+      idleCheckInterval = setInterval(() => {
+        if (window.authToken && (Date.now() - lastActivityTime >= IDLE_TIMEOUT_MS)) {
+          lockScreen('Сессия автоматически заблокирована из-за бездействия (30 минут). Введите PIN-код.');
+        }
+      }, 15000);
+    }
+
+    // =========================================================================
+    // АВТООБНОВЛЕНИЕ СТРАНИЦЫ ПРИ ВЫХОДЕ НОВОЙ ВЕРСИИ ПОРТАЛА
+    // =========================================================================
+    let pendingServerVersion = null;
+    let pendingReloadWatcher = null;
+
+    function getClientPortalVersion() {
+      const badge = document.getElementById('portal-version-badge');
+      const m = (badge?.textContent || '').match(/(\d+\.\d+(?:\.\d+)?)/);
+      return m ? m[1] : '1.19';
+    }
+
+    function isPortalBusy() {
+      if (typeof pollInterval !== 'undefined' && pollInterval) return true;
+      if (typeof etrnPollInterval !== 'undefined' && etrnPollInterval) return true;
+      if (window.AptWaybills && typeof window.AptWaybills.isBusy === 'function' && window.AptWaybills.isBusy()) return true;
+      if (document.querySelector('.modal-backdrop.active')) return true;
+
+      const busyBtnIds = ['processBtn', 'processOrdersBtn', 'btn-start', 'btn-etrn-start-auto', 'btn-etrn-start-manual'];
+      for (const id of busyBtnIds) {
+        const el = document.getElementById(id);
+        if (el && el.disabled && el.offsetParent !== null) return true;
+      }
+
+      if (window.authToken) {
+        const mlInp = document.getElementById('ml-input');
+        if (mlInp && mlInp.value.trim().length > 0) return true;
+      } else {
+        const pinInp = document.getElementById('modal-pin-input');
+        if (pinInp && pinInp.value.trim().length > 0) return true;
+      }
+      return false;
+    }
+
+    function showPortalUpdateBanner(newVersion) {
+      const banner = document.getElementById('portal-update-banner');
+      const verSpan = document.getElementById('portal-update-ver');
+      if (verSpan) verSpan.textContent = newVersion ? `v${newVersion}` : '';
+      if (banner) banner.style.display = 'flex';
+    }
+
+    function forcePortalReload(targetVer) {
+      const ver = targetVer || pendingServerVersion || '';
+      const alreadyTried = ver && sessionStorage.getItem('puls_reloaded_ver') === ver;
+      if (ver) {
+        sessionStorage.setItem('puls_reloaded_ver', ver);
+      }
+      if (alreadyTried) {
+        window.location.href = '/?v=' + encodeURIComponent(ver) + '&_t=' + Date.now();
+      } else {
+        window.location.reload();
+      }
+    }
+
+    function startPendingReloadWatcher() {
+      if (pendingReloadWatcher) return;
+      pendingReloadWatcher = setInterval(() => {
+        if (!pendingServerVersion) {
+          clearInterval(pendingReloadWatcher);
+          pendingReloadWatcher = null;
+          return;
+        }
+        if (!isPortalBusy()) {
+          clearInterval(pendingReloadWatcher);
+          pendingReloadWatcher = null;
+          forcePortalReload(pendingServerVersion);
+        }
+      }, 10000);
+    }
+
+    async function checkPortalVersion() {
+      try {
+        const resp = await fetch('/api/status?_t=' + Date.now(), { cache: 'no-store' });
+        if (!resp.ok) return;
+        const data = await resp.json().catch(() => null);
+        if (!data || !data.version) return;
+
+        const clientVer = getClientPortalVersion();
+        const serverVer = String(data.version);
+        if (serverVer === clientVer) {
+          pendingServerVersion = null;
+          sessionStorage.removeItem('puls_reloaded_ver');
+          return;
+        }
+
+        pendingServerVersion = serverVer;
+        if (sessionStorage.getItem('puls_reloaded_ver') === serverVer) {
+          showPortalUpdateBanner(serverVer);
+          return;
+        }
+
+        if (!isPortalBusy()) {
+          sessionStorage.setItem('puls_reloaded_ver', serverVer);
+          window.location.reload();
+        } else {
+          showPortalUpdateBanner(serverVer);
+          startPendingReloadWatcher();
+        }
+      } catch (e) {
+        // Сервер временно перезагружается — повторим на следующем тике
+      }
+    }
+
+    function initPortalAutoUpdate() {
+      setTimeout(checkPortalVersion, 3000);
+      setInterval(checkPortalVersion, 60000);
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+          checkPortalVersion();
+        }
+      });
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      setEtrnPreset('yesterday');
+      setEtrnManualPreset('yesterday');
+      initIdleTracker();
+      initPortalAutoUpdate();
+      updateMlCount();
+
+      const savedLogin = localStorage.getItem('puls_last_login') || '';
+      const loginInput = document.getElementById('modal-login-input');
+      const pinInput = document.getElementById('modal-pin-input');
+      if (loginInput) {
+        loginInput.value = savedLogin;
+      }
+      if (pinInput) {
+        if (savedLogin) {
+          pinInput.focus();
+        } else if (loginInput) {
+          loginInput.focus();
+        }
+        pinInput.addEventListener('input', () => {
+          if (pinInput.value.trim().length === 6 && loginInput.value.trim().length >= 3) {
+            submitPortalLogin();
+          }
+        });
+      }
+    });
+
+    async function submitPortalLogin() {
+      const loginInput = document.getElementById('modal-login-input');
+      const pinInput = document.getElementById('modal-pin-input');
+      const submitBtn = document.getElementById('btn-submit-pin');
+      const errDiv = document.getElementById('modal-pin-error');
+
+      const login = (loginInput?.value || '').trim().toLowerCase();
+      const pin = (pinInput?.value || '').trim();
+
+      if (!login) {
+        showPinError('Введите логин сотрудника (например: i.ivanov)');
+        return;
+      }
+      if (pin.length !== 6) {
+        showPinError('Введите 6-значный PIN-код');
+        return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = `<span class="spinner"></span><span>Проверка...</span>`;
+      if (errDiv) errDiv.style.display = 'none';
+
+      try {
+        const resp = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ login, pin })
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          throw new Error(data.detail || 'Неверный логин или PIN-код');
+        }
+
+        window.authToken = data.token;
+        window.currentUser = data.user;
+        localStorage.setItem('puls_last_login', login);
+        resetIdleTimer();
+
+        applyUserPermissionsToUI(data.user);
+        document.getElementById('pin-auth-overlay').style.display = 'none';
+        document.getElementById('app-content').style.display = 'flex';
+
+        const perms = data.user.permissions || [];
+        if (perms.includes('opt_schedules') || perms.includes('opt_orders') || perms.includes('opt') || data.user.role === 'admin') {
+          loadStorageInfo();
+        }
+        if (activeTaskId && !pollInterval) {
+          pollTaskStatus();
+        }
+      } catch (err) {
+        showPinError(err.message || 'Ошибка входа');
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = `<span>Войти в портал</span>`;
+      }
+    }
+
+    function applyUserPermissionsToUI(user) {
+      document.getElementById('sidebar-user-name').innerText = user.full_name || user.login;
+      document.getElementById('sidebar-user-login').innerText = user.login;
+      document.getElementById('welcome-title').innerText = `Здравствуйте, ${user.full_name || user.login}!`;
+
+      const homeName = document.getElementById('home-user-fullname');
+      const homeLogin = document.getElementById('home-user-login');
+      const homePos = document.getElementById('home-user-position');
+      if (homeName) homeName.innerText = user.full_name || user.login;
+      if (homeLogin) homeLogin.innerText = user.login;
+      if (homePos) homePos.innerText = user.position || 'Специалист отдела логистики';
+
+      const perms = user.permissions || [];
+      const isAdmin = user.role === 'admin';
+      const hasOptSchedules = isAdmin || perms.includes('opt_schedules') || perms.includes('opt');
+      const hasOptOrders = isAdmin || perms.includes('opt_orders') || perms.includes('opt');
+      const hasAnyOpt = hasOptSchedules || hasOptOrders;
+      const hasAptWaybills = isAdmin || perms.includes('apt_waybills');
+      const hasThermo = isAdmin || perms.includes('thermo');
+      const hasEtrn = isAdmin || perms.includes('etrn');
+      const hasAnyMonitoring = hasThermo || hasEtrn;
+
+      document.getElementById('nav-opt').style.display = hasAnyOpt ? 'flex' : 'none';
+      document.getElementById('subnav-opt').style.display = hasAnyOpt ? 'block' : 'none';
+      document.getElementById('subnav-opt-schedules').style.display = hasOptSchedules ? 'flex' : 'none';
+      document.getElementById('subnav-opt-orders').style.display = hasOptOrders ? 'flex' : 'none';
+
+      document.getElementById('nav-apt').style.display = hasAptWaybills ? 'flex' : 'none';
+      document.getElementById('subnav-apt').style.display = hasAptWaybills ? 'block' : 'none';
+      document.getElementById('subnav-apt-waybills').style.display = hasAptWaybills ? 'flex' : 'none';
+
+      document.getElementById('nav-monitoring').style.display = hasAnyMonitoring ? 'flex' : 'none';
+      document.getElementById('subnav-monitoring').style.display = hasAnyMonitoring ? 'block' : 'none';
+      document.getElementById('subnav-monitoring-thermo').style.display = hasThermo ? 'flex' : 'none';
+      document.getElementById('subnav-monitoring-etrn').style.display = hasEtrn ? 'flex' : 'none';
+
+      document.getElementById('admin-nav-group').style.display = isAdmin ? 'block' : 'none';
+      if (isAdmin && window.AptWaybills && typeof window.AptWaybills.refreshQuarantineBadge === 'function') {
+        window.AptWaybills.refreshQuarantineBadge();
+      }
+      loadMailConfig();
+
+      openSection('home');
+    }
+
+    function showPinError(msg) {
+      const errDiv = document.getElementById('modal-pin-error');
+      const pinInput = document.getElementById('modal-pin-input');
+      if (errDiv) {
+        errDiv.innerText = msg;
+        errDiv.style.display = 'block';
+      }
+      if (pinInput) {
+        pinInput.value = '';
+        pinInput.focus();
+      }
+    }
+
+    async function logoutPortal() {
+      if (window.authToken) {
+        fetch('/api/auth/logout', { method: 'POST', headers: authHeaders() }).catch(() => {});
+      }
+      lockScreen();
+    }
+
+    function lockScreen(message) {
+      window.authToken = null;
+      window.currentUser = null;
+      if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+      }
+      if (window.AptWaybills && typeof window.AptWaybills.onLogout === 'function') {
+        window.AptWaybills.onLogout();
+      }
+      document.getElementById('app-content').style.display = 'none';
+      document.getElementById('pin-auth-overlay').style.display = 'flex';
+      const pinInput = document.getElementById('modal-pin-input');
+      if (pinInput) {
+        pinInput.value = '';
+        pinInput.focus();
+      }
+      if (message) {
+        showPinError(message);
+      } else {
+        const errDiv = document.getElementById('modal-pin-error');
+        if (errDiv) errDiv.style.display = 'none';
+      }
+    }
+
+    // ─── Навигация между разделами портала ──────────────────────────────────
+    function toggleOptMenu() {
+      const subOpt = document.getElementById('subnav-opt');
+      const chevron = document.getElementById('opt-chevron');
+      if (subOpt.classList.contains('open')) {
+        subOpt.classList.remove('open');
+        subOpt.style.display = 'none';
+        if (chevron) chevron.style.transform = 'rotate(-90deg)';
+      } else {
+        subOpt.classList.add('open');
+        subOpt.style.display = 'block';
+        if (chevron) chevron.style.transform = 'rotate(0deg)';
+        const isSchedulesActive = document.getElementById('section-opt-schedules').classList.contains('active');
+        const isOrdersActive = document.getElementById('section-opt-orders').classList.contains('active');
+        if (!isSchedulesActive && !isOrdersActive) {
+          const canSch = document.getElementById('subnav-opt-schedules').style.display !== 'none';
+          openSection(canSch ? 'opt-schedules' : 'opt-orders');
+        }
+      }
+    }
+
+    function toggleAptMenu() {
+      const subApt = document.getElementById('subnav-apt');
+      const chevron = document.getElementById('apt-chevron');
+      if (subApt.classList.contains('open')) {
+        subApt.classList.remove('open');
+        subApt.style.display = 'none';
+        if (chevron) chevron.style.transform = 'rotate(-90deg)';
+      } else {
+        subApt.classList.add('open');
+        subApt.style.display = 'block';
+        if (chevron) chevron.style.transform = 'rotate(0deg)';
+        const isAptWaybillsActive = document.getElementById('section-apt-waybills')?.classList.contains('active');
+        if (!isAptWaybillsActive) {
+          openSection('apt-waybills');
+        }
+      }
+    }
+
+    function toggleMonitoringMenu() {
+      const subMon = document.getElementById('subnav-monitoring');
+      const chevron = document.getElementById('monitoring-chevron');
+      if (subMon.classList.contains('open')) {
+        subMon.classList.remove('open');
+        subMon.style.display = 'none';
+        if (chevron) chevron.style.transform = 'rotate(-90deg)';
+      } else {
+        subMon.classList.add('open');
+        subMon.style.display = 'block';
+        if (chevron) chevron.style.transform = 'rotate(0deg)';
+        const isThermoActive = document.getElementById('section-thermo').classList.contains('active');
+        const isEtrnActive = document.getElementById('section-etrn').classList.contains('active');
+        if (!isThermoActive && !isEtrnActive) {
+          const canThermo = document.getElementById('subnav-monitoring-thermo').style.display !== 'none';
+          openSection(canThermo ? 'thermo' : 'etrn');
+        }
+      }
+    }
+
+    function openSection(section) {
+      if (section === 'opt') section = 'opt-schedules';
+      if (section === 'apt') section = 'apt-waybills';
+      if (section === 'monitoring') section = 'thermo';
+
+      document.querySelectorAll('.section-view').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.nav-subitem').forEach(el => el.classList.remove('active'));
+
+      const targetSec = document.getElementById(`section-${section}`);
+      if (targetSec) targetSec.classList.add('active');
+
+      const mainArea = document.querySelector('.main-area');
+      if (mainArea) {
+        mainArea.classList.toggle('wide-mode', section === 'apt-waybills' || section === 'admin-quarantine');
+      }
+
+      if (section === 'opt-schedules' || section === 'opt-orders') {
+        const navOpt = document.getElementById('nav-opt');
+        const subOpt = document.getElementById('subnav-opt');
+        const chevron = document.getElementById('opt-chevron');
+        if (navOpt) navOpt.classList.add('active');
+        if (subOpt) {
+          subOpt.classList.add('open');
+          subOpt.style.display = 'block';
+        }
+        if (chevron) chevron.style.transform = 'rotate(0deg)';
+
+        const subBtn = document.getElementById(`subnav-${section}`);
+        if (subBtn) subBtn.classList.add('active');
+      } else if (section === 'apt-waybills') {
+        const navApt = document.getElementById('nav-apt');
+        const subApt = document.getElementById('subnav-apt');
+        const chevron = document.getElementById('apt-chevron');
+        if (navApt) navApt.classList.add('active');
+        if (subApt) {
+          subApt.classList.add('open');
+          subApt.style.display = 'block';
+        }
+        if (chevron) chevron.style.transform = 'rotate(0deg)';
+
+        const subBtn = document.getElementById('subnav-apt-waybills');
+        if (subBtn) subBtn.classList.add('active');
+        if (window.AptWaybills && typeof window.AptWaybills.onOpenOperator === 'function') {
+          window.AptWaybills.onOpenOperator();
+        }
+      } else if (section === 'thermo' || section === 'etrn') {
+        const navMon = document.getElementById('nav-monitoring');
+        const subMon = document.getElementById('subnav-monitoring');
+        const chevron = document.getElementById('monitoring-chevron');
+        if (navMon) navMon.classList.add('active');
+        if (subMon) {
+          subMon.classList.add('open');
+          subMon.style.display = 'block';
+        }
+        if (chevron) chevron.style.transform = 'rotate(0deg)';
+
+        const subBtn = document.getElementById(`subnav-monitoring-${section}`);
+        if (subBtn) subBtn.classList.add('active');
+      } else {
+        const targetNav = document.getElementById(`nav-${section}`);
+        if (targetNav) targetNav.classList.add('active');
+      }
+
+      if (section === 'admin-quarantine') {
+        if (window.AptWaybills && typeof window.AptWaybills.onOpenAdminQuarantine === 'function') {
+          window.AptWaybills.onOpenAdminQuarantine();
+        }
+      }
+
+      if (section === 'admin') {
+        loadAdminUsers();
+        const pinInput = document.getElementById('new-user-pin');
+        if (pinInput && !pinInput.value) {
+          generateRandomPinForInput();
+        }
+      }
+    }
+
+    // =========================================================================
+    // АДМИН-ПАНЕЛЬ УПРАВЛЕНИЯ УЧЕТКАМИ
+    // =========================================================================
+    window.adminUsersList = [];
+
+    async function generateRandomPinForInput() {
+      const pinInput = document.getElementById('new-user-pin');
+      if (!pinInput) return;
+      try {
+        const resp = await fetch('/api/admin/generate-pin', { headers: authHeaders() });
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.pin) {
+            pinInput.value = data.pin;
+            return;
+          }
+        }
+      } catch (e) {}
+      // Локальный резервный генератор 6 цифр
+      pinInput.value = String(Math.floor(100000 + Math.random() * 900000));
+    }
+
+    function openUserInfoModal(login, directUserObj = null) {
+      const u = directUserObj || (window.adminUsersList || []).find(item => item.login === login);
+      if (!u) return;
+
+      const nameEl = document.getElementById('info-user-name');
+      const posEl = document.getElementById('info-user-pos');
+      const loginEl = document.getElementById('info-user-login');
+      const pinEl = document.getElementById('info-user-pin');
+      const copyNotice = document.getElementById('copyUserInfoSuccess');
+
+      if (nameEl) nameEl.innerText = u.full_name || '—';
+      if (posEl) posEl.innerText = u.position || 'Специалист отдела логистики';
+      if (loginEl) loginEl.innerText = u.login || '—';
+      if (pinEl) pinEl.innerText = u.pin_plain || '••••••';
+      if (copyNotice) copyNotice.style.display = 'none';
+
+      document.getElementById('userInfoModal').classList.add('active');
+    }
+
+    function closeUserInfoModal() {
+      document.getElementById('userInfoModal').classList.remove('active');
+    }
+
+    async function copyUserInfoToClipboard() {
+      const name = document.getElementById('info-user-name')?.innerText || '';
+      const pos = document.getElementById('info-user-pos')?.innerText || '';
+      const login = document.getElementById('info-user-login')?.innerText || '';
+      const pin = document.getElementById('info-user-pin')?.innerText || '';
+
+      const text = `Данные для входа в портал «ПУЛЬС — Транспортная логистика»:\nФИО: ${name}\nДолжность: ${pos}\nЛогин: ${login}\nPIN-код: ${pin}`;
+      try {
+        await navigator.clipboard.writeText(text);
+        const copyNotice = document.getElementById('copyUserInfoSuccess');
+        if (copyNotice) copyNotice.style.display = 'block';
+      } catch (e) {
+        prompt('Скопируйте данные сотрудника:', text);
+      }
+    }
+
+    async function loadAdminUsers() {
+      const tbody = document.getElementById('admin-users-tbody');
+      if (!tbody) return;
+      try {
+        const resp = await fetch('/api/admin/users', { headers: authHeaders() });
+        if (resp.status === 401) { lockScreen('Сессия завершена'); return; }
+        const data = await resp.json();
+        if (data.status !== 'success') return;
+
+        window.adminUsersList = data.users || [];
+        tbody.innerHTML = '';
+        data.users.forEach(u => {
+          const perms = u.permissions || [];
+          const hasOptSch = u.role === 'admin' || perms.includes('opt_schedules') || perms.includes('opt');
+          const hasOptOrd = u.role === 'admin' || perms.includes('opt_orders') || perms.includes('opt');
+          const hasAptWaybills = u.role === 'admin' || perms.includes('apt_waybills');
+          const hasThermo = u.role === 'admin' || perms.includes('thermo');
+          const hasEtrn = u.role === 'admin' || perms.includes('etrn');
+
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>
+              <b style="font-family: ui-monospace, monospace; color: var(--primary);">${u.login}</b>
+              ${u.is_master ? '<div style="font-size:11px;color:#15803d;font-weight:700;">Главный админ (.env)</div>' : ''}
+            </td>
+            <td><b>${u.full_name}</b></td>
+            <td>
+              <span style="font-size:13px; color:#334155;">${u.position || 'Специалист отдела логистики'}</span>
+              <button class="btn btn-outline btn-sm" style="margin-left:6px;padding:2px 7px;font-size:11px;" title="Изменить должность" onclick="promptChangePosition('${u.login}', '${(u.position || '').replace(/'/g, "\\'")}')">✏️</button>
+            </td>
+            <td>
+              <div style="display:flex;gap:14px;flex-wrap:wrap;">
+                <label style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;cursor:pointer;">
+                  <input type="checkbox" class="perm-cb-${u.login}" value="opt_schedules" ${hasOptSch ? 'checked' : ''} ${u.is_master ? 'disabled' : ''}
+                    onchange="saveUserPermissions('${u.login}')">
+                  📊 ОПТ: Графики РК
+                </label>
+                <label style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;cursor:pointer;">
+                  <input type="checkbox" class="perm-cb-${u.login}" value="opt_orders" ${hasOptOrd ? 'checked' : ''} ${u.is_master ? 'disabled' : ''}
+                    onchange="saveUserPermissions('${u.login}')">
+                  📝 ОПТ: Заявки
+                </label>
+                <label style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;cursor:pointer;">
+                  <input type="checkbox" class="perm-cb-${u.login}" value="apt_waybills" ${hasAptWaybills ? 'checked' : ''} ${u.is_master ? 'disabled' : ''}
+                    onchange="saveUserPermissions('${u.login}')">
+                  📋 АПТ: МЛ
+                </label>
+                <label style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;cursor:pointer;">
+                  <input type="checkbox" class="perm-cb-${u.login}" value="thermo" ${hasThermo ? 'checked' : ''} ${u.is_master ? 'disabled' : ''}
+                    onchange="saveUserPermissions('${u.login}')">
+                  🌡️ Термографики
+                </label>
+                <label style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;cursor:pointer;">
+                  <input type="checkbox" class="perm-cb-${u.login}" value="etrn" ${hasEtrn ? 'checked' : ''} ${u.is_master ? 'disabled' : ''}
+                    onchange="saveUserPermissions('${u.login}')">
+                  📑 ЭТРН
+                </label>
+              </div>
+            </td>
+            <td>
+              <span class="badge-status ${u.is_active ? 'status-success' : 'status-error'}">
+                ${u.is_active ? 'Активен' : 'Заблокирован'}
+              </span>
+            </td>
+            <td style="text-align: right;">
+              <div style="display:inline-flex;gap:6px;align-items:center;">
+                <button class="btn btn-outline btn-sm" title="Карточка сотрудника (Логин и PIN)" onclick="openUserInfoModal('${u.login}')">ℹ️ Инфо</button>
+                ${u.is_master ? '<span style="font-size:12px;color:var(--text-muted);margin-left:4px;">.env</span>' : `
+                  <button class="btn btn-outline btn-sm" onclick="promptChangePin('${u.login}')">🔑 PIN</button>
+                  <button class="btn btn-outline btn-sm" onclick="toggleUserActive('${u.login}', ${!u.is_active})">
+                    ${u.is_active ? '🚫 Блок' : '✅ Разблок'}
+                  </button>
+                  <button class="btn btn-danger btn-sm" onclick="deleteUserAccount('${u.login}')">Удалить</button>
+                `}
+              </div>
+            </td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } catch (e) {
+        console.error('Ошибка загрузки пользователей:', e);
+      }
+    }
+
+    async function createNewUser() {
+      const login = document.getElementById('new-user-login').value.trim().toLowerCase();
+      const full_name = document.getElementById('new-user-name').value.trim();
+      const position = document.getElementById('new-user-position').value.trim();
+      const pin = document.getElementById('new-user-pin').value.trim();
+      const perms = [];
+      if (document.getElementById('new-perm-opt-schedules').checked) perms.push('opt_schedules');
+      if (document.getElementById('new-perm-opt-orders').checked) perms.push('opt_orders');
+      if (document.getElementById('new-perm-apt-waybills').checked) perms.push('apt_waybills');
+      if (document.getElementById('new-perm-thermo').checked) perms.push('thermo');
+      if (document.getElementById('new-perm-etrn').checked) perms.push('etrn');
+
+      try {
+        const resp = await fetch('/api/admin/users', {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ login, full_name, position, pin, permissions: perms })
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          alert('Ошибка: ' + (data.detail || 'Не удалось создать учетку'));
+          return;
+        }
+        document.getElementById('new-user-login').value = '';
+        document.getElementById('new-user-name').value = '';
+        document.getElementById('new-user-position').value = '';
+        await loadAdminUsers();
+        await generateRandomPinForInput();
+        if (data.user) {
+          openUserInfoModal(data.user.login, data.user);
+        }
+      } catch (e) {
+        alert('Ошибка сети: ' + e);
+      }
+    }
+
+    async function promptChangePosition(login, currentPos) {
+      const newPos = prompt(`Введите должность для сотрудника '${login}':`, currentPos || '');
+      if (newPos === null || !newPos.trim()) return;
+      const resp = await fetch(`/api/admin/users/${encodeURIComponent(login)}/update`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ position: newPos.trim() })
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (window.currentUser && window.currentUser.login === login && data.user) {
+          window.currentUser.position = data.user.position;
+          const homePos = document.getElementById('home-user-position');
+          if (homePos) homePos.innerText = data.user.position;
+        }
+        loadAdminUsers();
+      }
+    }
+
+    async function saveUserPermissions(login) {
+      const checkboxes = document.querySelectorAll(`.perm-cb-${CSS.escape(login)}`);
+      const perms = [];
+      checkboxes.forEach(cb => {
+        if (cb.checked) perms.push(cb.value);
+      });
+      await fetch(`/api/admin/users/${encodeURIComponent(login)}/update`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ permissions: perms })
+      });
+      loadAdminUsers();
+    }
+
+    async function toggleUserActive(login, newState) {
+      await fetch(`/api/admin/users/${encodeURIComponent(login)}/update`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ is_active: newState })
+      });
+      loadAdminUsers();
+    }
+
+    async function promptChangePin(login) {
+      let suggestedPin = String(Math.floor(100000 + Math.random() * 900000));
+      try {
+        const r = await fetch('/api/admin/generate-pin', { headers: authHeaders() });
+        if (r.ok) {
+          const d = await r.json();
+          if (d.pin) suggestedPin = d.pin;
+        }
+      } catch (e) {}
+
+      const newPin = prompt(`Введите новый 6-значный PIN-код для сотрудника ${login} (предложен сгенерированный):`, suggestedPin);
+      if (!newPin) return;
+      if (!/^\d{6}$/.test(newPin.trim())) {
+        alert('PIN-код должен состоять ровно из 6 цифр!');
+        return;
+      }
+      const resp = await fetch(`/api/admin/users/${encodeURIComponent(login)}/update`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ pin: newPin.trim() })
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        await loadAdminUsers();
+        if (data.user) {
+          openUserInfoModal(data.user.login, data.user);
+        }
+      }
+    }
+
+    async function deleteUserAccount(login) {
+      if (!confirm(`Удалить учетную запись сотрудника '${login}'?`)) return;
+      const resp = await fetch(`/api/admin/users/${encodeURIComponent(login)}/delete`, {
+        method: 'POST',
+        headers: authHeaders()
+      });
+      if (resp.ok) loadAdminUsers();
+    }
+
+    // =========================================================================
+    // РАЗДЕЛ ОПТ: ГРАФИКИ РК И ЗАЯВКИ ПЕРЕВОЗЧИКАМ
+    // =========================================================================
+    let selectedFile = null;
+    let selectedOrdersFile = null;
+    let availableCarriers = [];
+    let availableOrdersCarriers = [];
+    let currentOrdersSendTarget = null;
+    let currentLoadedFilename = null;
+    let currentSendTarget = null;
+
+    async function loadStorageInfo() {
+      try {
+        const resp = await fetch('/api/storage-info', { headers: authHeaders() });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (data) {
+          const schText = document.getElementById('schedulesPathText');
+          if (schText) schText.innerText = data.schedules_dir;
+          const schActive = document.getElementById('schedulesActiveFolderLabel');
+          if (schActive) schActive.innerHTML = 'Папка: <b>' + data.schedules_dir + '</b>';
+          const ordText = document.getElementById('ordersPathText');
+          if (ordText) ordText.innerText = data.orders_dir;
+
+          if (data.schedules_is_network) document.getElementById('schedulesPathBadge').classList.add('network');
+          if (data.orders_is_network) document.getElementById('ordersPathBadge').classList.add('network');
+        }
+      } catch (e) {}
+    }
+
+    function formatDateYMD(dt) {
+      const y = dt.getFullYear();
+      const m = String(dt.getMonth() + 1).padStart(2, '0');
+      const d = String(dt.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+
+    function initScheduleDatePickers() {
+      const startInput = document.getElementById('scheduleStartDate');
+      const endInput = document.getElementById('scheduleEndDate');
+      if (!startInput || !endInput) return;
+
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const day = today.getDay(); // 0=Вс, 1=Пн..6=Сб
+      const diffToMonday = day === 1 ? 0 : (day === 0 ? 1 : (8 - day));
+      const monday = new Date(today);
+      monday.setDate(today.getDate() + diffToMonday);
+      const sunday = new Date(monday);
+      sunday.setDate(monday.getDate() + 6);
+
+      startInput.value = formatDateYMD(monday);
+      endInput.value = formatDateYMD(sunday);
+    }
+
+    function onScheduleStartDateChange() {
+      const startInput = document.getElementById('scheduleStartDate');
+      const endInput = document.getElementById('scheduleEndDate');
+      if (!startInput || !endInput || !startInput.value) return;
+      const parts = startInput.value.split('-');
+      if (parts.length !== 3) return;
+      const d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+      d.setDate(d.getDate() + 6);
+      endInput.value = formatDateYMD(d);
+    }
+
+    initScheduleDatePickers();
+
+    function updateScheduleUIWithData(data) {
+      document.getElementById('statWeek').innerText = data.week_range;
+      document.getElementById('statTotal').innerText = data.total_trips + ' машин';
+      const regularCarriers = (data.carriers || []).filter(c => c.name !== '?');
+      const freeCarrierObj = (data.carriers || []).find(c => c.name === '?');
+      const freeTripsCount = data.free_trips_count !== undefined ? data.free_trips_count : (freeCarrierObj ? freeCarrierObj.count : 0);
+
+      document.getElementById('statCarriers').innerText = regularCarriers.length;
+      const stat3plEl = document.getElementById('stat3pl');
+      if (stat3plEl) stat3plEl.innerText = (data.tpl_trips || 0) + ' машин';
+      document.getElementById('currentFileLabel').innerText = 'Файл: ' + data.filename;
+      currentLoadedFilename = data.filename;
+
+      availableCarriers = regularCarriers;
+      const container = document.getElementById('carriersContainer');
+      container.innerHTML = '';
+      const select = document.getElementById('carrierSelect');
+      select.innerHTML = '';
+
+      (data.carriers || []).forEach(c => {
+        if (c.name === '?') {
+          container.innerHTML += `<div class="carrier-tag" style="background:#fff7ed;border-color:#fdba74;color:#9a3412;">❓ Свободные рейсы («?») <span style="color:#c2410c;">${c.count} рейсов • без перевозчика</span></div>`;
+        } else {
+          container.innerHTML += `<div class="carrier-tag">${c.name} <span>${c.count} рейсов</span></div>`;
+          select.innerHTML += `<option value="${c.name}">${c.name} (${c.count} рейсов)</option>`;
+        }
+      });
+
+      const freeBlock = document.getElementById('freeTripsBlock');
+      const freeLabel = document.getElementById('freeTripsLabel');
+      if (freeBlock) {
+        if (freeTripsCount > 0) {
+          freeBlock.style.display = 'flex';
+          if (freeLabel) {
+            freeLabel.innerText = `❓ Найдено свободных рейсов со знаком «?»: ${freeTripsCount} шт.`;
+          }
+        } else {
+          freeBlock.style.display = 'none';
+        }
+      }
+
+      document.getElementById('resultCard').style.display = 'block';
+      document.getElementById('emailCard').style.display = 'block';
+      const directBtn = document.getElementById('directReloadBtn');
+      if (directBtn) directBtn.style.display = 'inline-flex';
+    }
+
+    async function reloadCurrentActiveFile() {
+      if (!currentLoadedFilename) return;
+      const btn = document.getElementById('directReloadBtn');
+      const origText = btn.innerText;
+      btn.disabled = true;
+      btn.innerText = '⏳ Пересборка...';
+
+      try {
+        const resp = await fetch('/api/select-file', {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ filename: currentLoadedFilename })
+        });
+        const data = await resp.json();
+        btn.disabled = false;
+        btn.innerText = origText;
+
+        if (data.status === 'success') {
+          updateScheduleUIWithData(data);
+          const notice = document.getElementById('reloadNotice');
+          const manualInfo = data.manual_trips > 0 ? ` Новых ручных рейсов: ${data.manual_trips} шт.` : '';
+          const tplInfo = data.tpl_trips > 0 ? ` 3PL рейсов: ${data.tpl_trips} шт.` : '';
+          notice.innerText = `✅ График '${currentLoadedFilename}' успешно пересобран!${tplInfo}${manualInfo}`;
+          notice.style.display = 'block';
+        } else {
+          alert('Ошибка обновления графика: ' + data.message);
+        }
+      } catch (e) {
+        btn.disabled = false;
+        btn.innerText = origText;
+        alert('Ошибка связи с сервером: ' + e);
+      }
+    }
+
+    function formatFileSize(bytes) {
+      if (!bytes || bytes <= 0) return '0 Б';
+      if (bytes < 1024) return bytes + ' Б';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' КБ';
+      return (bytes / (1024 * 1024)).toFixed(2) + ' МБ';
+    }
+
+    function getDropzoneConfig(kind) {
+      if (kind === 'orders') {
+        return {
+          inputId: 'ordersFileInput',
+          emptyId: 'ordersDropzone',
+          loadedId: 'ordersDropzoneLoaded',
+          extId: 'ordersDropzoneExtBadge',
+          statusId: 'ordersDropzoneStatusText',
+          nameId: 'ordersDropzoneFileName',
+          metaId: 'ordersDropzoneFileMeta',
+          btnId: 'processOrdersBtn',
+          defaultBtnText: '⚡ Сформировать заявки',
+          setFile: (f) => { selectedOrdersFile = f; }
+        };
+      }
+      return {
+        inputId: 'fileInput',
+        emptyId: 'dropzone',
+        loadedId: 'dropzoneLoaded',
+        extId: 'dropzoneExtBadge',
+        statusId: 'dropzoneStatusText',
+        nameId: 'dropzoneFileName',
+        metaId: 'dropzoneFileMeta',
+        btnId: 'processBtn',
+        defaultBtnText: '⚡ Обработать файл',
+        setFile: (f) => { selectedFile = f; }
+      };
+    }
+
+    function setDropzoneFile(kind, file) {
+      if (!file) return;
+      const cfg = getDropzoneConfig(kind);
+      cfg.setFile(file);
+
+      const parts = (file.name || '').split('.');
+      const ext = parts.length > 1 ? parts.pop().toUpperCase() : 'EXCEL';
+
+      const extEl = document.getElementById(cfg.extId);
+      const statusEl = document.getElementById(cfg.statusId);
+      const nameEl = document.getElementById(cfg.nameId);
+      const metaEl = document.getElementById(cfg.metaId);
+      const emptyEl = document.getElementById(cfg.emptyId);
+      const loadedEl = document.getElementById(cfg.loadedId);
+      const btn = document.getElementById(cfg.btnId);
+
+      if (extEl) extEl.textContent = ext.slice(0, 4);
+      if (statusEl) statusEl.textContent = '✓ Файл выбран — готов к обработке';
+      if (nameEl) nameEl.textContent = file.name;
+      if (metaEl) {
+        metaEl.innerHTML = '';
+        const extChip = document.createElement('span');
+        extChip.className = 'dropzone-file-chip';
+        extChip.textContent = `Формат: ${ext}`;
+        const sizeChip = document.createElement('span');
+        sizeChip.className = 'dropzone-file-chip';
+        sizeChip.textContent = `Размер: ${formatFileSize(file.size)}`;
+        metaEl.appendChild(extChip);
+        metaEl.appendChild(sizeChip);
+      }
+      if (loadedEl) {
+        loadedEl.classList.remove('is-processed');
+        loadedEl.hidden = false;
+      }
+      if (emptyEl) emptyEl.hidden = true;
+
+      if (btn) {
+        btn.style.display = 'inline-flex';
+        btn.disabled = false;
+        btn.innerText = cfg.defaultBtnText;
+      }
+    }
+
+    function markDropzoneProcessed(kind, statusLabel) {
+      const cfg = getDropzoneConfig(kind);
+      const statusEl = document.getElementById(cfg.statusId);
+      const loadedEl = document.getElementById(cfg.loadedId);
+      if (statusEl) statusEl.textContent = statusLabel;
+      if (loadedEl) loadedEl.classList.add('is-processed');
+    }
+
+    function clearDropzoneFile(kind) {
+      const cfg = getDropzoneConfig(kind);
+      cfg.setFile(null);
+
+      const inputEl = document.getElementById(cfg.inputId);
+      const emptyEl = document.getElementById(cfg.emptyId);
+      const loadedEl = document.getElementById(cfg.loadedId);
+      const btn = document.getElementById(cfg.btnId);
+
+      if (inputEl) inputEl.value = '';
+      if (loadedEl) {
+        loadedEl.classList.remove('is-processed');
+        loadedEl.hidden = true;
+      }
+      if (emptyEl) emptyEl.hidden = false;
+      if (btn) {
+        btn.style.display = 'none';
+        btn.disabled = false;
+        btn.innerText = cfg.defaultBtnText;
+      }
+    }
+
+    function bindDropzoneDragEvents(kind) {
+      const cfg = getDropzoneConfig(kind);
+      const inputEl = document.getElementById(cfg.inputId);
+      if (inputEl) {
+        inputEl.addEventListener('click', () => { inputEl.value = ''; });
+      }
+      [cfg.emptyId, cfg.loadedId].forEach((zoneId) => {
+        const zoneEl = document.getElementById(zoneId);
+        if (!zoneEl) return;
+        zoneEl.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          zoneEl.classList.add('dragover');
+        });
+        zoneEl.addEventListener('dragleave', () => {
+          zoneEl.classList.remove('dragover');
+        });
+        zoneEl.addEventListener('drop', (e) => {
+          e.preventDefault();
+          zoneEl.classList.remove('dragover');
+          if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+            setDropzoneFile(kind, e.dataTransfer.files[0]);
+          }
+        });
+      });
+    }
+
+    function handleFileSelected(event) {
+      if (event.target.files && event.target.files[0]) {
+        setDropzoneFile('schedule', event.target.files[0]);
+      }
+    }
+
+    bindDropzoneDragEvents('schedule');
+    bindDropzoneDragEvents('orders');
+
+    async function uploadAndProcess() {
+      if (!selectedFile) return;
+      const processBtn = document.getElementById('processBtn');
+      processBtn.disabled = true;
+      processBtn.innerText = '⏳ Обработка...';
+
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+      const startDateVal = document.getElementById('scheduleStartDate')?.value;
+      const endDateVal = document.getElementById('scheduleEndDate')?.value;
+      if (startDateVal) formData.append('start_date', startDateVal);
+      if (endDateVal) formData.append('end_date', endDateVal);
+
+      try {
+        const resp = await fetch('/api/upload', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: formData
+        });
+        const data = await resp.json();
+        if (data.status === 'success') {
+          updateScheduleUIWithData(data);
+          markDropzoneProcessed('schedule', '✓ Файл успешно обработан');
+          processBtn.innerText = '✅ Обработано';
+        } else {
+          alert('Ошибка: ' + (data.message || 'Не удалось обработать'));
+          processBtn.disabled = false;
+          processBtn.innerText = '⚡ Обработать файл';
+        }
+      } catch (err) {
+        alert('Ошибка связи с сервером: ' + err);
+        processBtn.disabled = false;
+        processBtn.innerText = '⚡ Обработать файл';
+      }
+    }
+
+    async function openFileSelectModal() {
+      const modal = document.getElementById('fileSelectModal');
+      const container = document.getElementById('filesContainer');
+      const loading = document.getElementById('filesLoading');
+      const noFiles = document.getElementById('noFilesMsg');
+      const confirmBtn = document.getElementById('confirmFileSelectBtn');
+
+      modal.classList.add('active');
+      container.style.display = 'none';
+      noFiles.style.display = 'none';
+      loading.style.display = 'block';
+      confirmBtn.disabled = true;
+
+      try {
+        const resp = await fetch('/api/list-ready-files', { headers: authHeaders() });
+        const data = await resp.json();
+        loading.style.display = 'none';
+
+        if (data.status === 'success' && data.files && data.files.length > 0) {
+          container.innerHTML = '';
+          data.files.forEach((f, idx) => {
+            const isChecked = f.is_current || (idx === 0);
+            container.innerHTML += `
+              <label class="file-item ${isChecked ? 'active' : ''}">
+                <input type="radio" name="fileSelectRadio" value="${f.filename}" ${isChecked ? 'checked' : ''} onchange="onFileRadioChange(this)">
+                <div style="flex:1;">
+                  <div style="font-weight: 600; font-size: 13px; color: var(--text);">📊 ${f.filename}</div>
+                  <div style="font-size: 11px; color: var(--text-muted); margin-top: 3px;">
+                    Изменен: <b>${f.mtime_str}</b> &bull; Размер: ${f.size}
+                  </div>
+                </div>
+              </label>
+            `;
+          });
+          container.style.display = 'block';
+          confirmBtn.disabled = false;
+        } else {
+          noFiles.style.display = 'block';
+        }
+      } catch (e) {
+        loading.innerHTML = '❌ Ошибка чтения папки: ' + e;
+      }
+    }
+
+    function onFileRadioChange(radio) {
+      document.querySelectorAll('.file-item').forEach(el => el.classList.remove('active'));
+      radio.closest('.file-item').classList.add('active');
+      document.getElementById('confirmFileSelectBtn').disabled = false;
+    }
+
+    function closeFileSelectModal() {
+      document.getElementById('fileSelectModal').classList.remove('active');
+    }
+
+    async function confirmSelectedFile() {
+      const selected = document.querySelector('input[name="fileSelectRadio"]:checked');
+      if (!selected) return;
+
+      const filename = selected.value;
+      const confirmBtn = document.getElementById('confirmFileSelectBtn');
+      confirmBtn.disabled = true;
+      confirmBtn.innerText = 'Загрузка...';
+
+      try {
+        const resp = await fetch('/api/select-file', {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ filename })
+        });
+        const data = await resp.json();
+        confirmBtn.disabled = false;
+        confirmBtn.innerText = 'Выбрать и обновить данные';
+
+        if (data.status === 'success') {
+          updateScheduleUIWithData(data);
+          const notice = document.getElementById('reloadNotice');
+          const manualInfo = data.manual_trips > 0 ? ` Новых ручных рейсов: ${data.manual_trips} шт.` : '';
+          const tplInfo = data.tpl_trips > 0 ? ` 3PL рейсов: ${data.tpl_trips} шт.` : '';
+          notice.innerText = `✅ График '${filename}' успешно пересобран!${tplInfo}${manualInfo}`;
+          notice.style.display = 'block';
+          closeFileSelectModal();
+        } else {
+          alert('Ошибка при выборе файла: ' + data.message);
+        }
+      } catch (e) {
+        alert('Ошибка связи с сервером: ' + e);
+        confirmBtn.disabled = false;
+        confirmBtn.innerText = 'Выбрать и обновить данные';
+      }
+    }
+
+    function openSendModal(target) {
+      currentSendTarget = target;
+      const modal = document.getElementById('sendModal');
+      const title = document.getElementById('modalTitle');
+      const selectGroup = document.getElementById('carrierSelectGroup');
+      document.getElementById('sendingStatus').style.display = 'none';
+      document.getElementById('confirmSendBtn').disabled = false;
+
+      if (target === 'select') {
+        title.innerText = 'Отправка графика перевозчику';
+        selectGroup.style.display = 'block';
+      } else if (target === 'free') {
+        title.innerText = '📢 Рассылка свободных рейсов («?») всем перевозчикам';
+        selectGroup.style.display = 'none';
+      } else {
+        title.innerText = 'Отправка графика ВСЕМ перевозчикам';
+        selectGroup.style.display = 'none';
+      }
+      updateModalTargetInfo();
+      modal.classList.add('active');
+    }
+
+    function closeSendModal() {
+      document.getElementById('sendModal').classList.remove('active');
+    }
+
+    function updateModalTargetInfo() {
+      const info = document.getElementById('modalTargetInfo');
+      if (currentSendTarget === 'select') {
+        const carrier = document.getElementById('carrierSelect').value;
+        info.innerHTML = `<b>Получатель:</b> ${carrier}`;
+      } else if (currentSendTarget === 'free') {
+        info.innerHTML = `<b>Получатели:</b> Все перевозчики из базы контактов (предложение забрать свободные рейсы со знаком «?»)`;
+      } else {
+        info.innerHTML = `<b>Получатели:</b> Все назначенные перевозчики из графика (${availableCarriers.length} адресатов)`;
+      }
+    }
+
+    function openBridgeRequiredModal() {
+      document.getElementById('bridgeRequiredModal').classList.add('active');
+    }
+
+    function closeBridgeRequiredModal() {
+      document.getElementById('bridgeRequiredModal').classList.remove('active');
+    }
+
+    // Умная отправка через локальный Outlook сотрудника (outlook_bridge.py)
+    // На чужих ПК НИКОГДА не отправляет через Outlook сервера!
+    async function dispatchViaLocalOutlookOrServer(prepareUrl, fallbackUrl, payload) {
+      // 1. Сначала пробуем подключиться к локальному мосту Outlook на компьютере сотрудника (127.0.0.1:8765)
+      try {
+        const pingResp = await fetch('http://127.0.0.1:8765/ping', { method: 'GET' });
+        if (pingResp.ok) {
+          const prepResp = await fetch(prepareUrl, {
+            method: 'POST',
+            headers: authHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify(payload)
+          });
+          const pkg = await prepResp.json();
+          if (pkg.status !== 'success') return pkg;
+
+          const bridgeResp = await fetch('http://127.0.0.1:8765/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(pkg)
+          });
+          return await bridgeResp.json();
+        }
+      } catch (e) {
+        // Локальный мост не запущен на этом ПК
+      }
+
+      // 2. Если браузер открыт НЕ на самом ПК-сервере (например, коллега зашел по IP или через туннель),
+      // сразу блокируем отправку на сервере и показываем окно запуска локального помощника Outlook
+      const host = window.location.hostname;
+      const isOpenedDirectlyOnServerPC = (host === 'localhost' || host === '127.0.0.1');
+      if (!isOpenedDirectlyOnServerPC) {
+        return { status: 'bridge_required' };
+      }
+
+      // 3. Только если браузер открыт прямо на самом ПК-сервере (localhost)
+      const resp = await fetch(fallbackUrl, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(payload)
+      });
+      return await resp.json();
+    }
+
+    async function executeEmailSend() {
+      const mode = document.querySelector('input[name="sendMode"]:checked').value;
+      const carrier = (currentSendTarget === 'select') ? document.getElementById('carrierSelect').value : null;
+
+      const confirmBtn = document.getElementById('confirmSendBtn');
+      confirmBtn.disabled = true;
+      document.getElementById('sendingStatus').style.display = 'block';
+
+      try {
+        const isFreeBroadcast = (currentSendTarget === 'free');
+        const res = await dispatchViaLocalOutlookOrServer(
+          isFreeBroadcast ? '/api/prepare-free-trips-emails' : '/api/prepare-emails',
+          isFreeBroadcast ? '/api/send-free-trips-emails' : '/api/send-emails',
+          isFreeBroadcast ? { mode } : { mode, carrier }
+        );
+        if (res.status === 'bridge_required') {
+          confirmBtn.disabled = false;
+          document.getElementById('sendingStatus').style.display = 'none';
+          closeSendModal();
+          openBridgeRequiredModal();
+        } else if (res.status === 'success' || res.status === 'warning') {
+          alert(res.message);
+          closeSendModal();
+        } else {
+          alert('Ошибка при отправке: ' + res.message);
+          confirmBtn.disabled = false;
+          document.getElementById('sendingStatus').style.display = 'none';
+        }
+      } catch (e) {
+        alert('Ошибка связи с сервером: ' + e);
+        confirmBtn.disabled = false;
+        document.getElementById('sendingStatus').style.display = 'none';
+      }
+    }
+
+    // Заявки перевозчикам
+    function handleOrdersFileSelected(event) {
+      if (event.target.files && event.target.files[0]) {
+        setDropzoneFile('orders', event.target.files[0]);
+      }
+    }
+
+    async function uploadAndProcessOrders() {
+      if (!selectedOrdersFile) return;
+      const btn = document.getElementById('processOrdersBtn');
+      btn.disabled = true;
+      btn.innerText = '⏳ Генерация заявок...';
+
+      const formData = new FormData();
+      formData.append('file', selectedOrdersFile);
+
+      try {
+        const resp = await fetch('/api/orders/generate', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: formData
+        });
+        const data = await resp.json();
+
+        if (data.status === 'success') {
+          document.getElementById('statOrdersCarriers').innerText = data.total_carriers;
+          document.getElementById('statOrdersPallets').innerText = data.total_pallets;
+          document.getElementById('statOrdersDate').innerText = data.date_tag;
+          document.getElementById('statOrdersDocsCount').innerText = data.orders.length + ' Word + 1 Excel';
+
+          const savedFolder = document.getElementById('ordersSavedFolderLabel');
+          if (savedFolder && data.output_dir) {
+            savedFolder.innerHTML = 'Папка: <b>' + data.output_dir + '</b>';
+          }
+
+          const tbody = document.getElementById('ordersTableBody');
+          tbody.innerHTML = '';
+
+          data.orders.forEach((ord, idx) => {
+            tbody.innerHTML += `
+              <tr>
+                <td>${idx + 1}</td>
+                <td>
+                  <b>${ord.carrier}</b>
+                  ${ord.addr_ref ? `<div style="font-size: 11px; color: #475569; margin-top: 2px;">Клиент: <b>${ord.addr_ref}</b></div>` : ''}
+                </td>
+                <td style="text-align: center; font-weight: 700; color: var(--primary);">${ord.trucks}</td>
+                <td style="text-align: right; font-weight: 600;">${ord.pallets_str}</td>
+                <td>${ord.route}</td>
+                <td style="text-align: center;"><span style="background: #e0f2fe; color: #0369a1; padding: 2px 6px; border-radius: 4px; font-size: 11px;">${ord.temp}</span></td>
+                <td>📄 ${ord.filename}</td>
+                <td style="text-align: center;"><span style="color: #166534; font-weight: 600; font-size: 12px;">✅ Сохранен</span></td>
+              </tr>
+            `;
+          });
+
+          availableOrdersCarriers = data.carriers || [];
+          const selOrders = document.getElementById('ordersCarrierSelect');
+          if (selOrders) {
+            selOrders.innerHTML = '';
+            availableOrdersCarriers.forEach(c => {
+              const opt = document.createElement('option');
+              opt.value = c.name;
+              opt.textContent = `${c.name} (${c.orders_count} ${c.orders_count === 1 ? 'заявка' : 'заявок'}, ${c.pallets_str || c.total_pallets} пал.)`;
+              selOrders.appendChild(opt);
+            });
+          }
+
+          document.getElementById('ordersResultCard').style.display = 'block';
+          document.getElementById('ordersEmailCard').style.display = 'block';
+          markDropzoneProcessed('orders', '✓ Заявки успешно сформированы');
+          btn.innerText = '✅ Заявки сформированы';
+        } else {
+          alert('Ошибка формирования заявок: ' + (data.message || 'Сбой'));
+          btn.disabled = false;
+          btn.innerText = '⚡ Сформировать заявки';
+        }
+      } catch (err) {
+        alert('Ошибка связи с сервером: ' + err);
+        btn.disabled = false;
+        btn.innerText = '⚡ Сформировать заявки';
+      }
+    }
+
+    function openOrdersSendModal(target) {
+      if (!availableOrdersCarriers || availableOrdersCarriers.length === 0) {
+        alert('Сначала сформируйте заявки перевозчикам!');
+        return;
+      }
+      currentOrdersSendTarget = target;
+      const selectGroup = document.getElementById('ordersCarrierSelectGroup');
+      const modalTitle = document.getElementById('ordersModalTitle');
+
+      if (target === 'select') {
+        modalTitle.innerText = 'Отправка заявки перевозчику через Outlook';
+        selectGroup.style.display = 'block';
+      } else {
+        modalTitle.innerText = 'Отправка заявок ВСЕМ перевозчикам через Outlook';
+        selectGroup.style.display = 'none';
+      }
+
+      updateOrdersModalTargetInfo();
+      document.getElementById('confirmOrdersSendBtn').disabled = false;
+      document.getElementById('ordersSendingStatus').style.display = 'none';
+      document.getElementById('ordersSendModal').classList.add('active');
+    }
+
+    function closeOrdersSendModal() {
+      document.getElementById('ordersSendModal').classList.remove('active');
+    }
+
+    function updateOrdersModalTargetInfo() {
+      const info = document.getElementById('ordersModalTargetInfo');
+      const filesInfo = document.getElementById('ordersModalFilesInfo');
+      if (currentOrdersSendTarget === 'select') {
+        const sel = document.getElementById('ordersCarrierSelect');
+        const carrierName = sel ? sel.value : '';
+        const carObj = availableOrdersCarriers.find(c => c.name === carrierName);
+        const filesCount = carObj ? carObj.orders_count : 1;
+        info.innerHTML = `<b>Получатель:</b> ${carrierName}`;
+        filesInfo.innerHTML = `📎 Будет прикреплено файлов заявок: <b>${filesCount} шт.</b> (.docx)`;
+      } else {
+        const totalFiles = availableOrdersCarriers.reduce((acc, c) => acc + (c.orders_count || 1), 0);
+        info.innerHTML = `<b>Получатели:</b> Все перевозчики (${availableOrdersCarriers.length} адресатов)`;
+        filesInfo.innerHTML = `📎 Всего будет прикреплено файлов заявок: <b>${totalFiles} шт.</b> (.docx)`;
+      }
+    }
+
+    async function executeOrdersEmailSend() {
+      const mode = document.querySelector('input[name="ordersSendMode"]:checked').value;
+      const carrier = (currentOrdersSendTarget === 'select') ? document.getElementById('ordersCarrierSelect').value : null;
+
+      const confirmBtn = document.getElementById('confirmOrdersSendBtn');
+      confirmBtn.disabled = true;
+      document.getElementById('ordersSendingStatus').style.display = 'block';
+
+      try {
+        const res = await dispatchViaLocalOutlookOrServer(
+          '/api/orders/prepare-emails',
+          '/api/orders/send-emails',
+          { mode, carrier }
+        );
+        if (res.status === 'bridge_required') {
+          confirmBtn.disabled = false;
+          document.getElementById('ordersSendingStatus').style.display = 'none';
+          closeOrdersSendModal();
+          openBridgeRequiredModal();
+        } else if (res.status === 'success' || res.status === 'warning') {
+          alert(res.message);
+          closeOrdersSendModal();
+        } else {
+          alert('Ошибка при отправке: ' + res.message);
+          confirmBtn.disabled = false;
+          document.getElementById('ordersSendingStatus').style.display = 'none';
+        }
+      } catch (e) {
+        alert('Ошибка связи с сервером: ' + e);
+        confirmBtn.disabled = false;
+        document.getElementById('ordersSendingStatus').style.display = 'none';
+      }
+    }
+
+    // =========================================================================
+    // РАЗДЕЛ: ТЕМПЕРАТУРНЫЕ ГРАФИКИ ADVANTUM
+    // =========================================================================
+    let activeTaskId = null;
+    let pollInterval = null;
+
+    function parseMls() {
+      const raw = document.getElementById('ml-input').value;
+      const tokens = raw.split(/[\s,;]+/).map(t => {
+        let s = t.trim().toUpperCase();
+        s = s.replace(/M/g, 'М').replace(/C/g, 'С').replace(/K/g, 'К');
+        return s;
+      }).filter(t => t.length > 0);
+      return Array.from(new Set(tokens));
+    }
+
+    function updateMlCount() {
+      const list = parseMls();
+      document.getElementById('ml-count').innerText = `Распознано: ${list.length} МЛ`;
+      document.getElementById('btn-start').disabled = list.length === 0;
+    }
+
+    async function startExport() {
+      if (!window.authToken) {
+        lockScreen('Требуется авторизация');
+        return;
+      }
+
+      const mls = parseMls();
+      if (mls.length === 0) {
+        alert('Пожалуйста, введите хотя бы один номер маршрутного листа');
+        return;
+      }
+
+      const btnStart = document.getElementById('btn-start');
+      btnStart.disabled = true;
+      btnStart.innerHTML = `<span class="spinner"></span><span>Запуск задачи...</span>`;
+
+      try {
+        const resp = await fetch('/api/tasks', {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ ml_numbers: mls })
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          if (resp.status === 401) {
+            lockScreen('Сессия завершена. Войдите повторно.');
+            return;
+          }
+          throw new Error(data.detail || 'Ошибка создания задачи');
+        }
+
+        activeTaskId = data.task_id;
+        showProgressCard(mls);
+        pollTaskStatus();
+      } catch (err) {
+        alert('Ошибка запуска: ' + err.message);
+        btnStart.disabled = false;
+        btnStart.innerHTML = `<span>Запустить выгрузку</span>`;
+      }
+    }
+
+    function showProgressCard(mls) {
+      document.getElementById('progress-card').style.display = 'block';
+      document.getElementById('progress-title').innerText = 'Выполнение выгрузки...';
+      document.getElementById('zip-download-container').style.display = 'none';
+      document.getElementById('progress-bar').style.width = '0%';
+      document.getElementById('progress-desc').innerText = 'В очереди / Запуск фонового браузера...';
+
+      const tbody = document.getElementById('results-table-body');
+      tbody.innerHTML = '';
+
+      mls.forEach((ml, idx) => {
+        const tr = document.createElement('tr');
+        tr.id = `row-${ml}`;
+        tr.innerHTML = `
+          <td>${idx + 1}</td>
+          <td><strong class="ml-title"></strong></td>
+          <td><span class="badge-status status-processing">Ожидание...</span></td>
+          <td class="driver-cell">—</td>
+          <td class="tc-cell">—</td>
+          <td class="file-cell">—</td>
+        `;
+        tr.querySelector('.ml-title').textContent = ml;
+        tbody.appendChild(tr);
+      });
+    }
+
+    function pollTaskStatus() {
+      if (pollInterval) clearInterval(pollInterval);
+      pollInterval = setInterval(async () => {
+        if (!activeTaskId) return;
+        try {
+          const resp = await fetch(`/api/tasks/${activeTaskId}`, { headers: authHeaders() });
+          if (resp.status === 401) {
+            clearInterval(pollInterval);
+            pollInterval = null;
+            lockScreen('Сессия завершена. Войдите повторно.');
+            return;
+          }
+          if (!resp.ok) return;
+          const job = await resp.json();
+          renderTaskState(job);
+          if (job.status === 'completed' || job.status === 'failed') {
+            clearInterval(pollInterval);
+            pollInterval = null;
+            finishTask(job);
+          }
+        } catch (e) {}
+      }, 1500);
+    }
+
+    async function downloadProtectedFile(url, filename) {
+      if (!window.authToken) {
+        lockScreen('Требуется авторизация для скачивания');
+        return;
+      }
+      try {
+        const resp = await fetch(url, { headers: authHeaders() });
+        if (!resp.ok) {
+          if (resp.status === 401) {
+            lockScreen('Сессия истекла.');
+            return;
+          }
+          throw new Error('Файл не найден или ошибка доступа');
+        }
+        const blob = await resp.blob();
+        const blobUrl = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = blobUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => window.URL.revokeObjectURL(blobUrl), 2000);
+      } catch (err) {
+        alert('Ошибка при скачивании файла: ' + err.message);
+      }
+    }
+
+    function renderTaskState(job) {
+      const total = job.total_count || 1;
+      const current = job.progress_current || 0;
+      const pct = Math.round((current / total) * 100);
+      document.getElementById('progress-bar').style.width = `${pct}%`;
+
+      if (job.status === 'queued') {
+        document.getElementById('progress-desc').innerText = 'Задача в очереди на выполнение...';
+      } else if (job.status === 'running') {
+        document.getElementById('progress-desc').innerText = `Обработка: ${current} из ${total} МЛ (${job.current_ml || 'Подготовка...'})`;
+      }
+
+      if (job.results && job.results.length > 0) {
+        job.results.forEach(r => {
+          const row = document.getElementById(`row-${r.ml_number}`);
+          if (row) {
+            const statusCell = row.querySelector('td:nth-child(3)');
+            statusCell.innerHTML = '';
+            const badge = document.createElement('span');
+            badge.className = 'badge-status';
+            if (r.success) {
+              badge.classList.add('status-success');
+              badge.textContent = 'Выгружен';
+            } else if (r.error && r.error.includes('Не найден')) {
+              badge.classList.add('status-not_found');
+              badge.textContent = 'Не найден';
+            } else {
+              badge.classList.add('status-error');
+              badge.textContent = 'Ошибка';
+              badge.title = r.error || '';
+            }
+            statusCell.appendChild(badge);
+            row.querySelector('.driver-cell').textContent = r.driver_name || '—';
+            row.querySelector('.tc-cell').textContent = r.tc_number || '—';
+
+            const fileCell = row.querySelector('.file-cell');
+            fileCell.innerHTML = '';
+            if (r.success && r.filename) {
+              const btn = document.createElement('button');
+              btn.type = 'button';
+              btn.className = 'download-link';
+              btn.textContent = 'Скачать PDF';
+              const fileUrl = `/api/tasks/${job.id}/files/${encodeURIComponent(r.filename)}`;
+              btn.onclick = () => downloadProtectedFile(fileUrl, r.filename);
+              fileCell.appendChild(btn);
+            } else {
+              fileCell.textContent = r.error ? r.error : '—';
+            }
+          }
+        });
+      }
+    }
+
+    let latestThermoJob = null;
+
+    function finishTask(job) {
+      latestThermoJob = job;
+      const btnStart = document.getElementById('btn-start');
+      btnStart.disabled = false;
+      btnStart.innerHTML = `<span>Запустить выгрузку</span>`;
+
+      if (job.status === 'completed') {
+        document.getElementById('progress-title').innerText = 'Выгрузка завершена!';
+        document.getElementById('progress-desc').innerText = `Готово. Успешно: ${job.success_count || 0}, не выгружено: ${job.fail_count || 0}`;
+        document.getElementById('progress-bar').style.width = '100%';
+
+        const zipContainer = document.getElementById('zip-download-container');
+        const zipBtn = document.getElementById('btn-zip-download');
+        const emailBtn = document.getElementById('btn-thermo-send-email');
+
+        if (job.success_count > 0) {
+          if (job.has_zip) {
+            zipBtn.style.display = 'inline-flex';
+            const zipUrl = `/api/tasks/${job.id}/download`;
+            const zipName = job.zip_filename || `advantum_charts_${job.id.slice(0, 8)}.zip`;
+            zipBtn.onclick = (e) => {
+              e.preventDefault();
+              downloadProtectedFile(zipUrl, zipName);
+            };
+          } else {
+            zipBtn.style.display = 'none';
+          }
+          if (emailBtn) emailBtn.style.display = 'inline-flex';
+          zipContainer.style.display = 'flex';
+        } else {
+          zipContainer.style.display = 'none';
+        }
+      } else {
+        document.getElementById('progress-title').innerText = 'Ошибка выполнения';
+        document.getElementById('progress-desc').innerText = job.error_message || 'Непредвиденный сбой';
+      }
+    }
+
+    window.portalMailConfig = { thermo_to: '', thermo_cc: '', etrn_to: '', etrn_cc: '' };
+
+    async function loadMailConfig() {
+      if (!window.authToken) return;
+      try {
+        const resp = await fetch('/api/mail-config', { headers: authHeaders() });
+        if (resp.ok) {
+          const data = await resp.json();
+          window.portalMailConfig = data || window.portalMailConfig;
+        }
+      } catch (e) {}
+    }
+
+    function openThermoSendModal() {
+      if (!activeTaskId) {
+        alert('Сначала выполните выгрузку графиков!');
+        return;
+      }
+      const mc = window.portalMailConfig || {};
+      const toEl = document.getElementById('thermoModalTo');
+      const ccEl = document.getElementById('thermoModalCc');
+      if (toEl) toEl.innerText = mc.thermo_to || 'Не задано (THERMO_EMAIL_TO в .env)';
+      if (ccEl) ccEl.innerText = mc.thermo_cc || '—';
+      const successCount = (latestThermoJob && latestThermoJob.success_count) ? latestThermoJob.success_count : 1;
+      const isSingle = (successCount === 1);
+
+      const subjEl = document.getElementById('thermoModalSubject');
+      const bodyEl = document.getElementById('thermoModalBody');
+      const attEl = document.getElementById('thermoModalAttachment');
+
+      if (subjEl) subjEl.innerText = isSingle ? 'Температурный график' : 'Температурные графики';
+      if (bodyEl) bodyEl.innerHTML = isSingle ? 'Добрый день,<br><br>График по рейсу' : 'Добрый день,<br><br>Графики по рейсам';
+      if (attEl) {
+        if (latestThermoJob && latestThermoJob.results) {
+          const files = latestThermoJob.results.filter(r => r.success && r.filename).map(r => r.filename);
+          if (files.length === 1) {
+            attEl.innerText = files[0];
+          } else if (files.length > 1) {
+            attEl.innerText = `${files.length} шт. (${files.slice(0, 3).join(', ')}${files.length > 3 ? '...' : ''})`;
+          } else {
+            attEl.innerText = `${successCount} файл(ов)`;
+          }
+        } else {
+          attEl.innerText = `${successCount} файл(ов)`;
+        }
+      }
+
+      document.getElementById('thermoSendingStatus').style.display = 'none';
+      document.getElementById('confirmThermoSendBtn').disabled = false;
+      document.getElementById('thermoSendModal').classList.add('active');
+    }
+
+    function closeThermoSendModal() {
+      document.getElementById('thermoSendModal').classList.remove('active');
+    }
+
+    async function executeThermoEmailSend() {
+      if (!activeTaskId) {
+        alert('Нет активной задачи выгрузки графиков!');
+        return;
+      }
+      const mode = document.querySelector('input[name="thermoSendMode"]:checked').value;
+      const confirmBtn = document.getElementById('confirmThermoSendBtn');
+      confirmBtn.disabled = true;
+      document.getElementById('thermoSendingStatus').style.display = 'block';
+
+      try {
+        const res = await dispatchViaLocalOutlookOrServer(
+          `/api/tasks/${activeTaskId}/prepare-email`,
+          `/api/tasks/${activeTaskId}/send-email`,
+          { mode }
+        );
+        if (res.status === 'bridge_required') {
+          confirmBtn.disabled = false;
+          document.getElementById('thermoSendingStatus').style.display = 'none';
+          closeThermoSendModal();
+          openBridgeRequiredModal();
+        } else if (res.status === 'success' || res.status === 'warning') {
+          alert(res.message);
+          closeThermoSendModal();
+        } else {
+          alert('Ошибка при отправке: ' + (res.message || res.detail || JSON.stringify(res)));
+          confirmBtn.disabled = false;
+          document.getElementById('thermoSendingStatus').style.display = 'none';
+        }
+      } catch (e) {
+        alert('Сетевая ошибка: ' + e.message);
+        confirmBtn.disabled = false;
+        document.getElementById('thermoSendingStatus').style.display = 'none';
+      }
+    }
+
+    // =========================================================================
+    // РАЗДЕЛ: МОНИТОРИНГ — ОТЧЕТЫ ЭТРН
+    // =========================================================================
+    let currentEtrnTaskId = null;
+    let currentEtrnFilename = '';
+    let currentEtrnDateLabel = '';
+    let etrnPollInterval = null;
+
+    function switchEtrnMode(mode) {
+      document.getElementById('etrn-pane-auto').style.display = (mode === 'auto') ? 'block' : 'none';
+      document.getElementById('etrn-pane-manual').style.display = (mode === 'manual') ? 'block' : 'none';
+      const btnAuto = document.getElementById('tab-etrn-auto');
+      const btnMan = document.getElementById('tab-etrn-manual');
+      if (mode === 'auto') {
+        btnAuto.className = 'btn btn-primary btn-sm';
+        btnMan.className = 'btn btn-outline btn-sm';
+      } else {
+        btnAuto.className = 'btn btn-outline btn-sm';
+        btnMan.className = 'btn btn-primary btn-sm';
+      }
+    }
+
+    function setEtrnPreset(preset) {
+      const today = new Date();
+      const formatDate = d => d.toISOString().split('T')[0];
+      const fromEl = document.getElementById('etrn-date-from');
+      const toEl = document.getElementById('etrn-date-to');
+      if (!fromEl || !toEl) return;
+
+      if (preset === 'today') {
+        fromEl.value = formatDate(today);
+        toEl.value = formatDate(today);
+      } else if (preset === 'yesterday') {
+        const y = new Date(today);
+        y.setDate(y.getDate() - 1);
+        fromEl.value = formatDate(y);
+        toEl.value = formatDate(y);
+      } else if (preset === '3days') {
+        const past = new Date(today);
+        past.setDate(past.getDate() - 2);
+        fromEl.value = formatDate(past);
+        toEl.value = formatDate(today);
+      } else if (preset === '7days') {
+        const past = new Date(today);
+        past.setDate(past.getDate() - 6);
+        fromEl.value = formatDate(past);
+        toEl.value = formatDate(today);
+      } else if (preset === 'current_month') {
+        const first = new Date(today.getFullYear(), today.getMonth(), 1);
+        fromEl.value = formatDate(first);
+        toEl.value = formatDate(today);
+      }
+    }
+
+    function setEtrnManualPreset(preset) {
+      const today = new Date();
+      const formatDate = d => d.toISOString().split('T')[0];
+      const fromEl = document.getElementById('etrn-manual-date-from');
+      const toEl = document.getElementById('etrn-manual-date-to');
+      if (!fromEl || !toEl) return;
+
+      if (preset === 'today') {
+        fromEl.value = formatDate(today);
+        toEl.value = formatDate(today);
+      } else if (preset === 'yesterday') {
+        const y = new Date(today);
+        y.setDate(y.getDate() - 1);
+        fromEl.value = formatDate(y);
+        toEl.value = formatDate(y);
+      } else if (preset === '3days') {
+        const past = new Date(today);
+        past.setDate(past.getDate() - 2);
+        fromEl.value = formatDate(past);
+        toEl.value = formatDate(today);
+      } else if (preset === '7days') {
+        const past = new Date(today);
+        past.setDate(past.getDate() - 6);
+        fromEl.value = formatDate(past);
+        toEl.value = formatDate(today);
+      } else if (preset === 'current_month') {
+        const first = new Date(today.getFullYear(), today.getMonth(), 1);
+        fromEl.value = formatDate(first);
+        toEl.value = formatDate(today);
+      }
+    }
+
+    function formatIsoToRu(isoStr) {
+      if (!isoStr) return '';
+      const parts = isoStr.split('-');
+      if (parts.length === 3) return `${parts[2]}.${parts[1]}.${parts[0]}`;
+      return isoStr;
+    }
+
+    async function startEtrnAutoTask() {
+      const dFromRaw = document.getElementById('etrn-date-from').value;
+      const dToRaw = document.getElementById('etrn-date-to').value;
+      if (!dFromRaw) {
+        alert('Пожалуйста, выберите дату начала!');
+        return;
+      }
+      const date_from = formatIsoToRu(dFromRaw);
+      const date_to = dToRaw ? formatIsoToRu(dToRaw) : date_from;
+
+      const pCard = document.getElementById('etrn-progress-card');
+      const rCard = document.getElementById('etrn-result-card');
+      const pBar = document.getElementById('etrn-progress-bar');
+      const pDesc = document.getElementById('etrn-progress-desc');
+      const btn = document.getElementById('btn-etrn-start-auto');
+
+      pCard.style.display = 'block';
+      rCard.style.display = 'none';
+      pBar.style.width = '10%';
+      pDesc.innerText = 'Запуск задачи сбора из 1С...';
+      btn.disabled = true;
+
+      try {
+        const resp = await fetch('/api/etrn/generate-task', {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ date_from, date_to })
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          throw new Error(data.detail || 'Ошибка запуска задачи');
+        }
+        currentEtrnTaskId = data.task_id;
+        currentEtrnDateLabel = (date_from === date_to) ? date_from : `${date_from} - ${date_to}`;
+        pollEtrnTaskStatus(data.task_id);
+      } catch (e) {
+        alert('Ошибка: ' + e.message);
+        pCard.style.display = 'none';
+        btn.disabled = false;
+      }
+    }
+
+    function pollEtrnTaskStatus(taskId) {
+      if (etrnPollInterval) clearInterval(etrnPollInterval);
+      etrnPollInterval = setInterval(async () => {
+        try {
+          const resp = await fetch(`/api/etrn/task-status/${encodeURIComponent(taskId)}`, {
+            headers: authHeaders()
+          });
+          if (!resp.ok) return;
+          const task = await resp.json();
+
+          const pBar = document.getElementById('etrn-progress-bar');
+          const pDesc = document.getElementById('etrn-progress-desc');
+          pBar.style.width = Math.max(10, task.progress || 0) + '%';
+          pDesc.innerText = task.message || 'Формирование отчета...';
+
+          if (task.status === 'completed') {
+            clearInterval(etrnPollInterval);
+            etrnPollInterval = null;
+            document.getElementById('btn-etrn-start-auto').disabled = false;
+            document.getElementById('etrn-progress-card').style.display = 'none';
+
+            currentEtrnTaskId = taskId;
+            currentEtrnFilename = task.filename || 'ЭТРН_Отчет.xlsx';
+            currentEtrnDateLabel = task.date_label || currentEtrnDateLabel;
+
+            const rCard = document.getElementById('etrn-result-card');
+            const details = document.getElementById('etrnResultDetails');
+            const dlBtn = document.getElementById('btn-etrn-download');
+
+            details.innerHTML = `Файл: <b>${currentEtrnFilename}</b> &bull; Период: <b>${currentEtrnDateLabel}</b> &bull; Время готовности: <b>${new Date().toLocaleTimeString()}</b>`;
+            dlBtn.href = `/api/etrn/download/${encodeURIComponent(taskId)}`;
+            dlBtn.setAttribute('download', currentEtrnFilename);
+            rCard.style.display = 'block';
+          } else if (task.status === 'failed') {
+            clearInterval(etrnPollInterval);
+            etrnPollInterval = null;
+            document.getElementById('btn-etrn-start-auto').disabled = false;
+            alert('Сбой формирования: ' + (task.error || task.message));
+            document.getElementById('etrn-progress-card').style.display = 'none';
+          }
+        } catch (e) {
+          // ignore transient poll error
+        }
+      }, 1500);
+    }
+
+    async function submitEtrnFilesManual() {
+      const f1 = document.getElementById('etrn-file-1').files[0];
+      const f2 = document.getElementById('etrn-file-2').files[0];
+      const f3 = document.getElementById('etrn-file-3').files[0];
+      if (!f1 || !f2 || !f3) {
+        alert('Пожалуйста, выберите все 3 файла: «ЭТРН», «Модель расчетов» и «Процент»!');
+        return;
+      }
+      const dFromRaw = document.getElementById('etrn-manual-date-from').value;
+      const dToRaw = document.getElementById('etrn-manual-date-to').value;
+      if (!dFromRaw) {
+        alert('Пожалуйста, выберите дату начала периода!');
+        return;
+      }
+      const date_from = formatIsoToRu(dFromRaw);
+      const date_to = dToRaw ? formatIsoToRu(dToRaw) : date_from;
+      const date_label = (date_from === date_to) ? date_from : `${date_from} - ${date_to}`;
+
+      const btn = document.getElementById('btn-etrn-start-manual');
+      btn.disabled = true;
+      btn.innerText = '⏳ Обработка файлов...';
+
+      const formData = new FormData();
+      formData.append('etrn_file', f1);
+      formData.append('model_file', f2);
+      formData.append('percent_file', f3);
+      formData.append('date_from', date_from);
+      formData.append('date_to', date_to);
+      formData.append('date_label', date_label);
+      formData.append('as_json', 'true');
+
+      try {
+        const resp = await fetch('/api/etrn/process-files', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: formData
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          throw new Error(data.detail || 'Ошибка при обработке файлов');
+        }
+
+        currentEtrnTaskId = data.task_id;
+        currentEtrnFilename = data.filename;
+        currentEtrnDateLabel = data.date_label || date_label;
+
+        const rCard = document.getElementById('etrn-result-card');
+        const details = document.getElementById('etrnResultDetails');
+        const dlBtn = document.getElementById('btn-etrn-download');
+
+        details.innerHTML = `Файл: <b>${currentEtrnFilename}</b> &bull; Период: <b>${currentEtrnDateLabel}</b> &bull; Сформирован мгновенно из 3 файлов`;
+        dlBtn.href = `/api/etrn/download/${encodeURIComponent(data.task_id)}`;
+        dlBtn.setAttribute('download', currentEtrnFilename);
+        rCard.style.display = 'block';
+
+        alert('✅ Отчет ЭТРН успешно собран!');
+      } catch (err) {
+        alert('Ошибка: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerText = '⚡ Собрать отчет из файлов';
+      }
+    }
+
+    function openEtrnSendModal() {
+      if (!currentEtrnTaskId) {
+        alert('Сначала сформируйте отчет ЭТРН!');
+        return;
+      }
+      const mc = window.portalMailConfig || {};
+      const toEl = document.getElementById('etrnModalTo');
+      const ccEl = document.getElementById('etrnModalCc');
+      if (toEl) toEl.innerText = mc.etrn_to || 'Не задано (ETRN_EMAIL_TO в .env)';
+      if (ccEl) ccEl.innerText = mc.etrn_cc || '—';
+      const subjEl = document.getElementById('etrnModalSubject');
+      const attEl = document.getElementById('etrnModalAttachment');
+      if (subjEl) subjEl.innerText = `ЭТРН отчет (${currentEtrnDateLabel || 'Актуальный'})`;
+      if (attEl) attEl.innerText = currentEtrnFilename || 'ЭТРН_Отчет.xlsx';
+
+      document.getElementById('etrnSendingStatus').style.display = 'none';
+      document.getElementById('confirmEtrnSendBtn').disabled = false;
+      document.getElementById('etrnSendModal').classList.add('active');
+    }
+
+    function closeEtrnSendModal() {
+      document.getElementById('etrnSendModal').classList.remove('active');
+    }
+
+    async function executeEtrnEmailSend() {
+      const mode = document.querySelector('input[name="etrnSendMode"]:checked').value;
+      const confirmBtn = document.getElementById('confirmEtrnSendBtn');
+      confirmBtn.disabled = true;
+      document.getElementById('etrnSendingStatus').style.display = 'block';
+
+      try {
+        const res = await dispatchViaLocalOutlookOrServer(
+          '/api/etrn/prepare-email',
+          '/api/etrn/send-email',
+          { task_id: currentEtrnTaskId, mode }
+        );
+        if (res.status === 'bridge_required') {
+          confirmBtn.disabled = false;
+          document.getElementById('etrnSendingStatus').style.display = 'none';
+          closeEtrnSendModal();
+          openBridgeRequiredModal();
+        } else if (res.status === 'success' || res.status === 'warning') {
+          alert(res.message);
+          closeEtrnSendModal();
+        } else {
+          alert('Ошибка при отправке: ' + res.message);
+          confirmBtn.disabled = false;
+          document.getElementById('etrnSendingStatus').style.display = 'none';
+        }
+      } catch (e) {
+        alert('Ошибка связи с сервером: ' + e);
+        confirmBtn.disabled = false;
+        document.getElementById('etrnSendingStatus').style.display = 'none';
+      }
+    }
+  </script>
+  <script src="/static/apt_waybills.js?v=1.19"></script>
+</body>
+</html>
