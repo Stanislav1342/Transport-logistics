@@ -1343,6 +1343,51 @@ def create_ml_router(check_auth_fn: Callable[..., dict[str, Any]]) -> APIRouter:
             headers={"Cache-Control": "no-store"},
         )
 
+    @router.post("/api/ml/admin/quarantine/{item_id}/windows/{window_idx}/edit")
+    async def ml_admin_quarantine_window_edit(request: Request, item_id: str, window_idx: int):
+        user = check_auth_fn(request, require_admin=True)
+        qid = _validate_id(item_id, "item_id")
+        if window_idx < 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректный индекс окна.")
+
+        payload = await _parse_json_object(request, allow_empty=False)
+        edits = payload.get("edits")
+        allowed_actions = {"add_box", "delete_box", "update_box", "relabel_box", "fix_digit"}
+        if not isinstance(edits, list) or not (1 <= len(edits) <= 200):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Поле 'edits' должно быть списком от 1 до 200 правок.",
+            )
+        for idx, item in enumerate(edits):
+            if not isinstance(item, dict) or item.get("action") not in allowed_actions:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Некорректная правка #{idx + 1}: допустимы только add_box, delete_box, update_box, relabel_box, fix_digit.",
+                )
+
+        upstream_payload = {
+            "edits": edits,
+            "admin_user": user["login"],
+            "admin_name": user.get("full_name") or user["login"],
+        }
+        try:
+            resp = await asyncio.to_thread(
+                _upstream_request,
+                "POST",
+                f"/api/ml/admin/quarantine/{qid}/windows/{window_idx}/edit",
+                json_body=upstream_payload,
+                timeout=60.0,
+            )
+        except HTTPException as exc:
+            detail_low = str(exc.detail).lower()
+            if exc.status_code == 404 and ("маршрут" in detail_low or "unknown" in detail_low):
+                raise HTTPException(
+                    status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                    detail="Правка разметки в очереди дообучения поддерживается после обновления ML-модуля (review_service.py v1.3.0).",
+                ) from exc
+            raise
+        return JSONResponse(status_code=resp.status_code, content=resp.json())
+
     @router.post("/api/ml/admin/quarantine/{item_id}/decision")
     async def ml_admin_quarantine_decision(request: Request, item_id: str):
         user = check_auth_fn(request, require_admin=True)

@@ -64,6 +64,7 @@
     drawMode: null, // { label: string }
     dragState: null, // { startX, startY, currX, currY, pointerId }
     operatorEditor: null,
+    adminEditor: null,
     reviewAreaForced: false,
     manualMarkupPages: new Set(), // page_id страниц с ручной правкой класса/рамки
     currentWindowImg: null,
@@ -73,7 +74,7 @@
     fullPageUrl: null,
     qStatusFilter: 'pending',
     qItems: [],
-    qActiveItem: null,
+    qReview: { item: null, order: [], winIdx: null, img: null, imgKey: null },
     qLoading: false,
   };
 
@@ -2137,7 +2138,14 @@
 
   async function loadQuarantineList(statusOverride) {
     if (statusOverride) state.qStatusFilter = statusOverride;
+    const listView = $('apt-q-list-view');
+    const reviewView = $('apt-q-review-view');
+    if (reviewView) reviewView.hidden = true;
+    if (listView) listView.hidden = false;
+    state.adminEditor?.deactivate();
+
     const tbody = $('apt-q-tbody');
+    const startBtn = $('apt-q-start-review-btn');
     if (!tbody) return;
 
     // Обновление ARIA и табов
@@ -2167,6 +2175,13 @@
         if (badge) {
           badge.style.display = state.qItems.length > 0 ? 'inline-flex' : 'none';
           badge.textContent = String(state.qItems.length);
+        }
+      }
+      if (startBtn) {
+        const showStart = state.qStatusFilter === 'pending' && state.qItems.length > 0;
+        startBtn.hidden = !showStart;
+        if (showStart) {
+          startBtn.textContent = `▶ Начать проверку (${state.qItems.length})`;
         }
       }
 
@@ -2212,7 +2227,7 @@
             <td>${Number(item.digit_crops_count || 0)}</td>
             <td>
               <button type="button" class="btn btn-primary btn-sm apt-q-open-btn" data-q-id="${escapeHtml(item.item_id)}">
-                👁️ Проверить
+                ${item.status === 'pending' ? '👁️ Проверить' : 'Открыть'}
               </button>
             </td>
           </tr>
@@ -2221,7 +2236,11 @@
 
       tbody.querySelectorAll('.apt-q-open-btn').forEach(btn => {
         btn.addEventListener('click', () => {
-          openQuarantineDetailDialog(btn.getAttribute('data-q-id'));
+          const id = btn.getAttribute('data-q-id');
+          const order = state.qItems.map(i => i.item_id);
+          const doneBox = $('apt-q-review-done');
+          if (doneBox) doneBox.style.display = 'none';
+          openQuarantineReview(id, order);
         });
       });
     } catch (err) {
@@ -2231,7 +2250,8 @@
     }
   }
 
-  function drawQuarantineOverlayCanvas(canvas, img, cropRect, elements, origMap, isAfter) {
+  function drawQuarantineOverlayCanvas(canvas, img, cropRect, elements, origMap, isAfter, returnSplitY = null) {
+    if (!canvas || !img) return;
     canvas.width = img.naturalWidth;
     canvas.height = img.naturalHeight;
     const ctx = canvas.getContext('2d');
@@ -2241,6 +2261,21 @@
     const [cx1, cy1, cx2, cy2] = cropRect;
     const scaleX = canvas.width / Math.max(1, cx2 - cx1);
     const scaleY = canvas.height / Math.max(1, cy2 - cy1);
+
+    if (returnSplitY !== null && returnSplitY !== undefined) {
+      const splitY = (returnSplitY - cy1) * scaleY;
+      if (splitY > 4 && splitY < canvas.height - 4) {
+        ctx.save();
+        ctx.strokeStyle = '#6366f1';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([7, 5]);
+        ctx.beginPath();
+        ctx.moveTo(0, splitY);
+        ctx.lineTo(canvas.width, splitY);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
 
     for (const el of (elements || [])) {
       const [x1, y1, x2, y2] = el.bbox;
@@ -2255,7 +2290,7 @@
       } else if (isAfter) {
         const prev = origMap ? origMap.get(el.id) : null;
         const isModified = !prev || prev.label !== el.label || (state.digitLabels.has(el.label) && prev.ocr_value !== el.ocr_value);
-        if (isModified || el.source === 'operator') {
+        if (isModified || el.source === 'operator' || el.source === 'admin') {
           stroke = '#0284c7';
         }
       }
@@ -2276,149 +2311,332 @@
     }
   }
 
-  async function openQuarantineDetailDialog(itemId) {
-    const dlg = $('aptQuarantineDialog');
-    const titleEl = $('aptQuarantineDialogTitle');
-    const metaBox = $('aptQMetaBox');
-    const cmpBox = $('aptQWindowsCompare');
-    const cropsBox = $('aptQCropsGallery');
-    const commentInp = $('aptQAdminComment');
-    if (!dlg || !itemId) return;
+  function confirmLeaveAdminEdit() {
+    if (!state.adminEditor || !state.adminEditor.isActive()) return true;
+    if (state.adminEditor.hasChanges() && !confirm('На снимке есть незавершённые правки. Выйти без сохранения?')) {
+      return false;
+    }
+    state.adminEditor.deactivate();
+    return true;
+  }
 
+  function getQuarantineReviewWindows(item) {
+    if (!item) return [];
+    const diffByWin = new Map((item.window_diffs || []).map(wd => [wd.window_idx, wd.diff]));
+    const filtered = (item.windows || []).filter(w => diffByWin.has(w.window_idx));
+    return filtered.length > 0 ? filtered : (item.windows || []);
+  }
+
+  function getCurrentQuarantineWindow() {
+    const item = state.qReview.item;
+    if (!item) return null;
+    const wins = getQuarantineReviewWindows(item);
+    return wins.find(w => w.window_idx === state.qReview.winIdx) || wins[0] || null;
+  }
+
+  function closeQuarantineReview(force = false) {
+    if (!force && !confirmLeaveAdminEdit()) return;
+    if (force) state.adminEditor?.deactivate();
+    const listView = $('apt-q-list-view');
+    const reviewView = $('apt-q-review-view');
+    if (reviewView) reviewView.hidden = true;
+    if (listView) listView.hidden = false;
+    state.qReview = { item: null, order: [], winIdx: null, img: null, imgKey: null };
     revokeUrlPool(state.quarantineUrls);
-    if (titleEl) titleEl.textContent = `Карточка дообучения (${itemId})`;
-    if (metaBox) metaBox.innerHTML = '<div class="apt-muted">Загрузка деталей...</div>';
-    if (cmpBox) cmpBox.innerHTML = '';
-    if (cropsBox) cropsBox.innerHTML = '';
-    if (commentInp) commentInp.value = '';
+    loadQuarantineList();
+  }
 
-    if (typeof dlg.showModal === 'function') dlg.showModal();
+  async function openQuarantineReview(itemId, order = null) {
+    const listView = $('apt-q-list-view');
+    const reviewView = $('apt-q-review-view');
+    if (!reviewView || !itemId) return;
+    if (!confirmLeaveAdminEdit()) return;
+
+    if (Array.isArray(order) && order.length > 0) {
+      state.qReview.order = [...order];
+    }
+    state.qReview.item = null;
+    state.qReview.winIdx = null;
+    state.qReview.img = null;
+    state.qReview.imgKey = null;
+    revokeUrlPool(state.quarantineUrls);
+
+    if (listView) listView.hidden = true;
+    reviewView.hidden = false;
+    const metaBox = $('apt-q-review-meta');
+    if (metaBox) metaBox.innerHTML = '<span class="apt-muted">Загрузка карточки...</span>';
 
     try {
       const item = await apiJson(`/api/ml/admin/quarantine/${encodeURIComponent(itemId)}`);
-      state.qActiveItem = item;
-
-      if (titleEl) {
-        titleEl.textContent = `Проверка правки · МЛ ${item.ml_number || '—'} · Стр. ${item.page_num ?? 1}`;
-      }
-      if (commentInp) commentInp.value = item.review_comment || '';
-
-      if (metaBox) {
-        const isManualMarkup = String(item.comment || '').includes('[РУЧНАЯ ПРАВКА]') || !item.invariant_passed;
-        const inv = item.invariant_passed
-          ? '✅ Окно в норме (исправленные окна без ошибок)'
-          : '⚠️ Зафиксирована ошибка окна (ручная разметка класса/рамки)';
-        metaBox.innerHTML = `
-          ${isManualMarkup ? `
-            <div style="margin-bottom:8px; padding:8px 12px; border-radius:8px; background:#fef3c7; border:1px solid #fcd34d; color:#92400e; font-size:12.5px; font-weight:600;">
-              ✏️ Ручное исправление разметки оператором — проверьте смену класса или границ рамки («было → стало») перед одобрением в датасет.
-            </div>
-          ` : ''}
-          <div style="display:flex; flex-wrap:wrap; gap:14px; font-size:13px;">
-            <div><span class="apt-muted">Сотрудник:</span> <b>${escapeHtml(item.submitted_by_name || item.submitted_by)}</b> (${escapeHtml(item.submitted_by)})</div>
-            <div><span class="apt-muted">Водитель:</span> <b>${escapeHtml(item.driver_name || '—')}</b></div>
-            <div><span class="apt-muted">Дата:</span> <b>${escapeHtml(String(item.submitted_at || '').replace('T', ' '))}</b></div>
-            <div><span class="apt-muted">Статус:</span> <b>${escapeHtml(inv)}</b></div>
-          </div>
-          ${item.comment ? `<div style="margin-top:6px; font-size:13px;"><span class="apt-muted">Комментарий оператора:</span> ${escapeHtml(item.comment)}</div>` : ''}
-        `;
-      }
-
-      const diffByWin = new Map((item.window_diffs || []).map(wd => [wd.window_idx, wd.diff]));
-      const windows = (item.windows || []).filter(w => diffByWin.has(w.window_idx));
-      const winsToShow = windows.length > 0 ? windows : (item.windows || []);
-
-      if (cmpBox) {
-        cmpBox.innerHTML = winsToShow.map(w => {
-          const d = diffByWin.get(w.window_idx) || { added: [], deleted: [], relabeled: [], digit_fixed: [] };
-          const summaryParts = [];
-          if (d.added?.length) summaryParts.push(`+добавлено: ${d.added.map(a => escapeHtml(a.label)).join(', ')}`);
-          if (d.deleted?.length) summaryParts.push(`-удалено: ${d.deleted.map(a => escapeHtml(a.label)).join(', ')}`);
-          if (d.relabeled?.length) summaryParts.push(`~класс: ${d.relabeled.map(r => `${escapeHtml(r.from_label)} → ${escapeHtml(r.to_label)}`).join(', ')}`);
-          if (d.digit_fixed?.length) summaryParts.push(`#цифры: ${d.digit_fixed.map(f => `${escapeHtml(f.from_value ?? '?')} → ${escapeHtml(f.to_value)}`).join(', ')}`);
-
-          return `
-            <div style="border:1px solid var(--border-light); border-radius:10px; padding:12px; margin-bottom:14px;">
-              <div style="font-size:14px; font-weight:700; margin-bottom:4px;">Окно #${escapeHtml(w.window_number)}</div>
-              <div style="font-size:12.5px; color:var(--primary); margin-bottom:8px;">${summaryParts.join(' | ') || 'Без изменений элементов'}</div>
-              <div class="apt-compare-grid">
-                <div class="apt-compare-col">
-                  <div style="font-size:12.5px; font-weight:700; margin-bottom:6px; color:#991b1b;">Было (модель) — ошибок: ${(w.original_errors || []).length}</div>
-                  <canvas id="apt-q-before-${w.window_idx}"></canvas>
-                </div>
-                <div class="apt-compare-col">
-                  <div style="font-size:12.5px; font-weight:700; margin-bottom:6px; color:#166534;">Стало (оператор) — ошибок: ${(w.errors || []).length}</div>
-                  <canvas id="apt-q-after-${w.window_idx}"></canvas>
-                </div>
-              </div>
-            </div>
-          `;
-        }).join('');
-
-        for (const w of winsToShow) {
-          const imgUrl = `/api/ml/admin/quarantine/${encodeURIComponent(item.item_id)}/windows/${w.window_idx}/image`;
-          fetchBlobUrl(imgUrl, state.quarantineUrls)
-            .then(objUrl => {
-              const img = new Image();
-              img.onload = () => {
-                const origMap = new Map((w.original_elements || []).map(e => [e.id, e]));
-                const bCanv = $(`apt-q-before-${w.window_idx}`);
-                const aCanv = $(`apt-q-after-${w.window_idx}`);
-                if (bCanv) drawQuarantineOverlayCanvas(bCanv, img, w.crop_rect, w.original_elements, null, false);
-                if (aCanv) drawQuarantineOverlayCanvas(aCanv, img, w.crop_rect, w.edited_elements, origMap, true);
-              };
-              img.src = objUrl;
-            })
-            .catch(() => {});
-        }
-      }
-
-      if (cropsBox) {
-        const crops = item.digit_crops || [];
-        if (crops.length === 0) {
-          cropsBox.innerHTML = '<div class="apt-muted">По этой странице нет вырезанных кропов цифр.</div>';
-        } else {
-          cropsBox.innerHTML = crops.map((c, idx) => `
-            <div class="apt-crop-card" style="flex:0 0 175px;">
-              <div style="font-size:12px; font-weight:700;">${escapeHtml(c.label)}</div>
-              <div style="font-size:11.5px; color:var(--text-muted);">Было: <b>${escapeHtml(c.old_value ?? '?')}</b> → Стало: <b style="color:var(--success);">${escapeHtml(c.value)}</b></div>
-              <div class="apt-crop-img-wrap"><img id="apt-q-crop-img-${idx}" alt="Кроп цифры"></div>
-            </div>
-          `).join('');
-
-          crops.forEach((c, idx) => {
-            const cUrl = `/api/ml/admin/quarantine/${encodeURIComponent(item.item_id)}/crops/${encodeURIComponent(c.file)}`;
-            fetchBlobUrl(cUrl, state.quarantineUrls)
-              .then(u => {
-                const im = $(`apt-q-crop-img-${idx}`);
-                if (im) im.src = u;
-              })
-              .catch(() => {});
-          });
-        }
-      }
+      state.qReview.item = item;
+      const wins = getQuarantineReviewWindows(item);
+      state.qReview.winIdx = wins.length > 0 ? wins[0].window_idx : null;
+      renderQuarantineReview();
+      loadAndDrawQuarantineWindowImage();
     } catch (err) {
-      if (metaBox) metaBox.innerHTML = `<div style="color:var(--error);">Ошибка загрузки: ${escapeHtml(err.message)}</div>`;
+      if (metaBox) metaBox.innerHTML = `<span style="color:var(--error);">Ошибка загрузки: ${escapeHtml(err.message)}</span>`;
     }
   }
 
-  async function submitQuarantineDecision(decision) {
-    const item = state.qActiveItem;
+  function loadAndDrawQuarantineWindowImage() {
+    const item = state.qReview.item;
+    const w = getCurrentQuarantineWindow();
+    if (!item || !w) return;
+
+    const key = `${item.item_id}:${w.window_idx}`;
+    if (state.qReview.imgKey === key && state.qReview.img) {
+      drawQuarantineReviewCanvases();
+      return;
+    }
+
+    const imgUrl = `/api/ml/admin/quarantine/${encodeURIComponent(item.item_id)}/windows/${w.window_idx}/image`;
+    fetchBlobUrl(imgUrl, state.quarantineUrls)
+      .then(objUrl => {
+        if (!state.qReview.item || `${state.qReview.item.item_id}:${getCurrentQuarantineWindow()?.window_idx}` !== key) {
+          return;
+        }
+        const img = new Image();
+        img.onload = () => {
+          state.qReview.imgKey = key;
+          state.qReview.img = img;
+          drawQuarantineReviewCanvases();
+        };
+        img.src = objUrl;
+      })
+      .catch(() => {});
+  }
+
+  function drawQuarantineReviewCanvases() {
+    const w = getCurrentQuarantineWindow();
+    const img = state.qReview.img;
+    if (!w || !img) return;
+    const bCanv = $('apt-q-before-canvas');
+    const aCanv = $('apt-q-after-canvas');
+    const origMap = new Map((w.original_elements || []).map(e => [e.id, e]));
+    if (bCanv) {
+      drawQuarantineOverlayCanvas(bCanv, img, w.crop_rect, w.original_elements, null, false, w.return_split_y ?? null);
+    }
+    if (aCanv) {
+      if (state.adminEditor && state.adminEditor.isActive()) {
+        state.adminEditor.draw();
+      } else {
+        drawQuarantineOverlayCanvas(aCanv, img, w.crop_rect, w.edited_elements, origMap, true, w.return_split_y ?? null);
+      }
+    }
+  }
+
+  function renderQuarantineReview() {
+    const item = state.qReview.item;
     if (!item) return;
-    const comment = ($('aptQAdminComment')?.value || '').trim();
-    const approveBtn = $('aptQApproveBtn');
-    const rejectBtn = $('aptQRejectBtn');
+
+    const metaBox = $('apt-q-review-meta');
+    const tabsBox = $('apt-q-window-tabs');
+    const diffBox = $('apt-q-diff-summary');
+    const errBox = $('apt-q-after-errors');
+    const beforeTitle = $('apt-q-before-title');
+    const afterTitle = $('apt-q-after-title');
+    const cropsBox = $('apt-q-crops-row');
+    const editBtn = $('apt-q-edit-btn');
+    const decisionBar = $('apt-q-decision-bar');
+
+    const isManualMarkup = String(item.comment || '').includes('[РУЧНАЯ ПРАВКА]') || !item.invariant_passed;
+    const pendingTotal = (state.qItems || []).filter(i => i.status === 'pending').length;
+
+    if (metaBox) {
+      metaBox.innerHTML = `
+        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+          <b>МЛ ${escapeHtml(item.ml_number || '—')} · Стр. ${escapeHtml(item.page_num ?? 1)}</b>
+          <span>Водитель: <b>${escapeHtml(item.driver_name || '—')}</b></span>
+          <span>Сотрудник: <b>${escapeHtml(item.submitted_by_name || item.submitted_by || '—')}</b> <span style="font-family:ui-monospace, monospace; font-size:11.5px; color:var(--text-muted);">(${escapeHtml(item.submitted_by || '')})</span></span>
+          <span class="apt-muted">${escapeHtml(formatSessionDate(item.submitted_at))}</span>
+          ${isManualMarkup ? `<span class="apt-manual-badge" style="margin-bottom:0;">✏️ Ручная правка класса/рамки</span>` : ''}
+          ${item.admin_edited ? `<span class="apt-manual-badge" style="margin-bottom:0; background:#dbeafe; border-color:#93c5fd; color:#1e40af;">🛠 Исправлено администратором</span>` : ''}
+          ${item.status === 'pending' ? `<span class="apt-muted">Осталось на проверке: <b>${pendingTotal}</b></span>` : ''}
+        </div>
+      `;
+    }
+
+    const wins = getQuarantineReviewWindows(item);
+    const curWin = getCurrentQuarantineWindow();
+    if (curWin) state.qReview.winIdx = curWin.window_idx;
+
+    if (tabsBox) {
+      tabsBox.innerHTML = wins.map(w => {
+        const errCnt = (w.errors || []).length;
+        const isActive = curWin && w.window_idx === curWin.window_idx;
+        const cls = errCnt > 0 ? 'has-errors' : 'is-clean';
+        const lbl = errCnt > 0 ? `Окно #${w.window_number} (ош: ${errCnt})` : `Окно #${w.window_number} (норма)`;
+        return `<button type="button" class="apt-win-pill ${cls} ${isActive ? 'active' : ''}" data-q-win="${w.window_idx}">${escapeHtml(lbl)}</button>`;
+      }).join('');
+      tabsBox.querySelectorAll('[data-q-win]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          if (!confirmLeaveAdminEdit()) return;
+          state.qReview.winIdx = Number(btn.getAttribute('data-q-win'));
+          renderQuarantineReview();
+          loadAndDrawQuarantineWindowImage();
+        });
+      });
+    }
+
+    if (curWin) {
+      const diffByWin = new Map((item.window_diffs || []).map(wd => [wd.window_idx, wd.diff]));
+      const d = diffByWin.get(curWin.window_idx) || { added: [], deleted: [], relabeled: [], digit_fixed: [] };
+      const summaryParts = [];
+      if (d.added?.length) summaryParts.push(`+добавлено: ${d.added.map(a => escapeHtml(a.label)).join(', ')}`);
+      if (d.deleted?.length) summaryParts.push(`-удалено: ${d.deleted.map(a => escapeHtml(a.label)).join(', ')}`);
+      if (d.relabeled?.length) summaryParts.push(`~класс: ${d.relabeled.map(r => `${escapeHtml(r.from_label)} → ${escapeHtml(r.to_label)}`).join(', ')}`);
+      if (d.digit_fixed?.length) summaryParts.push(`#цифры: ${d.digit_fixed.map(f => `${escapeHtml(f.from_value ?? '?')} → ${escapeHtml(f.to_value)}`).join(', ')}`);
+      if (diffBox) {
+        diffBox.innerHTML = summaryParts.join(' | ') || 'Без изменений элементов';
+      }
+
+      const errs = curWin.errors || [];
+      if (errBox) {
+        if (errs.length > 0) {
+          errBox.innerHTML = `<div style="background:#fef2f2; border:1px solid #fecaca; border-radius:8px; padding:8px 12px; color:#991b1b; font-size:12.5px;">${errs.map(e => `<div>• ${escapeHtml(e)}</div>`).join('')}</div>`;
+        } else {
+          errBox.innerHTML = `<div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px; padding:8px 12px; color:#166534; font-size:12.5px; font-weight:600;">✅ Ошибок нет</div>`;
+        }
+      }
+
+      if (beforeTitle) {
+        beforeTitle.style.color = '#991b1b';
+        beforeTitle.textContent = `Было (модель) — ошибок: ${(curWin.original_errors || []).length}`;
+      }
+      if (afterTitle) {
+        afterTitle.style.color = errs.length > 0 ? '#991b1b' : '#166534';
+        afterTitle.textContent = `Стало — ошибок: ${errs.length}`;
+      }
+    }
+
+    if (cropsBox) {
+      const crops = item.digit_crops || [];
+      if (crops.length === 0) {
+        cropsBox.innerHTML = '<div class="apt-muted">По этой странице нет вырезанных кропов цифр.</div>';
+      } else {
+        cropsBox.innerHTML = crops.map((c, idx) => `
+          <div class="apt-crop-card" style="flex:0 0 175px;">
+            <div style="font-size:12px; font-weight:700;">${escapeHtml(c.label)}</div>
+            <div style="font-size:11.5px; color:var(--text-muted);">Было: <b>${escapeHtml(c.old_value ?? '?')}</b> → Стало: <b style="color:var(--success);">${escapeHtml(c.value)}</b></div>
+            <div class="apt-crop-img-wrap"><img id="apt-q-crop-img-${idx}" alt="Кроп цифры"></div>
+          </div>
+        `).join('');
+
+        crops.forEach((c, idx) => {
+          const cUrl = `/api/ml/admin/quarantine/${encodeURIComponent(item.item_id)}/crops/${encodeURIComponent(c.file)}`;
+          fetchBlobUrl(cUrl, state.quarantineUrls)
+            .then(u => {
+              const im = $(`apt-q-crop-img-${idx}`);
+              if (im) im.src = u;
+            })
+            .catch(() => {});
+        });
+      }
+    }
+
+    const isPending = item.status === 'pending';
+    const isAdminEditing = Boolean(state.adminEditor && state.adminEditor.isActive());
+    if (editBtn) {
+      editBtn.style.display = isPending && !isAdminEditing ? '' : 'none';
+    }
+    if (decisionBar) {
+      if (isPending) {
+        decisionBar.innerHTML = `
+          <button type="button" class="btn btn-danger" id="apt-q-reject-btn">❌ Отклонить</button>
+          <button type="button" class="btn btn-success" id="apt-q-approve-btn">✅ Одобрить</button>
+        `;
+        $('apt-q-reject-btn')?.addEventListener('click', () => decideQuarantineReview('reject'));
+        $('apt-q-approve-btn')?.addEventListener('click', () => decideQuarantineReview('approve'));
+      } else {
+        const stBadge = item.status === 'approved'
+          ? '<span class="badge-status status-success">Одобрено</span>'
+          : '<span class="badge-status status-error">Отклонено</span>';
+        decisionBar.innerHTML = `<div>Статус записи: ${stBadge}</div>`;
+      }
+    }
+
+    drawQuarantineReviewCanvases();
+  }
+
+  async function commitAdminQuarantineEdits(edits) {
+    const item = state.qReview.item;
+    const w = getCurrentQuarantineWindow();
+    if (!item || !w) throw new Error('Окно записи недоступно.');
+    const updatedItem = await apiJson(
+      `/api/ml/admin/quarantine/${encodeURIComponent(item.item_id)}/windows/${w.window_idx}/edit`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ edits }),
+      }
+    );
+    state.qReview.item = updatedItem;
+  }
+
+  function updateAdminEditButton() {
+    const editBtn = $('apt-q-edit-btn');
+    const item = state.qReview.item;
+    const isEd = Boolean(state.adminEditor && state.adminEditor.isActive());
+    if (editBtn) {
+      editBtn.style.display = (item && item.status === 'pending' && !isEd) ? '' : 'none';
+    }
+    drawQuarantineReviewCanvases();
+  }
+
+  async function decideQuarantineReview(decision) {
+    const item = state.qReview.item;
+    if (!item) return;
+
+    if (state.adminEditor && state.adminEditor.isActive()) {
+      if (state.adminEditor.hasChanges()) {
+        const ok = await state.adminEditor.commit();
+        if (!ok) return;
+      } else {
+        state.adminEditor.deactivate();
+      }
+    }
+
+    const approveBtn = $('apt-q-approve-btn');
+    const rejectBtn = $('apt-q-reject-btn');
     if (approveBtn) approveBtn.disabled = true;
     if (rejectBtn) rejectBtn.disabled = true;
     try {
       await apiJson(`/api/ml/admin/quarantine/${encodeURIComponent(item.item_id)}/decision`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ decision, comment }),
+        body: JSON.stringify({ decision }),
       });
-      $('aptQuarantineDialog')?.close();
-      await loadQuarantineList();
+
+      const order = state.qReview.order || [];
+      const curPos = order.indexOf(item.item_id);
+      const pendingData = await apiJson('/api/ml/admin/quarantine?status=pending');
+      const pendingItems = Array.isArray(pendingData) ? pendingData : (Array.isArray(pendingData?.items) ? pendingData.items : []);
+      const pendingSet = new Set(pendingItems.map(x => x.item_id));
       refreshQuarantineBadge();
+
+      let nextId = null;
+      if (curPos >= 0) {
+        for (let i = curPos + 1; i < order.length; i++) {
+          if (pendingSet.has(order[i])) {
+            nextId = order[i];
+            break;
+          }
+        }
+      }
+      if (!nextId && pendingItems.length > 0) {
+        nextId = pendingItems[0].item_id;
+      }
+
+      if (nextId) {
+        await openQuarantineReview(nextId, order);
+      } else {
+        closeQuarantineReview(true);
+        const doneBox = $('apt-q-review-done');
+        if (doneBox) {
+          doneBox.style.display = 'block';
+          doneBox.innerHTML = `<div style="background:#f0fdf4; border:1px solid #86efac; border-radius:10px; padding:10px 14px; color:#166534; font-size:13.5px; font-weight:600;">Все правки на проверке разобраны ✅</div>`;
+        }
+      }
     } catch (err) {
       alert('Ошибка сохранения решения: ' + err.message);
     } finally {
@@ -2501,6 +2719,33 @@
       onCommit: commitOperatorImageEdits,
       onAfterCommit: afterOperatorImageCommit,
       onStateChange: updateImageEditButtons,
+    }) : null;
+
+    state.adminEditor = window.AptBoxEditor ? window.AptBoxEditor.create({
+      canvas: $('apt-q-after-canvas'),
+      panel: $('apt-q-edit-panel'),
+      getContext: () => {
+        const item = state.qReview.item;
+        const w = getCurrentQuarantineWindow();
+        if (!item || !w || !state.qReview.img) return null;
+        return {
+          image: state.qReview.img,
+          cropRect: w.crop_rect || [0, 0, state.qReview.img.naturalWidth, state.qReview.img.naturalHeight],
+          windowBbox: w.bbox || null,
+          returnSplitY: w.return_split_y ?? null,
+          pageWidth: item.width || 10000,
+          pageHeight: item.height || 10000,
+          elements: w.edited_elements || [],
+        };
+      },
+      getAddableLabels: getSafeOperatorLabels,
+      digitLabels: state.digitLabels,
+      isEditable: isElementEditable,
+      escapeHtml,
+      onCommit: commitAdminQuarantineEdits,
+      onAfterCommit: () => renderQuarantineReview(),
+      onStateChange: updateAdminEditButton,
+      commitLabel: '✅ Сохранить правки разметки',
     }) : null;
 
     const pdfInp = $('apt-pdf-input');
@@ -2636,12 +2881,16 @@
 
     $('apt-q-refresh-btn')?.addEventListener('click', () => loadQuarantineList());
     $('apt-q-export-btn')?.addEventListener('click', exportApprovedDataset);
-    $('aptQCloseBtn')?.addEventListener('click', () => $('aptQuarantineDialog')?.close());
-    $('aptQCancelBtn')?.addEventListener('click', () => $('aptQuarantineDialog')?.close());
-    $('aptQApproveBtn')?.addEventListener('click', () => submitQuarantineDecision('approve'));
-    $('aptQRejectBtn')?.addEventListener('click', () => submitQuarantineDecision('reject'));
-    $('aptQOpenFullPageBtn')?.addEventListener('click', () => {
-      const item = state.qActiveItem;
+    $('apt-q-start-review-btn')?.addEventListener('click', () => {
+      if (state.qItems.length === 0) return;
+      const doneBox = $('apt-q-review-done');
+      if (doneBox) doneBox.style.display = 'none';
+      openQuarantineReview(state.qItems[0].item_id, state.qItems.map(i => i.item_id));
+    });
+    $('apt-q-back-btn')?.addEventListener('click', () => closeQuarantineReview(false));
+    $('apt-q-edit-btn')?.addEventListener('click', () => state.adminEditor?.activate());
+    $('apt-q-full-page-btn')?.addEventListener('click', () => {
+      const item = state.qReview.item;
       if (!item) return;
       openFullPageDialog(
         `/api/ml/admin/quarantine/${encodeURIComponent(item.item_id)}/image`,
@@ -2672,10 +2921,11 @@
         || state.pollTimer !== null
         || state.drawMode !== null
         || (state.operatorEditor && state.operatorEditor.isActive())
+        || (state.adminEditor && state.adminEditor.isActive())
       ) {
         return true;
       }
-      if ($('aptQuarantineDialog')?.open || $('aptFullPageDialog')?.open) {
+      if ($('aptFullPageDialog')?.open || ($('apt-q-review-view') && !$('apt-q-review-view').hidden)) {
         return true;
       }
       // Не прерываем страницу автообновлением, если у оператора открыта активная проверка с несохранёнными правками
@@ -2687,14 +2937,18 @@
 
     onLogout() {
       resetWorkspaceView();
-      state.qActiveItem = null;
+      state.adminEditor?.deactivate();
+      state.qReview = { item: null, order: [], winIdx: null, img: null, imgKey: null };
+      const rv = $('apt-q-review-view');
+      if (rv) rv.hidden = true;
+      const lv = $('apt-q-list-view');
+      if (lv) lv.hidden = false;
       revokeUrlPool(state.quarantineUrls);
       if (state.fullPageUrl) {
         try { URL.revokeObjectURL(state.fullPageUrl); } catch (_) {}
         state.fullPageUrl = null;
       }
       $('aptFullPageDialog')?.close();
-      $('aptQuarantineDialog')?.close();
     },
   };
 })();

@@ -72,7 +72,7 @@ except ImportError:
 
 # ─── Настройка FastAPI и CORS ─────────────────────────────────────────────────
 
-PORTAL_VERSION = "2.3"
+PORTAL_VERSION = "2.4"
 app = FastAPI(title="ПУЛЬС — Транспортная логистика", version=f"v{PORTAL_VERSION}")
 
 ALLOWED_ORIGIN_REGEX = (

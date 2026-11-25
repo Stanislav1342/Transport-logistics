@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ПУЛЬС — Транспортная логистика</title>
-  <link rel="stylesheet" href="/static/apt_waybills.css?v=2.3">
+  <link rel="stylesheet" href="/static/apt_waybills.css?v=2.4">
   <style>
     :root {
       --primary: #174ea6;
@@ -1109,7 +1109,7 @@
             <p>Единый корпоративный портал автоматизации транспортной логистики ФК «ПУЛЬС» (РЦ Черная Грязь)</p>
           </div>
           <span class="badge" id="portal-version-badge">
-            <span class="badge-dot"></span> Версия 2.3
+            <span class="badge-dot"></span> Версия 2.4
           </span>
         </div>
 
@@ -1869,50 +1869,93 @@
           </div>
         </div>
 
-        <div class="card">
-          <div class="apt-toolbar-row" style="margin-bottom: 14px;">
-            <div class="apt-q-tablist" id="apt-q-tablist" role="tablist" aria-label="Фильтр статусов карантина">
-              <button type="button" class="apt-q-tab" role="tab" id="apt-q-tab-pending" data-status="pending" aria-selected="true" tabindex="0">
-                На проверке <span id="apt-q-tab-pending-count">(0)</span>
-              </button>
-              <button type="button" class="apt-q-tab" role="tab" id="apt-q-tab-approved" data-status="approved" aria-selected="false" tabindex="-1">
-                Одобрено
-              </button>
-              <button type="button" class="apt-q-tab" role="tab" id="apt-q-tab-rejected" data-status="rejected" aria-selected="false" tabindex="-1">
-                Отклонено
-              </button>
-              <button type="button" class="apt-q-tab" role="tab" id="apt-q-tab-all" data-status="all" aria-selected="false" tabindex="-1">
-                Все записи
-              </button>
+        <div id="apt-q-list-view">
+          <div class="card">
+            <div class="apt-toolbar-row" style="margin-bottom: 14px;">
+              <div class="apt-q-tablist" id="apt-q-tablist" role="tablist" aria-label="Фильтр статусов карантина">
+                <button type="button" class="apt-q-tab" role="tab" id="apt-q-tab-pending" data-status="pending" aria-selected="true" tabindex="0">
+                  На проверке <span id="apt-q-tab-pending-count">(0)</span>
+                </button>
+                <button type="button" class="apt-q-tab" role="tab" id="apt-q-tab-approved" data-status="approved" aria-selected="false" tabindex="-1">
+                  Одобрено
+                </button>
+                <button type="button" class="apt-q-tab" role="tab" id="apt-q-tab-rejected" data-status="rejected" aria-selected="false" tabindex="-1">
+                  Отклонено
+                </button>
+                <button type="button" class="apt-q-tab" role="tab" id="apt-q-tab-all" data-status="all" aria-selected="false" tabindex="-1">
+                  Все записи
+                </button>
+              </div>
+
+              <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                <button type="button" class="btn btn-success btn-sm" id="apt-q-start-review-btn" hidden>▶ Начать проверку</button>
+                <button type="button" class="btn btn-primary btn-sm" id="apt-q-export-btn">Выгрузить одобренные в датасет</button>
+              </div>
             </div>
 
-            <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
-              <button type="button" class="btn btn-primary btn-sm" id="apt-q-export-btn">Выгрузить одобренные в датасет</button>
+            <div id="apt-q-review-done" style="display:none; margin-bottom:14px;"></div>
+            <div id="apt-q-export-result" style="display:none; margin-bottom:14px;"></div>
+
+            <div id="apt-q-tabpanel" role="tabpanel" aria-labelledby="apt-q-tab-pending">
+              <div tabindex="0" role="region" aria-labelledby="apt-q-table-caption" class="apt-table-wrapper" id="apt-q-table-wrapper">
+                <table class="apt-q-table">
+                  <caption id="apt-q-table-caption" class="apt-sr-only">Очередь исправлений маршрутных листов на модерацию</caption>
+                  <thead>
+                    <tr>
+                      <th>МЛ / Страница</th>
+                      <th>Статус</th>
+                      <th>Сотрудник</th>
+                      <th>Отправлено</th>
+                      <th>Тип правки / Статус окна</th>
+                      <th>Кропы цифр</th>
+                      <th>Действие</th>
+                    </tr>
+                  </thead>
+                  <tbody id="apt-q-tbody">
+                    <tr><td colspan="7" style="text-align:center; padding:24px; color:var(--text-muted);">Откройте раздел для загрузки данных...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" id="apt-q-review-view" hidden>
+          <div class="apt-q-review-head">
+            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+              <button type="button" class="btn btn-outline btn-sm" id="apt-q-back-btn">← К списку</button>
+              <div id="apt-q-review-meta" style="font-size:13px;"></div>
+            </div>
+            <button type="button" class="btn btn-outline btn-sm" id="apt-q-full-page-btn">🔍 Весь лист</button>
+          </div>
+
+          <div class="apt-window-tabs" id="apt-q-window-tabs" style="margin-top:12px;"></div>
+          <div id="apt-q-diff-summary" style="font-size:13px; color:var(--primary); font-weight:600; margin-bottom:10px;"></div>
+          <div id="apt-q-after-errors" style="margin-bottom:12px;"></div>
+
+          <div class="apt-pane-card" style="margin-bottom:14px;">
+            <div class="apt-q-canvas-title" id="apt-q-before-title">Было (модель)</div>
+            <div class="apt-canvas-stage">
+              <canvas id="apt-q-before-canvas"></canvas>
             </div>
           </div>
 
-          <div id="apt-q-export-result" style="display:none; margin-bottom:14px;"></div>
-
-          <div id="apt-q-tabpanel" role="tabpanel" aria-labelledby="apt-q-tab-pending">
-            <div tabindex="0" role="region" aria-labelledby="apt-q-table-caption" class="apt-table-wrapper" id="apt-q-table-wrapper">
-              <table class="apt-q-table">
-                <caption id="apt-q-table-caption" class="apt-sr-only">Очередь исправлений маршрутных листов на модерацию</caption>
-                <thead>
-                  <tr>
-                    <th>МЛ / Страница</th>
-                    <th>Статус</th>
-                    <th>Сотрудник</th>
-                    <th>Отправлено</th>
-                    <th>Тип правки / Статус окна</th>
-                    <th>Кропы цифр</th>
-                    <th>Действие</th>
-                  </tr>
-                </thead>
-                <tbody id="apt-q-tbody">
-                  <tr><td colspan="7" style="text-align:center; padding:24px; color:var(--text-muted);">Откройте раздел для загрузки данных...</td></tr>
-                </tbody>
-              </table>
+          <div class="apt-pane-card" style="margin-bottom:14px;">
+            <div class="apt-q-canvas-title" id="apt-q-after-title">Стало (оператор)</div>
+            <div class="apt-canvas-stage">
+              <canvas id="apt-q-after-canvas"></canvas>
             </div>
+            <div class="apt-image-edit-panel" id="apt-q-edit-panel" hidden></div>
+            <div class="apt-toolbar-row" style="margin-top:10px;">
+              <button type="button" class="btn btn-outline btn-sm" id="apt-q-edit-btn">✏️ Исправить разметку</button>
+            </div>
+          </div>
+
+          <div class="apt-crops-row" id="apt-q-crops-row" style="margin-bottom:14px;"></div>
+
+          <div class="apt-q-decision-bar" id="apt-q-decision-bar">
+            <button type="button" class="btn btn-danger" id="apt-q-reject-btn">❌ Отклонить</button>
+            <button type="button" class="btn btn-success" id="apt-q-approve-btn">✅ Одобрить</button>
           </div>
         </div>
       </section>
@@ -2214,32 +2257,6 @@
     </div>
   </dialog>
 
-  <dialog id="aptQuarantineDialog" class="apt-dialog" closedby="any" aria-labelledby="aptQuarantineDialogTitle">
-    <div class="apt-dialog-header">
-      <h1 id="aptQuarantineDialogTitle">Проверка исправлений для дообучения</h1>
-      <div style="display:flex; align-items:center; gap:8px;">
-        <button type="button" class="btn btn-outline btn-sm" id="aptQOpenFullPageBtn">🔍 Полный лист</button>
-        <button type="button" class="modal-close" id="aptQCloseBtn" aria-label="Закрыть окно">&times;</button>
-      </div>
-    </div>
-    <div class="apt-dialog-body">
-      <div id="aptQMetaBox" style="background:#f8fafc; border:1px solid var(--border-light); border-radius:10px; padding:12px 14px; margin-bottom:14px;"></div>
-      <div id="aptQWindowsCompare"></div>
-      <div style="margin-top:10px;">
-        <div style="font-size:14px; font-weight:700; margin-bottom:8px;">Вырезанные кропы цифр для классификатора</div>
-        <div class="apt-crops-row" id="aptQCropsGallery"></div>
-      </div>
-    </div>
-    <div class="apt-dialog-footer">
-      <textarea id="aptQAdminComment" rows="2" placeholder="Комментарий администратора (необязательно)..." style="flex:1; min-width:240px; padding:8px 10px; border:1px solid var(--border); border-radius:8px; font-size:13px;"></textarea>
-      <div style="display:flex; gap:8px; flex-wrap:wrap;">
-        <button type="button" class="btn btn-outline" id="aptQCancelBtn" autofocus>Закрыть</button>
-        <button type="button" class="btn btn-danger" id="aptQRejectBtn">❌ Отклонить</button>
-        <button type="button" class="btn btn-success" id="aptQApproveBtn">✅ Одобрить</button>
-      </div>
-    </div>
-  </dialog>
-
   <script>
     // ─── Глобальное состояние авторизации и сессии ──────────────────────────
     window.authToken = null;
@@ -2290,7 +2307,7 @@
     function getClientPortalVersion() {
       const badge = document.getElementById('portal-version-badge');
       const m = (badge?.textContent || '').match(/(\d+\.\d+(?:\.\d+)?)/);
-      return m ? m[1] : '2.3';
+      return m ? m[1] : '2.4';
     }
 
     function isPortalBusy() {
@@ -4422,7 +4439,7 @@
       }
     }
   </script>
-  <script src="/static/apt_box_editor.js?v=2.3"></script>
-  <script src="/static/apt_waybills.js?v=2.3"></script>
+  <script src="/static/apt_box_editor.js?v=2.4"></script>
+  <script src="/static/apt_waybills.js?v=2.4"></script>
 </body>
 </html>
