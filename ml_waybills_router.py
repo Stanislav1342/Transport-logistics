@@ -47,9 +47,151 @@ SAFE_FILENAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _ML_START_LOCK = threading.Lock()
 _ML_PROC: Optional[subprocess.Popen] = None
 _ML_PROC_URL: Optional[str] = None
+_ML_WIN_JOB_HANDLE: Any = None
 _ML_STDERR_TAIL: deque[str] = deque(maxlen=40)
 _THREAD_LOCAL = threading.local()
 _ATEXIT_REGISTERED = False
+
+
+def _assign_win32_kill_on_close(proc: subprocess.Popen) -> None:
+    """На Windows привязывает дочерний ML-процесс к Job Object, чтобы он умирал вместе с server.py."""
+    global _ML_WIN_JOB_HANDLE
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32
+        if _ML_WIN_JOB_HANDLE is None:
+            job = kernel32.CreateJobObjectW(None, None)
+            if not job:
+                return
+
+            class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+                _fields_ = [
+                    ("PerProcessUserTimeLimit", ctypes.c_int64),
+                    ("PerJobUserTimeLimit", ctypes.c_int64),
+                    ("LimitFlags", wintypes.DWORD),
+                    ("MinimumWorkingSetSize", ctypes.c_size_t),
+                    ("MaximumWorkingSetSize", ctypes.c_size_t),
+                    ("ActiveProcessLimit", wintypes.DWORD),
+                    ("Affinity", ctypes.c_size_t),
+                    ("PriorityClass", wintypes.DWORD),
+                    ("SchedulingClass", wintypes.DWORD),
+                ]
+
+            class IO_COUNTERS(ctypes.Structure):
+                _fields_ = [
+                    ("ReadOperationCount", ctypes.c_uint64),
+                    ("WriteOperationCount", ctypes.c_uint64),
+                    ("OtherOperationCount", ctypes.c_uint64),
+                    ("ReadTransferCount", ctypes.c_uint64),
+                    ("WriteTransferCount", ctypes.c_uint64),
+                    ("OtherTransferCount", ctypes.c_uint64),
+                ]
+
+            class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+                _fields_ = [
+                    ("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
+                    ("IoInfo", IO_COUNTERS),
+                    ("ProcessMemoryLimit", ctypes.c_size_t),
+                    ("JobMemoryLimit", ctypes.c_size_t),
+                    ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                    ("PeakJobMemoryUsed", ctypes.c_size_t),
+                ]
+
+            info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+            info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            ok = kernel32.SetInformationJobObject(
+                job,
+                9,  # JobObjectExtendedLimitInformation
+                ctypes.byref(info),
+                ctypes.sizeof(info),
+            )
+            if not ok:
+                kernel32.CloseHandle(job)
+                return
+            _ML_WIN_JOB_HANDLE = job
+
+        proc_handle = getattr(proc, "_handle", None)
+        if proc_handle:
+            kernel32.AssignProcessToJobObject(_ML_WIN_JOB_HANDLE, int(proc_handle))
+    except Exception as exc:
+        logger.debug("Не удалось привязать ML-процесс к Win32 Job Object: %s", exc)
+
+
+def _read_expected_ml_version(ml_dir: Optional[str]) -> Optional[str]:
+    """Читает SERVICE_VERSION из review_service.py на диске."""
+    if not ml_dir:
+        return None
+    script_path = os.path.join(ml_dir, "review_service.py")
+    try:
+        with open(script_path, "r", encoding="utf-8", errors="ignore") as f:
+            head = f.read(4096)
+        m = re.search(r'^\s*SERVICE_VERSION\s*=\s*["\']([^"\']+)["\']', head, re.MULTILINE)
+        return m.group(1).strip() if m else None
+    except Exception:
+        return None
+
+
+def _stop_stale_ml_on_port(port: int) -> None:
+    """Аккуратно завершает зависший процесс review_service.py на указанном локальном порту."""
+    shutdown_ml_service()
+    if sys.platform == "win32":
+        killed_by_netstat = False
+        try:
+            ns = subprocess.run(
+                ["netstat", "-ano", "-p", "TCP"],
+                capture_output=True,
+                text=True,
+                timeout=6,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            pids: set[str] = set()
+            for line in (ns.stdout or "").splitlines():
+                parts = line.split()
+                if len(parts) >= 5 and parts[3].upper() == "LISTENING":
+                    local_addr = parts[1]
+                    if local_addr.endswith(f":{port}") and (
+                        local_addr.startswith("127.0.0.1:") or local_addr.startswith("[::1]:")
+                    ):
+                        pid = parts[4]
+                        if pid.isdigit() and int(pid) > 0 and int(pid) != os.getpid():
+                            pids.add(pid)
+            for pid in pids:
+                subprocess.run(
+                    ["taskkill", "/PID", pid, "/T", "/F"],
+                    capture_output=True,
+                    timeout=6,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+                killed_by_netstat = True
+        except Exception as exc:
+            logger.debug("Не удалось остановить старый процесс через netstat/taskkill: %s", exc)
+
+        if not killed_by_netstat:
+            try:
+                ps_cmd = (
+                    f"Get-CimInstance Win32_Process | "
+                    f"Where-Object {{ $_.CommandLine -like '*review_service.py*--port*{port}*' -or "
+                    f"($_.CommandLine -like '*review_service.py*serve*' -and '{port}' -eq '8765') }} | "
+                    f"ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}"
+                )
+                subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", ps_cmd],
+                    capture_output=True,
+                    timeout=8,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            except Exception as exc:
+                logger.debug("Не удалось остановить старый review_service.py через PowerShell: %s", exc)
+    else:
+        try:
+            subprocess.run(["pkill", "-f", f"review_service.py.*--port {port}"], capture_output=True, timeout=5)
+        except Exception:
+            pass
+    time.sleep(0.4)
 
 
 def _get_ml_port() -> int:
@@ -315,14 +457,26 @@ def ensure_ml_service_running(wait_timeout: float = 35.0) -> dict[str, Any]:
     global _ML_PROC, _ML_PROC_URL, _ATEXIT_REGISTERED
 
     base_url, host, port = _get_ml_base_url()
+    ml_dir_found, _ = _find_ml_service_dir()
+    expected_ver = _read_expected_ml_version(ml_dir_found)
+
     ok, data = is_ml_service_healthy(base_url, timeout=1.5)
     if ok and data is not None:
-        return data
+        if not expected_ver or str(data.get("version") or "") == expected_ver:
+            return data
 
     with _ML_START_LOCK:
         ok, data = is_ml_service_healthy(base_url, timeout=1.5)
         if ok and data is not None:
-            return data
+            if not expected_ver or str(data.get("version") or "") == expected_ver:
+                return data
+            logger.warning(
+                "На %s работает устаревший ML-сервис v%s (ожидается v%s). Перезапускаем...",
+                base_url,
+                data.get("version"),
+                expected_ver,
+            )
+            _stop_stale_ml_on_port(port)
 
         if _check_outlook_bridge_conflict(base_url):
             raise HTTPException(
@@ -388,6 +542,7 @@ def ensure_ml_service_running(wait_timeout: float = 35.0) -> dict[str, Any]:
             try:
                 _ML_PROC = subprocess.Popen(cmd, **popen_kwargs)
                 _ML_PROC_URL = base_url
+                _assign_win32_kill_on_close(_ML_PROC)
             except Exception as exc:
                 _ML_PROC = None
                 _ML_PROC_URL = None
@@ -493,7 +648,10 @@ def _upstream_request(
         req_headers["Content-Length"] = str(len(raw_body))
 
     url = f"{base_url}{path}"
-    sess = _get_loopback_session()
+    sess = requests.Session() if stream else _get_loopback_session()
+    if stream:
+        sess.trust_env = False
+        sess.proxies = {"http": None, "https": None}
 
     def _do_call() -> requests.Response:
         return sess.request(
@@ -515,16 +673,22 @@ def _upstream_request(
         try:
             resp = _do_call()
         except requests.RequestException as exc:
+            if stream:
+                sess.close()
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=f"ML-сервис недоступен: {exc}",
             ) from exc
     except requests.Timeout as exc:
+        if stream:
+            sess.close()
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
             detail="Превышено время ожидания ответа от ML-сервиса.",
         ) from exc
     except requests.RequestException as exc:
+        if stream:
+            sess.close()
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Ошибка связи с локальным ML-сервисом: {exc}",
@@ -537,10 +701,16 @@ def _upstream_request(
                 resp.close()
             except Exception:
                 pass
+            try:
+                sess.close()
+            except Exception:
+                pass
         raise HTTPException(
             status_code=resp.status_code,
             detail=err_detail,
         )
+    if stream:
+        setattr(resp, "_owned_session", sess)
     return resp
 
 
@@ -750,7 +920,22 @@ def create_ml_router(check_auth_fn: Callable[..., dict[str, Any]]) -> APIRouter:
     def ml_download_export_zip(request: Request, session_id: str):
         check_auth_fn(request, required_section="apt_waybills")
         sid = _validate_id(session_id, "session_id")
-        resp = _upstream_request("GET", f"/api/ml/sessions/{sid}/export-zip", timeout=300.0, stream=True)
+        try:
+            resp = _upstream_request("GET", f"/api/ml/sessions/{sid}/export-zip", timeout=300.0, stream=True)
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                ml_dir_found, _ = _find_ml_service_dir()
+                disk_ver = _read_expected_ml_version(ml_dir_found)
+                hint = (
+                    f"В папке ML установлена старая версия сервиса (v{disk_ver}). Запустите python update.py также в папке ML и перезапустите сервер."
+                    if disk_ver == "1.0.0"
+                    else "Маршрут export-zip не найден в запущенном ML-сервисе. Обновите папку ML (python update.py) и перезапустите сервер."
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=hint,
+                ) from exc
+            raise
         cd = _safe_content_disposition(resp.headers.get("Content-Disposition"), f"waybills_{sid}.zip")
         headers = {
             "Content-Disposition": cd,
@@ -761,6 +946,7 @@ def create_ml_router(check_auth_fn: Callable[..., dict[str, Any]]) -> APIRouter:
             headers["Content-Length"] = cl
 
         def _stream_chunks():
+            owned_sess = getattr(resp, "_owned_session", None)
             try:
                 for chunk in resp.iter_content(chunk_size=65536):
                     if chunk:
@@ -770,6 +956,11 @@ def create_ml_router(check_auth_fn: Callable[..., dict[str, Any]]) -> APIRouter:
                     resp.close()
                 except Exception:
                     pass
+                if owned_sess is not None:
+                    try:
+                        owned_sess.close()
+                    except Exception:
+                        pass
 
         return StreamingResponse(
             _stream_chunks(),
@@ -948,12 +1139,16 @@ def create_ml_router(check_auth_fn: Callable[..., dict[str, Any]]) -> APIRouter:
                 and payload.get("action") == "mark_valid"
                 and "mark_valid" in str(exc.detail)
             ):
+                ml_dir_found, _ = _find_ml_service_dir()
+                disk_ver = _read_expected_ml_version(ml_dir_found)
+                hint = (
+                    f"В папке ML установлена старая версия сервиса (v{disk_ver}). Запустите python update.py также в папке ML и перезапустите сервер."
+                    if disk_ver == "1.0.0"
+                    else f"{exc.detail}. Обновите ML-модуль (review_service.py) и перезапустите сервер."
+                )
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=(
-                        f"{exc.detail}. Обновите ML-модуль (review_service.py) "
-                        "для поддержки действия mark_valid."
-                    ),
+                    detail=hint,
                 ) from exc
             raise
         return JSONResponse(status_code=resp.status_code, content=resp.json())
@@ -995,6 +1190,22 @@ def create_ml_router(check_auth_fn: Callable[..., dict[str, Any]]) -> APIRouter:
             json_body=payload,
             timeout=30.0,
         )
+        return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+    @router.post("/api/ml/sessions/{session_id}/delete")
+    @router.delete("/api/ml/sessions/{session_id}")
+    def ml_delete_session(request: Request, session_id: str):
+        check_auth_fn(request, require_admin=True)
+        sid = _validate_id(session_id, "session_id")
+        try:
+            resp = _upstream_request("DELETE", f"/api/ml/sessions/{sid}", timeout=20.0)
+        except HTTPException as exc:
+            if exc.status_code == 404 and "маршрут" in str(exc.detail).lower():
+                raise HTTPException(
+                    status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                    detail="Удаление сессий поддерживается после обновления ML-модуля (review_service.py).",
+                ) from exc
+            raise
         return JSONResponse(status_code=resp.status_code, content=resp.json())
 
     @router.get("/api/ml/admin/quarantine")

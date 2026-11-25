@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ПУЛЬС — Транспортная логистика</title>
-  <link rel="stylesheet" href="/static/apt_waybills.css?v=2.0">
+  <link rel="stylesheet" href="/static/apt_waybills.css?v=2.1">
   <style>
     :root {
       --primary: #174ea6;
@@ -85,7 +85,7 @@
       display: none;
       position: fixed;
       inset: 0 auto 0 0;
-      width: 10px;
+      width: 16px;
       z-index: 940;
       background: transparent;
     }
@@ -1109,7 +1109,7 @@
             <p>Единый корпоративный портал автоматизации транспортной логистики ФК «ПУЛЬС» (РЦ Черная Грязь)</p>
           </div>
           <span class="badge" id="portal-version-badge">
-            <span class="badge-dot"></span> Версия 2.0
+            <span class="badge-dot"></span> Версия 2.1
           </span>
         </div>
 
@@ -1769,9 +1769,10 @@
             <div class="apt-toolbar-row" style="margin-bottom: 12px;">
               <div class="card-title" style="margin-bottom:0;">2. Сводка, завершение проверки и выгрузка</div>
               <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-                <button type="button" class="btn btn-success btn-sm" id="apt-btn-finalize">Завершить проверку и сформировать отчёт</button>
-                <button type="button" class="btn btn-outline btn-sm" id="apt-btn-download-report">Скачать отчёт (.txt)</button>
-                <button type="button" class="btn btn-primary btn-sm" id="apt-btn-download-zip">Скачать архив МЛ (.zip)</button>
+                <span class="apt-muted" id="apt-finalize-pending-hint" style="display: none;"></span>
+                <button type="button" class="btn btn-success btn-sm" id="apt-btn-finalize" style="display: none;">Завершить проверку и сформировать отчёт</button>
+                <button type="button" class="btn btn-outline btn-sm" id="apt-btn-download-report" style="display: none;">Скачать отчёт (.txt)</button>
+                <button type="button" class="btn btn-primary btn-sm" id="apt-btn-download-zip" style="display: none;">Скачать архив МЛ (.zip)</button>
               </div>
             </div>
             <div id="apt-finalize-banner" class="apt-finalize-banner" style="display: none;"></div>
@@ -1804,7 +1805,14 @@
           <div class="apt-window-tabs" id="apt-window-tabs"></div>
 
           <div class="apt-workspace-grid">
-            <!-- ВЕРХНЯЯ ПАНЕЛЬ НА ВСЮ ШИРИНУ: Крупный снимок окна + HTML5 Canvas -->
+            <!-- ВЕРХНЯЯ ПАНЕЛЬ НАД ОКНОМ: Статус окна и список замечаний -->
+            <div class="apt-pane-card apt-hints-pane">
+              <div class="apt-win-status-banner" id="apt-win-status-banner" style="display: none;"></div>
+              <div id="apt-win-warnings"></div>
+              <div id="apt-hints-list"></div>
+            </div>
+
+            <!-- НИЖНЯЯ ПАНЕЛЬ НА ВСЮ ШИРИНУ: Крупный снимок окна + HTML5 Canvas -->
             <div class="apt-pane-card apt-canvas-pane">
               <div class="apt-draw-banner" id="apt-draw-banner" style="display: none;">
                 <div>
@@ -1835,13 +1843,6 @@
               </div>
 
               <div class="apt-box-inspector" id="apt-box-inspector" style="display: none;"></div>
-            </div>
-
-            <!-- НИЖНЯЯ ПАНЕЛЬ: Статус окна и список замечаний -->
-            <div class="apt-pane-card apt-hints-pane">
-              <div class="apt-win-status-banner" id="apt-win-status-banner" style="display: none;"></div>
-              <div id="apt-win-warnings"></div>
-              <div id="apt-hints-list"></div>
             </div>
           </div>
         </div>
@@ -2292,7 +2293,7 @@
     function getClientPortalVersion() {
       const badge = document.getElementById('portal-version-badge');
       const m = (badge?.textContent || '').match(/(\d+\.\d+(?:\.\d+)?)/);
-      return m ? m[1] : '2.0';
+      return m ? m[1] : '2.1';
     }
 
     function isPortalBusy() {
@@ -2668,7 +2669,14 @@
 
     function scheduleCloseSidebarDrawer() {
       if (sidebarCloseTimer) clearTimeout(sidebarCloseTimer);
-      sidebarCloseTimer = setTimeout(closeSidebarDrawer, 200);
+      sidebarCloseTimer = setTimeout(closeSidebarDrawer, 380);
+    }
+
+    function cancelCloseSidebarDrawer() {
+      if (sidebarCloseTimer) {
+        clearTimeout(sidebarCloseTimer);
+        sidebarCloseTimer = null;
+      }
     }
 
     function initSidebarDrawerInteractions() {
@@ -2680,9 +2688,6 @@
       if (trigger) {
         trigger.addEventListener('pointerenter', e => {
           if (e.pointerType === 'mouse') openSidebarDrawer();
-        });
-        trigger.addEventListener('pointerleave', e => {
-          if (e.pointerType === 'mouse') scheduleCloseSidebarDrawer();
         });
         trigger.addEventListener('click', () => {
           const layout = document.getElementById('app-content');
@@ -2700,15 +2705,31 @@
       }
       if (sidebar) {
         sidebar.addEventListener('pointerenter', e => {
-          if (e.pointerType === 'mouse' && sidebarCloseTimer) {
-            clearTimeout(sidebarCloseTimer);
-            sidebarCloseTimer = null;
-          }
-        });
-        sidebar.addEventListener('pointerleave', e => {
-          if (e.pointerType === 'mouse') scheduleCloseSidebarDrawer();
+          if (e.pointerType === 'mouse') cancelCloseSidebarDrawer();
         });
       }
+      // Коридор безопасности при диагональном движении курсора от кнопки «Разделы» к пунктам меню
+      document.addEventListener('pointermove', e => {
+        if (e.pointerType !== 'mouse') return;
+        const layout = document.getElementById('app-content');
+        if (!layout || !layout.classList.contains('sidebar-collapsed') || !layout.classList.contains('drawer-open')) {
+          return;
+        }
+        const overTrigger = trigger && trigger.contains(e.target);
+        const overSidebar = sidebar && sidebar.contains(e.target);
+        const inSafeCorridor = e.clientX <= 310;
+        if (overTrigger || overSidebar || inSafeCorridor) {
+          cancelCloseSidebarDrawer();
+        } else {
+          if (!sidebarCloseTimer) scheduleCloseSidebarDrawer();
+        }
+      });
+      document.addEventListener('pointerleave', () => {
+        const layout = document.getElementById('app-content');
+        if (layout && layout.classList.contains('drawer-open')) {
+          scheduleCloseSidebarDrawer();
+        }
+      });
       if (backdrop) {
         backdrop.addEventListener('click', closeSidebarDrawer);
       }
@@ -4404,6 +4425,6 @@
       }
     }
   </script>
-  <script src="/static/apt_waybills.js?v=2.0"></script>
+  <script src="/static/apt_waybills.js?v=2.1"></script>
 </body>
 </html>

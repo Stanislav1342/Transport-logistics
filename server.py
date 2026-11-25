@@ -72,7 +72,7 @@ except ImportError:
 
 # ─── Настройка FastAPI и CORS ─────────────────────────────────────────────────
 
-PORTAL_VERSION = "2.0"
+PORTAL_VERSION = "2.1"
 app = FastAPI(title="ПУЛЬС — Транспортная логистика", version=f"v{PORTAL_VERSION}")
 
 ALLOWED_ORIGIN_REGEX = (
@@ -85,7 +85,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=ALLOWED_ORIGIN_REGEX,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 

@@ -51,6 +51,7 @@
     pollTimer: null,
     activeSessionId: null,
     session: null,
+    sessionFinalized: false,
     recentSessions: [],
     filterErrorsOnly: true,
     currentPageId: null,
@@ -213,13 +214,15 @@
     return (page.windows || []).some(hasWindowDiff);
   }
 
-  function pageHasErrors(page) {
+  function pageHasActiveIssues(page) {
     if (!page) return false;
     return (page.windows || []).some(
-      w => (w.errors && w.errors.length > 0)
-        || (w.warnings && w.warnings.length > 0)
-        || (w.original_errors && w.original_errors.length > 0)
+      w => (w.errors && w.errors.length > 0) || (w.warnings && w.warnings.length > 0)
     );
+  }
+
+  function pageHasErrors(page) {
+    return pageHasActiveIssues(page);
   }
 
   function pageHasPendingErrors(page) {
@@ -231,8 +234,7 @@
     if (!state.session) return [];
     const pages = state.session.pages || [];
     if (!state.filterErrorsOnly) return pages;
-    const problemPages = pages.filter(p => pageHasErrors(p) || hasPageChanges(p));
-    return problemPages.length > 0 ? problemPages : pages;
+    return pages.filter(pageHasActiveIssues);
   }
 
   function getCurrentPage() {
@@ -290,9 +292,28 @@
     }
   }
 
+  async function deleteRecentSession(sessionId) {
+    if (!sessionId) return;
+    if (!confirm('Удалить эту сессию проверки из списка и с диска?')) return;
+    try {
+      await apiJson(`/api/ml/sessions/${encodeURIComponent(sessionId)}/delete`, { method: 'POST' });
+      if (state.activeSessionId === sessionId) {
+        state.activeSessionId = null;
+        state.session = null;
+        state.sessionFinalized = false;
+        const ws = $('apt-session-workspace');
+        if (ws) ws.style.display = 'none';
+      }
+      await loadRecentSessions();
+    } catch (err) {
+      alert('Ошибка удаления сессии: ' + err.message);
+    }
+  }
+
   async function loadRecentSessions() {
     const bar = $('apt-sessions-bar');
     if (!bar) return;
+    const isAdmin = window.currentUser?.role === 'admin';
     try {
       const data = await apiJson('/api/ml/sessions?limit=5');
       const rawItems = Array.isArray(data) ? data : (Array.isArray(data?.sessions) ? data.sessions : []);
@@ -311,16 +332,26 @@
           ? `${dateLabel} · ${summary.total_waybills ?? 0} МЛ · ош: ${summary.pending_pages ?? errPages}`
           : (item.status === 'error' ? `${dateLabel} · ошибка` : `${dateLabel} · ${item.progress ?? 0}%`);
         return `
-          <button type="button" class="apt-session-chip ${isActive ? 'active' : ''}" data-session-id="${escapeHtml(item.session_id)}">
-            <span>${fname}</span>
-            <span style="opacity:0.8; font-weight:500;">(${escapeHtml(meta)})</span>
-          </button>
+          <div class="apt-session-item-wrap">
+            <button type="button" class="apt-session-chip ${isActive ? 'active' : ''}" data-session-id="${escapeHtml(item.session_id)}">
+              <span>${fname}</span>
+              <span style="opacity:0.8; font-weight:500;">(${escapeHtml(meta)})</span>
+            </button>
+            ${isAdmin ? `<button type="button" class="apt-session-del-btn" data-del-session-id="${escapeHtml(item.session_id)}" title="Удалить сессию">&times;</button>` : ''}
+          </div>
         `;
       }).join('');
       bar.querySelectorAll('.apt-session-chip').forEach(btn => {
         btn.addEventListener('click', () => {
           const sid = btn.getAttribute('data-session-id');
           if (sid) openExistingSession(sid);
+        });
+      });
+      bar.querySelectorAll('.apt-session-del-btn').forEach(btn => {
+        btn.addEventListener('click', e => {
+          e.stopPropagation();
+          const sid = btn.getAttribute('data-del-session-id');
+          if (sid) deleteRecentSession(sid);
         });
       });
     } catch (err) {
@@ -516,6 +547,7 @@
     const data = await apiJson(`/api/ml/sessions/${encodeURIComponent(sessionId)}`);
     state.session = data;
     state.activeSessionId = data.session_id;
+    state.sessionFinalized = Boolean(data.finalized);
     state.windowHistory = [];
     state.selectedElementId = null;
     state.hoveredElementId = null;
@@ -582,11 +614,55 @@
         <div class="apt-kpi-value">${escapeHtml(c.value)}</div>
       </div>
     `).join('');
+
+    updateFinalizeAndExportButtons();
+  }
+
+  function countPendingWindows() {
+    if (!state.session) return 0;
+    let cnt = 0;
+    for (const page of (state.session.pages || [])) {
+      for (const w of (page.windows || [])) {
+        if (w.review_status === 'pending' || w.review_status === 'fixed_with_errors') {
+          cnt += 1;
+        }
+      }
+    }
+    return cnt;
+  }
+
+  function updateFinalizeAndExportButtons() {
+    const pendingHint = $('apt-finalize-pending-hint');
+    const finBtn = $('apt-btn-finalize');
+    const repBtn = $('apt-btn-download-report');
+    const zipBtn = $('apt-btn-download-zip');
+    if (!finBtn || !repBtn || !zipBtn) return;
+
+    const pendingCount = countPendingWindows();
+    if (pendingCount > 0) {
+      if (pendingHint) {
+        pendingHint.style.display = 'inline';
+        pendingHint.textContent = `Для завершения разберите все замечания (осталось окон: ${pendingCount})`;
+      }
+      finBtn.style.display = 'none';
+      repBtn.style.display = 'none';
+      zipBtn.style.display = 'none';
+    } else if (!state.sessionFinalized) {
+      if (pendingHint) pendingHint.style.display = 'none';
+      finBtn.style.display = 'inline-flex';
+      repBtn.style.display = 'none';
+      zipBtn.style.display = 'none';
+    } else {
+      if (pendingHint) pendingHint.style.display = 'none';
+      finBtn.style.display = 'none';
+      repBtn.style.display = 'inline-flex';
+      zipBtn.style.display = 'inline-flex';
+    }
   }
 
   function renderNavigationControls() {
     const pages = state.session.pages || [];
-    const problemCount = pages.filter(p => pageHasErrors(p) || hasPageChanges(p)).length;
+    const problemCount = pages.filter(pageHasActiveIssues).length;
 
     const btnErr = $('apt-filter-errors-btn');
     const btnAll = $('apt-filter-all-btn');
@@ -598,12 +674,6 @@
     }
 
     const filtered = getFilteredPages();
-    if (filtered.length > 0 && !filtered.some(p => p.page_id === state.currentPageId)) {
-      state.currentPageId = filtered[0].page_id;
-      const pw = (filtered[0].windows || []).find(w => (w.errors && w.errors.length) || (w.warnings && w.warnings.length));
-      state.currentWindowIdx = pw ? pw.window_idx : 0;
-    }
-
     const curPage = getCurrentPage();
     const sel = $('apt-waybill-select');
     if (sel) {
@@ -620,12 +690,25 @@
     const prevBtn = $('apt-prev-page-btn');
     const nextBtn = $('apt-next-page-btn');
     const cnt = $('apt-page-counter');
-    if (prevBtn) prevBtn.disabled = curIdx <= 0;
-    if (nextBtn) nextBtn.disabled = curIdx < 0 || curIdx >= filtered.length - 1;
-    if (cnt) {
-      cnt.textContent = curPage
-        ? `Стр. ${curIdx + 1} из ${filtered.length} (PDF стр. ${curPage.global_page_num})`
-        : 'Нет страниц';
+
+    if (state.filterErrorsOnly && filtered.length === 0) {
+      if (prevBtn) prevBtn.disabled = true;
+      if (nextBtn) nextBtn.disabled = true;
+      if (cnt) cnt.textContent = 'Проблемных страниц: 0';
+    } else if (curIdx === -1 && curPage && state.filterErrorsOnly && filtered.length > 0) {
+      // Текущая страница уже исправлена, но ещё открыта на экране — кнопки ищут ближайшие проблемные
+      const curGlobal = Number(curPage.global_page_num || 0);
+      if (prevBtn) prevBtn.disabled = !filtered.some(p => Number(p.global_page_num || 0) < curGlobal);
+      if (nextBtn) nextBtn.disabled = !filtered.some(p => Number(p.global_page_num || 0) > curGlobal);
+      if (cnt) cnt.textContent = `Разобрана (PDF стр. ${curPage.global_page_num}) · проблемных: ${filtered.length}`;
+    } else {
+      if (prevBtn) prevBtn.disabled = curIdx <= 0;
+      if (nextBtn) nextBtn.disabled = curIdx < 0 || curIdx >= filtered.length - 1;
+      if (cnt) {
+        cnt.textContent = curPage
+          ? `Стр. ${curIdx + 1} из ${filtered.length} (PDF стр. ${curPage.global_page_num})`
+          : 'Нет страниц';
+      }
     }
 
     const meta = $('apt-page-meta-text');
@@ -916,9 +999,6 @@
         ctx.moveTo(0, splitY);
         ctx.lineTo(canvas.width, splitY);
         ctx.stroke();
-        ctx.fillStyle = '#4f46e5';
-        ctx.font = 'bold 12px sans-serif';
-        ctx.fillText('Граница раздела (Получение / Возврат)', 10, Math.max(16, splitY - 6));
         ctx.restore();
       }
     }
@@ -1253,6 +1333,7 @@
         state.selectedElementId = null;
       }
       state.highlightedElementIds.clear();
+      state.sessionFinalized = false;
 
       renderAllSessionUI();
 
@@ -1443,6 +1524,14 @@
       });
 
       card.querySelector('.apt-btn-model-fix')?.addEventListener('click', () => {
+        const directLabel = getDirectDrawLabelForHint(win, hint);
+        if (directLabel) {
+          state.expandedHintKey = hintKey;
+          state.highlightedElementIds = new Set(hint.related_element_ids || []);
+          renderRightPane();
+          startDrawMode(directLabel);
+          return;
+        }
         state.expandedHintKey = state.expandedHintKey === hintKey ? null : hintKey;
         state.highlightedElementIds = new Set(hint.related_element_ids || []);
         renderRightPane();
@@ -1454,6 +1543,29 @@
         if (drawerEl) populateHintDrawer(drawerEl, page, win, hint);
       }
     });
+  }
+
+  function getDirectDrawLabelForHint(win, hint) {
+    if (!hint) return null;
+    const code = hint.code || 'other';
+    if (code.startsWith('missing_') && hint.suggested_add_label && !state.protectedLabels.has(hint.suggested_add_label)) {
+      return hint.suggested_add_label;
+    }
+    if (code === 'digit_mismatch' || code === 'digit_unrecognized') {
+      const digitEls = getHintRelatedElements(win, hint, el => state.digitLabels.has(el.label));
+      if (digitEls.length === 0) {
+        return hint.suggested_add_label || 'Рукописная цифра';
+      }
+    }
+    if (code === 'bad_stamp' || code === 'bad_return_stamp') {
+      const badStamps = getHintRelatedElements(win, hint, el => el.label === 'Плохая печать');
+      if (badStamps.length === 0) return 'Печать';
+    }
+    if (code === 'correction_no_second_stamp') {
+      const corrs = getHintRelatedElements(win, hint, el => el.label === 'Исправление');
+      if (corrs.length === 0) return hint.suggested_add_label || 'Печать';
+    }
+    return null;
   }
 
   function getHintRelatedElements(win, hint, filterFn) {
@@ -1659,9 +1771,9 @@
       drawer.innerHTML = `
         <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
           <button type="button" class="btn btn-primary btn-sm" id="apt-missing-draw-btn">
-            ✏️ Обвести на фото где ${escapeHtml(target)}
+            Обвести на фото: ${escapeHtml(target)}
           </button>
-          <span class="apt-muted">Нажмите и обведите нужную область одним прямоугольником на снимке слева.</span>
+          <span class="apt-muted">Режим выделения включён — обведите область одним прямоугольником на снимке ниже.</span>
         </div>
       `;
       drawer.querySelector('#apt-missing-draw-btn')?.addEventListener('click', () => startDrawMode(target));
@@ -1707,6 +1819,8 @@
         state.session.summary = res.session_summary;
       }
       await loadFullSession(state.activeSessionId);
+      state.sessionFinalized = true;
+      updateFinalizeAndExportButtons();
       refreshQuarantineBadge();
       if (finBanner) {
         const subPages = Number(res.submitted_pages || res.auto_quarantined_pages || res.quarantined_pages || 0);
@@ -2224,6 +2338,11 @@
 
     $('apt-filter-errors-btn')?.addEventListener('click', () => {
       state.filterErrorsOnly = true;
+      const filtered = getFilteredPages();
+      if (filtered.length > 0 && !filtered.some(p => p.page_id === state.currentPageId)) {
+        selectPage(filtered[0].page_id, true);
+        return;
+      }
       renderAllSessionUI();
     });
     $('apt-filter-all-btn')?.addEventListener('click', () => {
@@ -2236,21 +2355,35 @@
       const wb = (state.session?.waybills || []).find(w => w.waybill_idx === wbIdx);
       if (wb && wb.page_ids?.length) {
         const pagesById = new Map((state.session.pages || []).map(p => [p.page_id, p]));
-        const firstProb = wb.page_ids.map(id => pagesById.get(id)).find(p => p && pageHasErrors(p));
+        const firstProb = wb.page_ids.map(id => pagesById.get(id)).find(p => p && pageHasActiveIssues(p));
         selectPage((firstProb ? firstProb.page_id : wb.page_ids[0]), true);
       }
     });
 
     $('apt-prev-page-btn')?.addEventListener('click', () => {
       const list = getFilteredPages();
+      if (list.length === 0) return;
       const idx = list.findIndex(p => p.page_id === state.currentPageId);
-      if (idx > 0) selectPage(list[idx - 1].page_id, true);
+      if (idx > 0) {
+        selectPage(list[idx - 1].page_id, true);
+      } else if (idx === -1) {
+        const curGlobal = Number(getCurrentPage()?.global_page_num || 0);
+        const prevCand = [...list].reverse().find(p => Number(p.global_page_num || 0) < curGlobal);
+        if (prevCand) selectPage(prevCand.page_id, true);
+      }
     });
 
     $('apt-next-page-btn')?.addEventListener('click', () => {
       const list = getFilteredPages();
+      if (list.length === 0) return;
       const idx = list.findIndex(p => p.page_id === state.currentPageId);
-      if (idx >= 0 && idx < list.length - 1) selectPage(list[idx + 1].page_id, true);
+      if (idx >= 0 && idx < list.length - 1) {
+        selectPage(list[idx + 1].page_id, true);
+      } else if (idx === -1) {
+        const curGlobal = Number(getCurrentPage()?.global_page_num || 0);
+        const nextCand = list.find(p => Number(p.global_page_num || 0) > curGlobal) || list[0];
+        if (nextCand) selectPage(nextCand.page_id, true);
+      }
     });
 
     $('apt-btn-full-page')?.addEventListener('click', () => {
