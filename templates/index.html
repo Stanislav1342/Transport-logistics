@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ПУЛЬС — Транспортная логистика</title>
-  <link rel="stylesheet" href="/static/apt_waybills.css?v=2.2">
+  <link rel="stylesheet" href="/static/apt_waybills.css?v=2.3">
   <style>
     :root {
       --primary: #174ea6;
@@ -1109,7 +1109,7 @@
             <p>Единый корпоративный портал автоматизации транспортной логистики ФК «ПУЛЬС» (РЦ Черная Грязь)</p>
           </div>
           <span class="badge" id="portal-version-badge">
-            <span class="badge-dot"></span> Версия 2.2
+            <span class="badge-dot"></span> Версия 2.3
           </span>
         </div>
 
@@ -1779,83 +1779,76 @@
             <div class="apt-kpi-grid" id="apt-kpi-grid"></div>
           </div>
 
-          <div class="apt-nav-strip">
-            <div class="apt-nav-group">
-              <button type="button" class="btn btn-primary btn-sm" id="apt-filter-errors-btn">Только проблемные</button>
-              <button type="button" class="btn btn-outline btn-sm" id="apt-filter-all-btn">Все страницы</button>
-              <select class="apt-select" id="apt-waybill-select" aria-label="Выбор маршрутного листа"></select>
-            </div>
-            <div class="apt-nav-group">
-              <button type="button" class="btn btn-outline btn-sm" id="apt-prev-page-btn">← Назад</button>
-              <span style="font-size:13px; font-weight:700;" id="apt-page-counter">—</span>
-              <button type="button" class="btn btn-outline btn-sm" id="apt-next-page-btn">Вперёд →</button>
-            </div>
-          </div>
-
-          <div class="apt-nav-strip" style="background:#f8fafc;">
-            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-              <span style="font-size:13.5px;" id="apt-page-meta-text">—</span>
-              <span class="badge-status status-success" id="apt-quarantine-status-pill" style="display:none;"></span>
-            </div>
-            <div class="apt-nav-group">
-              <button type="button" class="btn btn-outline btn-sm" id="apt-btn-full-page">Весь лист с рамками</button>
-            </div>
-          </div>
-
-          <div class="apt-window-tabs" id="apt-window-tabs"></div>
-
-          <div class="apt-workspace-grid">
-            <!-- ВЕРХНЯЯ ПАНЕЛЬ НАД ОКНОМ: Статус окна и список замечаний -->
-            <div class="apt-pane-card apt-hints-pane">
-              <div class="apt-win-status-banner" id="apt-win-status-banner" style="display: none;"></div>
-              <div id="apt-win-warnings"></div>
-              <div id="apt-hints-list"></div>
+          <div id="apt-review-area">
+            <div class="apt-nav-strip">
+              <div class="apt-nav-group">
+                <button type="button" class="btn btn-primary btn-sm" id="apt-filter-errors-btn">Только проблемные</button>
+                <button type="button" class="btn btn-outline btn-sm" id="apt-filter-all-btn">Все страницы</button>
+                <select class="apt-select" id="apt-waybill-select" aria-label="Выбор маршрутного листа"></select>
+              </div>
+              <div class="apt-nav-group">
+                <button type="button" class="btn btn-outline btn-sm" id="apt-prev-page-btn">← Назад</button>
+                <span style="font-size:13px; font-weight:700;" id="apt-page-counter">—</span>
+                <button type="button" class="btn btn-outline btn-sm" id="apt-next-page-btn">Вперёд →</button>
+              </div>
             </div>
 
-            <!-- НИЖНЯЯ ПАНЕЛЬ НА ВСЮ ШИРИНУ: Крупный снимок окна + HTML5 Canvas -->
-            <div class="apt-pane-card apt-canvas-pane">
-              <div class="apt-draw-banner" id="apt-draw-banner" style="display: none;">
-                <div>
-                  Обведите на фото один прямоугольник: <b id="apt-draw-label-name">—</b>
-                  <span style="font-weight:500; opacity:0.85;">(Esc — отмена)</span>
-                </div>
-                <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-                  <span id="apt-draw-digit-wrap" style="display:none; align-items:center; gap:6px;">
-                    <span style="font-size:12px;">Число (1..99):</span>
-                    <input type="number" min="1" max="99" id="apt-draw-digit-val" style="width:66px; padding:4px 6px; border:1px solid #93c5fd; border-radius:6px; font-weight:700;">
-                  </span>
-                  <button type="button" class="btn btn-outline btn-sm" id="apt-draw-cancel-btn">Отмена</button>
-                </div>
+            <div class="apt-nav-strip" style="background:#f8fafc;">
+              <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                <span style="font-size:13.5px;" id="apt-page-meta-text">—</span>
+                <span class="badge-status status-success" id="apt-quarantine-status-pill" style="display:none;"></span>
+              </div>
+              <div class="apt-nav-group">
+                <button type="button" class="btn btn-outline btn-sm" id="apt-btn-full-page">Весь лист с рамками</button>
+              </div>
+            </div>
+
+            <div class="apt-window-tabs" id="apt-window-tabs"></div>
+
+            <div class="apt-workspace-grid">
+              <!-- ВЕРХНЯЯ ПАНЕЛЬ НАД ОКНОМ: Статус окна и список замечаний -->
+              <div class="apt-pane-card apt-hints-pane">
+                <div class="apt-win-status-banner" id="apt-win-status-banner" style="display: none;"></div>
+                <div id="apt-win-warnings"></div>
+                <div id="apt-hints-list"></div>
               </div>
 
-              <div class="apt-image-edit-banner" id="apt-image-edit-banner" style="display: none;">
-                <div>
-                  <b>Режим правки разметки (Ошибка на изображении)</b> — нажмите на любую рамку на фото, чтобы сменить класс (например, «Печать» → «Плохая печать»), перетащить или изменить размер за уголки.
+              <!-- НИЖНЯЯ ПАНЕЛЬ НА ВСЮ ШИРИНУ: Крупный снимок окна + HTML5 Canvas -->
+              <div class="apt-pane-card apt-canvas-pane">
+                <div class="apt-draw-banner" id="apt-draw-banner" style="display: none;">
+                  <div>
+                    Обведите на фото один прямоугольник: <b id="apt-draw-label-name">—</b>
+                    <span style="font-weight:500; opacity:0.85;">(Esc — отмена)</span>
+                  </div>
+                  <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                    <span id="apt-draw-digit-wrap" style="display:none; align-items:center; gap:6px;">
+                      <span style="font-size:12px;">Число (1..99):</span>
+                      <input type="number" min="1" max="99" id="apt-draw-digit-val" style="width:66px; padding:4px 6px; border:1px solid #93c5fd; border-radius:6px; font-weight:700;">
+                    </span>
+                    <button type="button" class="btn btn-outline btn-sm" id="apt-draw-cancel-btn">Отмена</button>
+                  </div>
                 </div>
-                <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-                  <select class="apt-select" id="apt-image-edit-add-sel" style="max-width:195px; font-size:12px; padding:4px 8px;"></select>
-                  <button type="button" class="btn btn-primary btn-sm" id="apt-image-edit-add-btn">➕ Добавить рамку</button>
-                  <button type="button" class="btn btn-outline btn-sm" id="apt-image-edit-exit-btn">Готово</button>
-                </div>
-              </div>
 
-              <div class="apt-box-inspector" id="apt-box-inspector" style="display: none;"></div>
-
-              <div class="apt-canvas-stage" id="apt-canvas-stage">
-                <canvas id="apt-window-canvas"></canvas>
-              </div>
-
-              <div class="apt-toolbar-row" style="margin-top:10px;">
-                <div class="apt-canvas-legend">
-                  <span class="apt-legend-item"><span class="apt-legend-swatch" style="border-color:#16a34a; background:rgba(22,163,74,0.12);"></span> Элемент в норме</span>
-                  <span class="apt-legend-item"><span class="apt-legend-swatch" style="border-color:#dc2626; background:rgba(220,38,38,0.15);"></span> Спорный / ошибка</span>
-                  <span class="apt-legend-item"><span class="apt-legend-swatch" style="border-color:#0284c7; background:rgba(2,132,199,0.15);"></span> Правка оператора</span>
-                  <span class="apt-legend-item"><span class="apt-legend-swatch" style="border-color:#64748b; border-style:dashed;"></span> Защищённый слой</span>
+                <div class="apt-canvas-stage" id="apt-canvas-stage">
+                  <canvas id="apt-window-canvas"></canvas>
                 </div>
-                <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                  <button type="button" class="btn btn-outline btn-sm apt-btn-image-edit" id="apt-btn-image-edit-mode">✏️ Ошибка на изображении</button>
-                  <button type="button" class="btn btn-outline btn-sm" id="apt-btn-reset-window" disabled>Сбросить правки окна</button>
+
+                <div class="apt-image-edit-panel" id="apt-image-edit-panel" hidden></div>
+
+                <div class="apt-toolbar-row" style="margin-top:10px;">
+                  <div class="apt-canvas-legend">
+                    <span class="apt-legend-item"><span class="apt-legend-swatch" style="border-color:#16a34a; background:rgba(22,163,74,0.12);"></span> Элемент в норме</span>
+                    <span class="apt-legend-item"><span class="apt-legend-swatch" style="border-color:#dc2626; background:rgba(220,38,38,0.15);"></span> Спорный / ошибка</span>
+                    <span class="apt-legend-item"><span class="apt-legend-swatch" style="border-color:#0284c7; background:rgba(2,132,199,0.15);"></span> Правка оператора</span>
+                    <span class="apt-legend-item"><span class="apt-legend-swatch" style="border-color:#64748b; border-style:dashed;"></span> Защищённый слой</span>
+                  </div>
+                  <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                    <button type="button" class="btn btn-outline btn-sm apt-btn-image-edit" id="apt-btn-image-edit-mode">✏️ Ошибка на изображении</button>
+                    <button type="button" class="btn btn-outline btn-sm" id="apt-btn-reset-window" disabled>Сбросить правки окна</button>
+                  </div>
                 </div>
+
+                <div class="apt-box-inspector" id="apt-box-inspector" style="display: none;"></div>
               </div>
             </div>
           </div>
@@ -1874,15 +1867,6 @@
           <div class="apt-header-actions">
             <button type="button" class="btn btn-outline btn-sm" id="apt-q-refresh-btn">Обновить</button>
           </div>
-        </div>
-
-        <div class="apt-q-guide-box">
-          <div class="apt-q-guide-title">Как работает очередь дообучения</div>
-          <ul class="apt-q-guide-list">
-            <li><b>Откуда приходят записи:</b> автоматически при нажатии оператором <b>«Завершить проверку и сформировать отчёт»</b> — попадают только страницы, где оператор исправил ошибку модели и в окне не осталось замечаний (окна со статусом «Ошибки нет» в датасет не попадают).</li>
-            <li><b>На проверке:</b> новые правки операторов, ожидающие модерации (хранятся до <b>60 дней</b>). Откройте «Проверить» для сравнения «Было / Стало».</li>
-            <li><b>Одобрено / Отклонено:</b> одобренные записи <b>не удаляются по таймеру</b> и ждут выгрузки в датасет (удаляются из очереди только после успешного сохранения файлов на диск). Отклонённые записи хранятся <b>14 дней</b>, затем удаляются автоматически.</li>
-          </ul>
         </div>
 
         <div class="card">
@@ -1919,14 +1903,13 @@
                     <th>Статус</th>
                     <th>Сотрудник</th>
                     <th>Отправлено</th>
-                    <th>Правки (+ / - / ~ / #)</th>
                     <th>Тип правки / Статус окна</th>
                     <th>Кропы цифр</th>
                     <th>Действие</th>
                   </tr>
                 </thead>
                 <tbody id="apt-q-tbody">
-                  <tr><td colspan="8" style="text-align:center; padding:24px; color:var(--text-muted);">Откройте раздел для загрузки данных...</td></tr>
+                  <tr><td colspan="7" style="text-align:center; padding:24px; color:var(--text-muted);">Откройте раздел для загрузки данных...</td></tr>
                 </tbody>
               </table>
             </div>
@@ -2307,7 +2290,7 @@
     function getClientPortalVersion() {
       const badge = document.getElementById('portal-version-badge');
       const m = (badge?.textContent || '').match(/(\d+\.\d+(?:\.\d+)?)/);
-      return m ? m[1] : '2.2';
+      return m ? m[1] : '2.3';
     }
 
     function isPortalBusy() {
@@ -4439,6 +4422,7 @@
       }
     }
   </script>
-  <script src="/static/apt_waybills.js?v=2.2"></script>
+  <script src="/static/apt_box_editor.js?v=2.3"></script>
+  <script src="/static/apt_waybills.js?v=2.3"></script>
 </body>
 </html>

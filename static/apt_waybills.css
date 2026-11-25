@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Стили раздела «АПТ → Маршрутные листы» и админ-очереди дообучения (v2.2)
+   Стили раздела «АПТ → Маршрутные листы» и админ-очереди дообучения (v2.3)
    Совместимы с корпоративной палитрой «ПУЛЬС — Транспортная логистика».
    ========================================================================== */
 
@@ -331,34 +331,6 @@
   font-weight: 600;
 }
 
-.apt-q-guide-box {
-  background: #f8fafc;
-  border: 1px solid var(--border-light);
-  border-left: 4px solid var(--primary);
-  border-radius: 10px;
-  padding: 14px 18px;
-  margin-bottom: 18px;
-}
-
-.apt-q-guide-title {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--primary);
-  margin-bottom: 6px;
-}
-
-.apt-q-guide-list {
-  margin: 0;
-  padding-left: 18px;
-  font-size: 13px;
-  color: #334155;
-  line-height: 1.55;
-}
-
-.apt-q-guide-list li + li {
-  margin-top: 3px;
-}
-
 .apt-canvas-stage.is-drawing canvas {
   cursor: crosshair;
 }
@@ -581,7 +553,8 @@
 }
 
 .apt-table-wrapper {
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   max-inline-size: 100%;
   max-block-size: min(580px, 72vh);
   container-type: inline-size;
@@ -592,6 +565,7 @@
 
 .apt-q-table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: separate;
   border-spacing: 0;
   font-size: 13px;
@@ -605,10 +579,12 @@
 
 .apt-q-table th,
 .apt-q-table td {
-  padding: 10px 12px;
+  padding: 10px 10px;
   text-align: left;
   border-bottom: 1px solid var(--border-light);
-  white-space: nowrap;
+  white-space: normal;
+  word-break: break-word;
+  vertical-align: middle;
 }
 
 .apt-q-table thead th {
@@ -620,10 +596,15 @@
   color: var(--text-muted);
 }
 
+.apt-q-table thead th:nth-child(1) { width: 24%; }
+.apt-q-table thead th:nth-child(2) { width: 12%; }
+.apt-q-table thead th:nth-child(3) { width: 16%; }
+.apt-q-table thead th:nth-child(4) { width: 13%; }
+.apt-q-table thead th:nth-child(5) { width: 17%; }
+.apt-q-table thead th:nth-child(6) { width: 7%; }
+.apt-q-table thead th:nth-child(7) { width: 11%; }
+
 .apt-q-table tbody th {
-  position: sticky;
-  inset-inline-start: 0;
-  z-index: 1;
   background: var(--surface);
   font-weight: 700;
 }
@@ -665,9 +646,8 @@
   .apt-q-table td:nth-child(2)::before { content: "Статус: "; font-weight: 700; color: var(--text-muted); }
   .apt-q-table td:nth-child(3)::before { content: "Сотрудник: "; font-weight: 700; color: var(--text-muted); }
   .apt-q-table td:nth-child(4)::before { content: "Дата: "; font-weight: 700; color: var(--text-muted); }
-  .apt-q-table td:nth-child(5)::before { content: "Правки: "; font-weight: 700; color: var(--text-muted); }
-  .apt-q-table td:nth-child(6)::before { content: "Проверка логики: "; font-weight: 700; color: var(--text-muted); }
-  .apt-q-table td:nth-child(7)::before { content: "Кропы цифр: "; font-weight: 700; color: var(--text-muted); }
+  .apt-q-table td:nth-child(5)::before { content: "Тип правки: "; font-weight: 700; color: var(--text-muted); }
+  .apt-q-table td:nth-child(6)::before { content: "Кропы цифр: "; font-weight: 700; color: var(--text-muted); }
 }
 
 .apt-diff-pill {
@@ -776,21 +756,9 @@ dialog.apt-dialog::backdrop {
   border: 1px solid var(--border-light);
 }
 
-/* ─── Режим правки класса и размера рамки (v2.2: «Ошибка на изображении») ─── */
-.apt-btn-image-edit.is-active {
-  background: #eff6ff;
-  border-color: #2563eb;
-  color: #1d4ed8;
-  font-weight: 700;
-}
-
-.apt-image-edit-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 10px;
+/* ─── Панель единого редактора рамок под снимком (v2.3) ─── */
+.apt-image-edit-panel {
+  margin-top: 10px;
   padding: 10px 14px;
   border-radius: 10px;
   background: #eff6ff;
@@ -798,6 +766,30 @@ dialog.apt-dialog::backdrop {
   color: #1e3a8a;
   font-size: 12.5px;
   line-height: 1.4;
+}
+
+.apt-edit-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.apt-edit-spacer {
+  flex: 1;
+}
+
+.apt-edit-hint {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: #475569;
+}
+
+.apt-edit-msg {
+  margin-top: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #dc2626;
 }
 
 .apt-class-pills {

@@ -63,9 +63,8 @@
     expandedHintKey: null,
     drawMode: null, // { label: string }
     dragState: null, // { startX, startY, currX, currY, pointerId }
-    imageEditMode: false,
-    pendingBoxEdit: null, // { elementId, origLabel, origBbox, origValue, newLabel, newBbox, newValue }
-    boxResizeDrag: null, // { mode, startX, startY, origBbox, pointerId }
+    operatorEditor: null,
+    reviewAreaForced: false,
     manualMarkupPages: new Set(), // page_id страниц с ручной правкой класса/рамки
     currentWindowImg: null,
     currentWindowImgKey: null,
@@ -368,12 +367,14 @@
     const emptyBox = $('apt-pdf-dropzone');
     const loadedBox = $('apt-pdf-loaded');
     const startBtn = $('apt-start-check-btn');
+    const clearBtn = $('apt-pdf-clear');
     if (!emptyBox || !loadedBox || !startBtn) return;
 
     if (!state.selectedFile) {
       emptyBox.hidden = false;
       loadedBox.hidden = true;
       startBtn.disabled = true;
+      if (clearBtn) clearBtn.disabled = false;
       return;
     }
 
@@ -382,6 +383,7 @@
     $('apt-pdf-name').textContent = state.selectedFile.name;
     $('apt-pdf-size').textContent = formatBytes(state.selectedFile.size);
     startBtn.disabled = state.uploading;
+    if (clearBtn) clearBtn.disabled = state.uploading;
   }
 
   function handlePdfFileSelect(file) {
@@ -398,11 +400,43 @@
     updateDropzoneUI();
   }
 
+  function resetWorkspaceView() {
+    stopPolling();
+    state.operatorEditor?.deactivate();
+    cancelDrawMode();
+    state.activeSessionId = null;
+    state.session = null;
+    state.sessionFinalized = false;
+    state.reviewAreaForced = false;
+    state.currentPageId = null;
+    state.currentWindowIdx = 0;
+    state.currentWindowImg = null;
+    state.currentWindowImgKey = null;
+    state.selectedElementId = null;
+    state.hoveredElementId = null;
+    state.highlightedElementIds.clear();
+    state.expandedHintKey = null;
+    state.windowHistory = [];
+    state.manualMarkupPages.clear();
+    revokeUrlPool(state.operatorUrls);
+    const ws = $('apt-session-workspace');
+    if (ws) ws.style.display = 'none';
+    const pc = $('apt-progress-card');
+    if (pc) pc.style.display = 'none';
+    const finBanner = $('apt-finalize-banner');
+    if (finBanner) {
+      finBanner.style.display = 'none';
+      finBanner.innerHTML = '';
+    }
+  }
+
   function clearSelectedPdf() {
+    if (state.uploading) return;
     state.selectedFile = null;
     const inp = $('apt-pdf-input');
     if (inp) inp.value = '';
     updateDropzoneUI();
+    resetWorkspaceView();
   }
 
   function stopPolling() {
@@ -552,6 +586,8 @@
     state.session = data;
     state.activeSessionId = data.session_id;
     state.sessionFinalized = Boolean(data.finalized);
+    state.reviewAreaForced = false;
+    state.operatorEditor?.deactivate();
     state.windowHistory = [];
     state.selectedElementId = null;
     state.hoveredElementId = null;
@@ -586,6 +622,46 @@
   }
 
   // ─── Рендер рабочей области оператора ───────────────────────────────
+  function updateReviewAreaVisibility() {
+    const area = $('apt-review-area');
+    const finBanner = $('apt-finalize-banner');
+    if (!area || !state.session) return;
+
+    const done = countPendingWindows() === 0 && !state.reviewAreaForced;
+    if (done) {
+      state.operatorEditor?.deactivate();
+      cancelDrawMode();
+      area.style.display = 'none';
+      if (finBanner) {
+        finBanner.style.display = 'flex';
+        finBanner.style.alignItems = 'center';
+        finBanner.style.justifyContent = 'space-between';
+        finBanner.style.flexWrap = 'wrap';
+        finBanner.style.gap = '10px';
+        let msgSpan = finBanner.querySelector('.apt-fin-msg');
+        if (!msgSpan) {
+          const existingText = finBanner.textContent.trim();
+          finBanner.innerHTML = `<span class="apt-fin-msg"></span><button type="button" class="btn btn-outline btn-sm" id="apt-open-review-btn">Открыть окна для просмотра</button>`;
+          msgSpan = finBanner.querySelector('.apt-fin-msg');
+          if (state.sessionFinalized && existingText) {
+            msgSpan.textContent = existingText;
+          }
+          $('apt-open-review-btn')?.addEventListener('click', () => {
+            state.reviewAreaForced = true;
+            updateReviewAreaVisibility();
+          });
+        }
+        if (!state.sessionFinalized) {
+          msgSpan.textContent = 'Все спорные окна разобраны — ручная проверка завершена. Нажмите «Завершить проверку и сформировать отчёт».';
+        } else if (!msgSpan.textContent.trim()) {
+          msgSpan.textContent = 'Проверка завершена. Отчёт и архив готовы к скачиванию.';
+        }
+      }
+    } else {
+      area.style.display = 'block';
+    }
+  }
+
   function renderAllSessionUI() {
     if (!state.session) return;
     renderSessionSummary();
@@ -594,6 +670,7 @@
     renderRightPane();
     loadAndDrawCurrentWindowCanvas();
     renderBoxInspector();
+    updateReviewAreaVisibility();
   }
 
   function renderSessionSummary() {
@@ -788,7 +865,17 @@
     });
   }
 
+  function confirmLeaveImageEdit() {
+    if (!state.operatorEditor || !state.operatorEditor.isActive()) return true;
+    if (state.operatorEditor.hasChanges() && !confirm('На снимке есть незавершённые правки. Выйти без сохранения?')) {
+      return false;
+    }
+    state.operatorEditor.deactivate();
+    return true;
+  }
+
   function selectPage(pageId, preferProblemWindow = true, recordHistory = true) {
+    if (!confirmLeaveImageEdit()) return;
     if (recordHistory && state.currentPageId !== null && pageId !== state.currentPageId) {
       pushWindowHistory();
     }
@@ -798,7 +885,6 @@
     state.highlightedElementIds.clear();
     state.expandedHintKey = null;
     cancelDrawMode();
-    exitImageEditMode();
 
     const page = getCurrentPage();
     if (page && (page.windows || []).length > 0) {
@@ -815,6 +901,7 @@
   }
 
   function selectWindow(winIdx, recordHistory = true) {
+    if (!confirmLeaveImageEdit()) return;
     if (recordHistory && winIdx !== state.currentWindowIdx) {
       pushWindowHistory();
     }
@@ -824,7 +911,6 @@
     state.highlightedElementIds.clear();
     state.expandedHintKey = null;
     cancelDrawMode();
-    exitImageEditMode();
     renderWindowTabs();
     renderRightPane();
     loadAndDrawCurrentWindowCanvas();
@@ -833,6 +919,7 @@
 
   function goToPreviousWindow() {
     if (!state.session) return;
+    if (!confirmLeaveImageEdit()) return;
     if (state.windowHistory.length > 0) {
       const prev = state.windowHistory.pop();
       if (prev && prev.pageId) {
@@ -870,7 +957,6 @@
       state.selectedElementId = null;
       state.expandedHintKey = null;
       cancelDrawMode();
-      exitImageEditMode();
       renderAllSessionUI();
     }
   }
@@ -903,11 +989,7 @@
       }
     }
 
-    const finBanner = $('apt-finalize-banner');
-    if (finBanner) {
-      finBanner.style.display = 'block';
-      finBanner.textContent = 'Все спорные окна в сессии разобраны. Нажмите «Завершить проверку и сформировать отчёт» для фиксации итогов.';
-    }
+    updateReviewAreaVisibility();
   }
 
   // ─── HTML5 Canvas и координаты через crop_rect ──────────────────────
@@ -978,6 +1060,10 @@
   }
 
   function drawWindowCanvas() {
+    if (state.operatorEditor && state.operatorEditor.isActive()) {
+      state.operatorEditor.draw();
+      return;
+    }
     const win = getCurrentWindow();
     const canvas = $('apt-window-canvas');
     const img = state.currentWindowImg;
@@ -1025,7 +1111,7 @@
     // Элементы внутри окна
     const hasErr = Boolean((win.errors && win.errors.length) || (win.warnings && win.warnings.length));
     for (const el of (win.elements || [])) {
-      const [x1, y1, x2, y2] = getElementDisplayBbox(el);
+      const [x1, y1, x2, y2] = el.bbox;
       const drawX = (x1 - m.cx1) * m.scaleX;
       const drawY = (y1 - m.cy1) * m.scaleY;
       const drawW = (x2 - x1) * m.scaleX;
@@ -1035,20 +1121,19 @@
       const isSelected = el.id === state.selectedElementId;
       const isHovered = el.id === state.hoveredElementId;
       const isHighlighted = state.highlightedElementIds.has(el.id);
-      const dispLabel = getElementDisplayLabel(el);
 
       let stroke = '#16a34a';
       let fill = 'rgba(22, 163, 74, 0.07)';
       if (!editable) {
         stroke = 'rgba(100, 116, 139, 0.7)';
         fill = 'rgba(100, 116, 139, 0.04)';
-      } else if (isHighlighted || (hasErr && dispLabel === 'Плохая печать')) {
+      } else if (isHighlighted || (hasErr && el.label === 'Плохая печать')) {
         stroke = '#dc2626';
         fill = 'rgba(220, 38, 38, 0.16)';
-      } else if (el.source === 'operator' || (state.pendingBoxEdit && state.pendingBoxEdit.elementId === el.id)) {
+      } else if (el.source === 'operator') {
         stroke = '#0284c7';
         fill = 'rgba(2, 132, 199, 0.14)';
-      } else if (hasErr && state.digitLabels.has(dispLabel)) {
+      } else if (hasErr && state.digitLabels.has(el.label)) {
         stroke = '#dc2626';
         fill = 'rgba(220, 38, 38, 0.12)';
       }
@@ -1065,7 +1150,7 @@
       ctx.strokeRect(drawX, drawY, drawW, drawH);
 
       // Подпись над рамкой
-      const tag = getElementDisplayTag(el);
+      const tag = shortLabel(el);
       ctx.font = 'bold 12px -apple-system, BlinkMacSystemFont, sans-serif';
       const tw = ctx.measureText(tag).width;
       const labelY = drawY >= 20 ? drawY - 18 : drawY + 2;
@@ -1073,30 +1158,6 @@
       ctx.fillRect(drawX, labelY, tw + 8, 17);
       ctx.fillStyle = '#ffffff';
       ctx.fillText(tag, drawX + 4, labelY + 13);
-
-      // 8 маркеров изменения размера в режиме правки изображения
-      if (isSelected && editable && state.imageEditMode) {
-        const hs = 8;
-        const half = hs / 2;
-        const pts = [
-          [drawX, drawY],
-          [drawX + drawW / 2, drawY],
-          [drawX + drawW, drawY],
-          [drawX + drawW, drawY + drawH / 2],
-          [drawX + drawW, drawY + drawH],
-          [drawX + drawW / 2, drawY + drawH],
-          [drawX, drawY + drawH],
-          [drawX, drawY + drawH / 2],
-        ];
-        ctx.fillStyle = '#ffffff';
-        ctx.strokeStyle = '#1d4ed8';
-        ctx.lineWidth = 2;
-        ctx.setLineDash([]);
-        for (const [hx, hy] of pts) {
-          ctx.fillRect(hx - half, hy - half, hs, hs);
-          ctx.strokeRect(hx - half, hy - half, hs, hs);
-        }
-      }
       ctx.restore();
     }
 
@@ -1127,156 +1188,12 @@
     };
   }
 
-  function getElementDisplayBbox(el) {
-    if (state.pendingBoxEdit && state.pendingBoxEdit.elementId === el.id && Array.isArray(state.pendingBoxEdit.newBbox)) {
-      return state.pendingBoxEdit.newBbox;
-    }
-    return el.bbox;
+  function validateBoxGeometry(win, _label, bbox) {
+    return rootAptBoxEditor().validateGeometry(bbox, win?.bbox);
   }
 
-  function getElementDisplayLabel(el) {
-    if (state.pendingBoxEdit && state.pendingBoxEdit.elementId === el.id && state.pendingBoxEdit.newLabel) {
-      return state.pendingBoxEdit.newLabel;
-    }
-    return el.label;
-  }
-
-  function getElementDisplayTag(el) {
-    if (state.pendingBoxEdit && state.pendingBoxEdit.elementId === el.id) {
-      const lbl = state.pendingBoxEdit.newLabel || el.label;
-      if (state.digitLabels.has(lbl)) {
-        const val = state.pendingBoxEdit.newValue ?? el.ocr_value ?? '?';
-        return `${lbl}: ${val}`;
-      }
-      return lbl;
-    }
-    return shortLabel(el);
-  }
-
-  function initPendingBoxEdit(el) {
-    if (!el) {
-      state.pendingBoxEdit = null;
-      return;
-    }
-    if (state.pendingBoxEdit && state.pendingBoxEdit.elementId === el.id) return;
-    state.pendingBoxEdit = {
-      elementId: el.id,
-      origLabel: el.label,
-      origBbox: [...el.bbox],
-      origValue: el.ocr_value ?? null,
-      newLabel: el.label,
-      newBbox: [...el.bbox],
-      newValue: el.ocr_value ?? null,
-    };
-  }
-
-  function validateBoxGeometry(win, label, bbox) {
-    const [x1, y1, x2, y2] = bbox;
-    if (x2 - x1 < 14 || y2 - y1 < 14) {
-      return 'Выделенная область слишком маленькая (минимум 14×14 пикселей).';
-    }
-    if (Array.isArray(win?.bbox) && win.bbox.length === 4) {
-      const [wx1, wy1, wx2, wy2] = win.bbox;
-      const winW = Math.max(1, wx2 - wx1);
-      const winH = Math.max(1, wy2 - wy1);
-      const winArea = winW * winH;
-      const bw = x2 - x1;
-      const bh = y2 - y1;
-      const boxArea = bw * bh;
-      const cx = (x1 + x2) / 2;
-      const cy = (y1 + y2) / 2;
-
-      if (cx < wx1 - 45 || cx > wx2 + 45 || cy < wy1 - 45 || cy > wy2 + 45) {
-        return 'Центр рамки должен находиться в пределах текущего окна аптеки.';
-      }
-      if (state.digitLabels.has(label)) {
-        if (bw > winW * 0.35 || bh > winH * 0.65 || boxArea > winArea * 0.15) {
-          return 'Рамка цифры слишком велика (допустимо до 15% площади и 35% ширины окна).';
-        }
-      } else if (bw > winW * 0.65 || bh > winH * 1.15 || boxArea > winArea * 0.55) {
-        return 'Рамка слишком велика для элемента окна (допустимо до 55% площади и 65% ширины окна).';
-      }
-    }
-    return null;
-  }
-
-  function updateImageEditBannerAndButton() {
-    const btn = $('apt-btn-image-edit-mode');
-    const banner = $('apt-image-edit-banner');
-    const sel = $('apt-image-edit-add-sel');
-    if (btn) {
-      btn.classList.toggle('is-active', state.imageEditMode);
-      btn.textContent = state.imageEditMode ? '✓ Завершить правку снимка' : '✏️ Ошибка на изображении';
-    }
-    if (banner) {
-      banner.style.display = state.imageEditMode ? 'flex' : 'none';
-    }
-    if (sel && state.imageEditMode) {
-      const safeOpts = getSafeOperatorLabels();
-      const prev = sel.value;
-      sel.innerHTML = safeOpts.map(l => `<option value="${escapeHtml(l)}">${escapeHtml(l)}</option>`).join('');
-      if (prev && safeOpts.includes(prev)) sel.value = prev;
-    }
-  }
-
-  function exitImageEditMode() {
-    if (!state.imageEditMode && !state.pendingBoxEdit && !state.boxResizeDrag) {
-      updateImageEditBannerAndButton();
-      return;
-    }
-    state.imageEditMode = false;
-    state.pendingBoxEdit = null;
-    state.boxResizeDrag = null;
-    updateImageEditBannerAndButton();
-  }
-
-  function toggleImageEditMode() {
-    if (state.imageEditMode) {
-      exitImageEditMode();
-      drawWindowCanvas();
-      renderBoxInspector();
-      return;
-    }
-    cancelDrawMode();
-    state.imageEditMode = true;
-    state.pendingBoxEdit = null;
-    state.boxResizeDrag = null;
-    updateImageEditBannerAndButton();
-    if (state.selectedElementId) {
-      const win = getCurrentWindow();
-      const el = win && (win.elements || []).find(e => e.id === state.selectedElementId && isElementEditable(e));
-      if (el) initPendingBoxEdit(el);
-    }
-    drawWindowCanvas();
-    renderBoxInspector();
-  }
-
-  function findResizeHandleAt(win, canvas, cx, cy) {
-    if (!win || !state.imageEditMode || !state.selectedElementId) return null;
-    const el = (win.elements || []).find(e => e.id === state.selectedElementId && isElementEditable(e));
-    if (!el) return null;
-    const m = getCanvasMetrics(win, canvas);
-    const [x1, y1, x2, y2] = getElementDisplayBbox(el);
-    const dx = (x1 - m.cx1) * m.scaleX;
-    const dy = (y1 - m.cy1) * m.scaleY;
-    const dw = (x2 - x1) * m.scaleX;
-    const dh = (y2 - y1) * m.scaleY;
-    const handles = [
-      { mode: 'nw', hx: dx, hy: dy, cursor: 'nwse-resize' },
-      { mode: 'n', hx: dx + dw / 2, hy: dy, cursor: 'ns-resize' },
-      { mode: 'ne', hx: dx + dw, hy: dy, cursor: 'nesw-resize' },
-      { mode: 'e', hx: dx + dw, hy: dy + dh / 2, cursor: 'ew-resize' },
-      { mode: 'se', hx: dx + dw, hy: dy + dh, cursor: 'nwse-resize' },
-      { mode: 's', hx: dx + dw / 2, hy: dy + dh, cursor: 'ns-resize' },
-      { mode: 'sw', hx: dx, hy: dy + dh, cursor: 'nesw-resize' },
-      { mode: 'w', hx: dx, hy: dy + dh / 2, cursor: 'ew-resize' },
-    ];
-    for (const h of handles) {
-      if (Math.abs(cx - h.hx) <= 9 && Math.abs(cy - h.hy) <= 9) {
-        return { el, mode: h.mode, cursor: h.cursor };
-      }
-    }
-    return null;
+  function rootAptBoxEditor() {
+    return window.AptBoxEditor;
   }
 
   function findSelectableElementAt(win, canvas, cx, cy) {
@@ -1285,10 +1202,8 @@
     let best = null;
     let bestArea = Infinity;
     for (const el of (win.elements || [])) {
-      if (!isElementEditable(el)) continue;
-      // В обычном режиме разрешаем кликать только рамки оператора; в режиме правки снимка — любые редактируемые рамки
-      if (!state.imageEditMode && el.source !== 'operator') continue;
-      const [x1, y1, x2, y2] = getElementDisplayBbox(el);
+      if (el.source !== 'operator' || !isElementEditable(el)) continue;
+      const [x1, y1, x2, y2] = el.bbox;
       const dx = (x1 - m.cx1) * m.scaleX;
       const dy = (y1 - m.cy1) * m.scaleY;
       const dw = (x2 - x1) * m.scaleX;
@@ -1309,7 +1224,6 @@
       alert('Этот системный класс защищён от ручного добавления.');
       return;
     }
-    state.boxResizeDrag = null;
     state.drawMode = { label };
     state.dragState = null;
     const stage = $('apt-canvas-stage');
@@ -1343,6 +1257,7 @@
     if (!canvas) return;
 
     canvas.addEventListener('pointerdown', evt => {
+      if (state.operatorEditor && state.operatorEditor.isActive()) return;
       const win = getCurrentWindow();
       if (!win || state.actionPending) return;
       const pt = clientToCanvasXY(canvas, evt);
@@ -1362,45 +1277,15 @@
         return;
       }
 
-      if (state.imageEditMode) {
-        const handleHit = findResizeHandleAt(win, canvas, pt.x, pt.y);
-        if (handleHit) {
-          initPendingBoxEdit(handleHit.el);
-          state.boxResizeDrag = {
-            mode: handleHit.mode,
-            startX: pt.x,
-            startY: pt.y,
-            origBbox: [...getElementDisplayBbox(handleHit.el)],
-            pointerId: evt.pointerId,
-          };
-          try { canvas.setPointerCapture(evt.pointerId); } catch (_) {}
-          drawWindowCanvas();
-          return;
-        }
-      }
-
       const hit = findSelectableElementAt(win, canvas, pt.x, pt.y);
       state.selectedElementId = hit ? hit.id : null;
-      if (state.imageEditMode && hit) {
-        initPendingBoxEdit(hit);
-        state.boxResizeDrag = {
-          mode: 'move',
-          startX: pt.x,
-          startY: pt.y,
-          origBbox: [...getElementDisplayBbox(hit)],
-          pointerId: evt.pointerId,
-        };
-        try { canvas.setPointerCapture(evt.pointerId); } catch (_) {}
-      } else {
-        state.pendingBoxEdit = null;
-      }
       drawWindowCanvas();
       renderBoxInspector();
     });
 
     canvas.addEventListener('pointermove', evt => {
+      if (state.operatorEditor && state.operatorEditor.isActive()) return;
       const win = getCurrentWindow();
-      const page = getCurrentPage();
       if (!win) return;
       const pt = clientToCanvasXY(canvas, evt);
 
@@ -1411,45 +1296,10 @@
         return;
       }
 
-      if (state.boxResizeDrag && state.pendingBoxEdit) {
-        const drag = state.boxResizeDrag;
-        const m = getCanvasMetrics(win, canvas);
-        const dxImg = Math.round((pt.x - drag.startX) / m.scaleX);
-        const dyImg = Math.round((pt.y - drag.startY) / m.scaleY);
-        const maxW = page?.width || 10000;
-        const maxH = page?.height || 10000;
-        let [nx1, ny1, nx2, ny2] = drag.origBbox;
-        const minSize = 14;
-
-        if (drag.mode === 'move') {
-          const bw = nx2 - nx1;
-          const bh = ny2 - ny1;
-          nx1 = Math.max(0, Math.min(maxW - bw, nx1 + dxImg));
-          ny1 = Math.max(0, Math.min(maxH - bh, ny1 + dyImg));
-          nx2 = nx1 + bw;
-          ny2 = ny1 + bh;
-        } else {
-          if (drag.mode.includes('w')) nx1 = Math.max(0, Math.min(nx2 - minSize, nx1 + dxImg));
-          if (drag.mode.includes('e')) nx2 = Math.min(maxW, Math.max(nx1 + minSize, nx2 + dxImg));
-          if (drag.mode.includes('n')) ny1 = Math.max(0, Math.min(ny2 - minSize, ny1 + dyImg));
-          if (drag.mode.includes('s')) ny2 = Math.min(maxH, Math.max(ny1 + minSize, ny2 + dyImg));
-        }
-        state.pendingBoxEdit.newBbox = [nx1, ny1, nx2, ny2];
-        drawWindowCanvas();
-        return;
-      }
-
       if (!state.drawMode) {
-        if (state.imageEditMode) {
-          const h = findResizeHandleAt(win, canvas, pt.x, pt.y);
-          if (h) {
-            canvas.style.cursor = h.cursor;
-            return;
-          }
-        }
         const hit = findSelectableElementAt(win, canvas, pt.x, pt.y);
         const newHover = hit ? hit.id : null;
-        canvas.style.cursor = hit ? (state.imageEditMode ? 'move' : 'pointer') : 'default';
+        canvas.style.cursor = hit ? 'pointer' : 'default';
         if (newHover !== state.hoveredElementId) {
           state.hoveredElementId = newHover;
           drawWindowCanvas();
@@ -1458,13 +1308,7 @@
     });
 
     const finishDrag = async evt => {
-      if (state.boxResizeDrag) {
-        try { canvas.releasePointerCapture(evt.pointerId); } catch (_) {}
-        state.boxResizeDrag = null;
-        drawWindowCanvas();
-        renderBoxInspector();
-        return;
-      }
+      if (state.operatorEditor && state.operatorEditor.isActive()) return;
       if (!state.drawMode || !state.dragState) return;
       const win = getCurrentWindow();
       const page = getCurrentPage();
@@ -1516,29 +1360,20 @@
         }
         body.new_value = parsed;
       }
-      if (state.imageEditMode && page.page_id) {
-        state.manualMarkupPages.add(page.page_id);
-      }
-      await sendWindowAction(body, { autoAdvanceIfClean: !state.imageEditMode });
+      await sendWindowAction(body, { autoAdvanceIfClean: true });
     };
 
     canvas.addEventListener('pointerup', finishDrag);
     canvas.addEventListener('pointercancel', () => {
-      if (state.boxResizeDrag) state.boxResizeDrag = null;
+      if (state.operatorEditor && state.operatorEditor.isActive()) return;
       if (state.drawMode) cancelDrawMode();
     });
 
     document.addEventListener('keydown', evt => {
-      if (evt.key === 'Escape') {
-        if (state.drawMode) {
-          evt.preventDefault();
-          cancelDrawMode();
-        } else if (state.imageEditMode) {
-          evt.preventDefault();
-          exitImageEditMode();
-          drawWindowCanvas();
-          renderBoxInspector();
-        }
+      if (state.operatorEditor && state.operatorEditor.isActive()) return;
+      if (evt.key === 'Escape' && state.drawMode) {
+        evt.preventDefault();
+        cancelDrawMode();
       }
     });
   }
@@ -1568,6 +1403,7 @@
   }
 
   async function sendWindowAction(payload, options = {}) {
+    if (!confirmLeaveImageEdit()) return;
     const page = getCurrentPage();
     const win = getCurrentWindow();
     if (!state.activeSessionId || !page || !win || state.actionPending) return;
@@ -1598,40 +1434,19 @@
     }
   }
 
-  async function applyPendingBoxEdit() {
+  async function refreshSessionKeepPosition() {
+    if (!state.activeSessionId) return;
+    const data = await apiJson(`/api/ml/sessions/${encodeURIComponent(state.activeSessionId)}`);
+    state.session = data;
+    renderAllSessionUI();
+  }
+
+  async function commitOperatorImageEdits(edits) {
     const page = getCurrentPage();
     const win = getCurrentWindow();
-    const pending = state.pendingBoxEdit;
-    if (!state.activeSessionId || !page || !win || !pending || state.actionPending) return;
-
-    const el = (win.elements || []).find(e => e.id === pending.elementId && isElementEditable(e));
-    if (!el) return;
-
-    const isDigit = state.digitLabels.has(pending.newLabel);
-    let parsedDigit = null;
-    if (isDigit) {
-      const raw = ($('apt-insp-digit-val')?.value ?? pending.newValue ?? '').toString().trim();
-      parsedDigit = parseInt(raw, 10);
-      if (!Number.isInteger(parsedDigit) || parsedDigit < 1 || parsedDigit > 99) {
-        alert('Для числового класса укажите целое число от 1 до 99.');
-        return;
-      }
+    if (!state.activeSessionId || !page || !win) {
+      throw new Error('Окно проверки недоступно.');
     }
-
-    const geomErr = validateBoxGeometry(win, pending.newLabel, pending.newBbox);
-    if (geomErr) {
-      alert(geomErr);
-      return;
-    }
-
-    const labelChanged = pending.newLabel !== pending.origLabel;
-    const bboxChanged = pending.newBbox.some((v, idx) => Math.round(v) !== Math.round(pending.origBbox[idx]));
-    const valueChanged = isDigit && parsedDigit !== pending.origValue;
-    if (!labelChanged && !bboxChanged && !valueChanged) {
-      alert('Измените класс, размер рамки или значение цифры перед сохранением.');
-      return;
-    }
-
     state.actionPending = true;
     const url = `/api/ml/sessions/${encodeURIComponent(state.activeSessionId)}/pages/${encodeURIComponent(page.page_id)}/windows/${win.window_idx}/action`;
     const postAction = body => apiJson(url, {
@@ -1642,139 +1457,67 @@
 
     try {
       let resp;
-      const updatePayload = {
-        action: 'update_box',
-        element_id: el.id,
-        new_label: pending.newLabel,
-        bbox: pending.newBbox.map(v => Math.round(v)),
-      };
-      if (isDigit) updatePayload.new_value = parsedDigit;
-
       try {
-        resp = await postAction(updatePayload);
+        resp = await postAction({ action: 'batch_edit', edits });
       } catch (err) {
-        const msg = String(err.message || '');
-        if (!msg.includes('Неизвестное действие') && !msg.includes('update_box')) {
+        const msg = String(err?.message || '');
+        if (!msg.includes('Неизвестное действие') && !msg.includes('batch_edit')) {
           throw err;
         }
-        // Fallback для review_service.py v1.1.0 без атомарного update_box
-        if (!bboxChanged && !valueChanged && labelChanged) {
-          resp = await postAction({ action: 'relabel_box', element_id: el.id, new_label: pending.newLabel });
-        } else {
-          await postAction({ action: 'delete_box', element_id: el.id });
-          const addBody = {
-            action: 'add_box',
-            new_label: pending.newLabel,
-            bbox: pending.newBbox.map(v => Math.round(v)),
-          };
-          if (isDigit) addBody.new_value = parsedDigit;
-          resp = await postAction(addBody);
+        // Fallback для ML-сервиса без пакетного batch_edit
+        try {
+          for (const edit of edits) {
+            resp = await postAction(edit);
+          }
+        } catch (fbErr) {
+          await refreshSessionKeepPosition().catch(() => {});
+          throw fbErr;
         }
       }
-
       if (page.page_id) state.manualMarkupPages.add(page.page_id);
-      state.pendingBoxEdit = null;
-      applyWindowActionResponse(page, win, resp);
-      renderAllSessionUI();
-    } catch (err) {
-      alert('Ошибка сохранения правки: ' + err.message);
+      if (resp) applyWindowActionResponse(page, win, resp);
     } finally {
       state.actionPending = false;
-      renderNavigationControls();
-      loadAndDrawCurrentWindowCanvas();
     }
+  }
+
+  function afterOperatorImageCommit() {
+    renderAllSessionUI();
+    const win = getCurrentWindow();
+    const noMoreIssues = win && !(win.errors && win.errors.length) && !(win.warnings && win.warnings.length);
+    if (noMoreIssues) {
+      advanceAfterDecision();
+    }
+  }
+
+  function updateImageEditButtons() {
+    const isEd = Boolean(state.operatorEditor && state.operatorEditor.isActive());
+    const editBtn = $('apt-btn-image-edit-mode');
+    const resetBtn = $('apt-btn-reset-window');
+    const insp = $('apt-box-inspector');
+    if (editBtn) editBtn.style.display = isEd ? 'none' : '';
+    if (resetBtn) resetBtn.style.display = isEd ? 'none' : '';
+    if (insp && isEd) insp.style.display = 'none';
+    drawWindowCanvas();
   }
 
   function renderBoxInspector() {
     const box = $('apt-box-inspector');
     if (!box) return;
+    if (state.operatorEditor && state.operatorEditor.isActive()) {
+      box.style.display = 'none';
+      box.innerHTML = '';
+      return;
+    }
     const page = getCurrentPage();
     const win = getCurrentWindow();
     const el = win && state.selectedElementId
-      ? (win.elements || []).find(e => e.id === state.selectedElementId && isElementEditable(e) && (state.imageEditMode || e.source === 'operator'))
+      ? (win.elements || []).find(e => e.id === state.selectedElementId && e.source === 'operator' && isElementEditable(e))
       : null;
 
     if (!el || !page) {
       box.style.display = 'none';
       box.innerHTML = '';
-      return;
-    }
-
-    if (state.imageEditMode) {
-      initPendingBoxEdit(el);
-      const pending = state.pendingBoxEdit;
-      const safeOpts = getSafeOperatorLabels();
-      const isDigit = state.digitLabels.has(pending.newLabel);
-      const coords = pending.newBbox.map(v => Math.round(v)).join(', ');
-
-      box.style.display = 'block';
-      box.innerHTML = `
-        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
-          <div>
-            <span style="font-size:12px; color:var(--text-muted);">Выбранный элемент:</span>
-            <b>${escapeHtml(shortLabel(el))}</b>
-            <span style="font-size:11.5px; color:var(--text-muted); margin-left:6px;">[${escapeHtml(coords)}]</span>
-          </div>
-          <div style="display:flex; gap:6px; flex-wrap:wrap;">
-            <button type="button" class="btn btn-primary btn-sm" id="apt-insp-apply-btn">✅ Применить исправление</button>
-            <button type="button" class="btn btn-outline btn-sm" id="apt-insp-reset-bbox-btn">↺ Сбросить размер</button>
-            <button type="button" class="btn btn-danger btn-sm" id="apt-insp-del-btn">🗑️ Удалить ложную рамку</button>
-            <button type="button" class="btn btn-outline btn-sm" id="apt-insp-close-btn">✕</button>
-          </div>
-        </div>
-        <div class="apt-class-pills" id="apt-insp-class-pills">
-          ${safeOpts.map(lbl => `
-            <button type="button" class="apt-class-pill ${lbl === pending.newLabel ? 'is-selected' : ''}" data-lbl="${escapeHtml(lbl)}">
-              ${escapeHtml(lbl)}
-            </button>
-          `).join('')}
-        </div>
-        ${isDigit ? `
-          <div style="display:flex; align-items:center; gap:8px; margin-top:8px;">
-            <span style="font-size:12px; color:var(--text-muted);">Значение числа (1..99):</span>
-            <input type="number" min="1" max="99" id="apt-insp-digit-val" value="${escapeHtml(pending.newValue ?? '')}" style="width:76px; padding:4px 8px; border:1px solid #93c5fd; border-radius:6px; font-weight:700;">
-          </div>
-        ` : ''}
-      `;
-
-      box.querySelectorAll('.apt-class-pill').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const lbl = btn.getAttribute('data-lbl');
-          if (!lbl || !state.pendingBoxEdit) return;
-          state.pendingBoxEdit.newLabel = lbl;
-          if (!state.digitLabels.has(lbl)) state.pendingBoxEdit.newValue = null;
-          drawWindowCanvas();
-          renderBoxInspector();
-        });
-      });
-
-      $('apt-insp-digit-val')?.addEventListener('input', e => {
-        if (state.pendingBoxEdit) {
-          state.pendingBoxEdit.newValue = e.target.value;
-        }
-      });
-
-      $('apt-insp-apply-btn')?.addEventListener('click', applyPendingBoxEdit);
-
-      $('apt-insp-reset-bbox-btn')?.addEventListener('click', () => {
-        if (!state.pendingBoxEdit) return;
-        state.pendingBoxEdit.newBbox = [...state.pendingBoxEdit.origBbox];
-        drawWindowCanvas();
-        renderBoxInspector();
-      });
-
-      $('apt-insp-close-btn')?.addEventListener('click', () => {
-        state.selectedElementId = null;
-        state.pendingBoxEdit = null;
-        drawWindowCanvas();
-        renderBoxInspector();
-      });
-
-      $('apt-insp-del-btn')?.addEventListener('click', () => {
-        if (page.page_id) state.manualMarkupPages.add(page.page_id);
-        state.pendingBoxEdit = null;
-        sendWindowAction({ action: 'delete_box', element_id: el.id });
-      });
       return;
     }
 
@@ -2412,7 +2155,7 @@
     }
 
     state.qLoading = true;
-    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; padding:24px; color:var(--text-muted);">Загрузка очереди дообучения...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:24px; color:var(--text-muted);">Загрузка очереди дообучения...</td></tr>';
 
     try {
       const data = await apiJson(`/api/ml/admin/quarantine?status=${encodeURIComponent(state.qStatusFilter)}`);
@@ -2428,7 +2171,7 @@
       }
 
       if (state.qItems.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; padding:26px; color:var(--text-muted);">В выбранном статусе записей пока нет.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:26px; color:var(--text-muted);">В выбранном статусе записей пока нет.</td></tr>';
         return;
       }
 
@@ -2439,7 +2182,6 @@
       };
 
       tbody.innerHTML = state.qItems.map(item => {
-        const dc = item.diff_counts || {};
         const invOk = Boolean(item.invariant_passed);
         const isManualMarkup = String(item.comment || '').includes('[РУЧНАЯ ПРАВКА]') || !invOk;
         const submitter = escapeHtml(item.submitted_by_name || item.submitted_by || '—');
@@ -2458,13 +2200,7 @@
               <div><b>${submitter}</b></div>
               <div style="font-size:11.5px; color:var(--text-muted); font-family:ui-monospace, monospace;">${escapeHtml(item.submitted_by || '')}</div>
             </td>
-            <td>${escapeHtml(String(item.submitted_at || '').replace('T', ' '))}</td>
-            <td>
-              <span class="apt-diff-pill apt-diff-add" title="Добавлено">+${Number(dc.added || 0)}</span>
-              <span class="apt-diff-pill apt-diff-del" title="Удалено">-${Number(dc.deleted || 0)}</span>
-              <span class="apt-diff-pill apt-diff-rel" title="Сменён класс">~${Number(dc.relabeled || 0)}</span>
-              <span class="apt-diff-pill apt-diff-dig" title="Исправлено цифр">#${Number(dc.digit_fixed || 0)}</span>
-            </td>
+            <td>${escapeHtml(formatSessionDate(item.submitted_at))}</td>
             <td>
               ${manualBadge}
               <div>
@@ -2489,7 +2225,7 @@
         });
       });
     } catch (err) {
-      tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; padding:24px; color:var(--error);">Ошибка: ${escapeHtml(err.message)}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; padding:24px; color:var(--error);">Ошибка: ${escapeHtml(err.message)}</td></tr>`;
     } finally {
       state.qLoading = false;
     }
@@ -2741,6 +2477,32 @@
     setupDialogPolyfill();
     setupCanvasInteractions();
 
+    state.operatorEditor = window.AptBoxEditor ? window.AptBoxEditor.create({
+      canvas: $('apt-window-canvas'),
+      panel: $('apt-image-edit-panel'),
+      getContext: () => {
+        const page = getCurrentPage();
+        const win = getCurrentWindow();
+        if (!page || !win || !state.currentWindowImg) return null;
+        return {
+          image: state.currentWindowImg,
+          cropRect: win.crop_rect || [0, 0, state.currentWindowImg.naturalWidth, state.currentWindowImg.naturalHeight],
+          windowBbox: win.bbox || null,
+          returnSplitY: win.return_split_y ?? null,
+          pageWidth: page.width || 10000,
+          pageHeight: page.height || 10000,
+          elements: win.elements || [],
+        };
+      },
+      getAddableLabels: getSafeOperatorLabels,
+      digitLabels: state.digitLabels,
+      isEditable: isElementEditable,
+      escapeHtml,
+      onCommit: commitOperatorImageEdits,
+      onAfterCommit: afterOperatorImageCommit,
+      onStateChange: updateImageEditButtons,
+    }) : null;
+
     const pdfInp = $('apt-pdf-input');
     const dropEmpty = $('apt-pdf-dropzone');
     const dropLoaded = $('apt-pdf-loaded');
@@ -2835,15 +2597,11 @@
     $('aptFullPageCloseFooterBtn')?.addEventListener('click', () => $('aptFullPageDialog')?.close());
 
     $('apt-btn-reset-window')?.addEventListener('click', () => sendWindowAction({ action: 'reset_window' }));
-    $('apt-btn-image-edit-mode')?.addEventListener('click', toggleImageEditMode);
-    $('apt-image-edit-exit-btn')?.addEventListener('click', () => {
-      exitImageEditMode();
-      drawWindowCanvas();
+    $('apt-btn-image-edit-mode')?.addEventListener('click', () => {
+      cancelDrawMode();
+      state.selectedElementId = null;
       renderBoxInspector();
-    });
-    $('apt-image-edit-add-btn')?.addEventListener('click', () => {
-      const lbl = $('apt-image-edit-add-sel')?.value || getSafeOperatorLabels()[0];
-      if (lbl) startDrawMode(lbl);
+      state.operatorEditor?.activate();
     });
     $('apt-draw-cancel-btn')?.addEventListener('click', cancelDrawMode);
 
@@ -2908,7 +2666,13 @@
     refreshQuarantineBadge,
 
     isBusy() {
-      if (state.uploading || state.actionPending || state.pollTimer !== null || state.drawMode !== null) {
+      if (
+        state.uploading
+        || state.actionPending
+        || state.pollTimer !== null
+        || state.drawMode !== null
+        || (state.operatorEditor && state.operatorEditor.isActive())
+      ) {
         return true;
       }
       if ($('aptQuarantineDialog')?.open || $('aptFullPageDialog')?.open) {
@@ -2922,16 +2686,8 @@
     },
 
     onLogout() {
-      stopPolling();
-      cancelDrawMode();
-      exitImageEditMode();
-      state.manualMarkupPages.clear();
-      state.activeSessionId = null;
-      state.session = null;
+      resetWorkspaceView();
       state.qActiveItem = null;
-      state.currentWindowImg = null;
-      state.currentWindowImgKey = null;
-      revokeUrlPool(state.operatorUrls);
       revokeUrlPool(state.quarantineUrls);
       if (state.fullPageUrl) {
         try { URL.revokeObjectURL(state.fullPageUrl); } catch (_) {}
@@ -2939,10 +2695,6 @@
       }
       $('aptFullPageDialog')?.close();
       $('aptQuarantineDialog')?.close();
-      const ws = $('apt-session-workspace');
-      if (ws) ws.style.display = 'none';
-      const pc = $('apt-progress-card');
-      if (pc) pc.style.display = 'none';
     },
   };
 })();
