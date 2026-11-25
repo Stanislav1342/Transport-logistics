@@ -22,6 +22,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -29,7 +30,7 @@ from typing import Any, Callable, Optional
 
 import requests
 from fastapi import APIRouter, HTTPException, Query, Request, status
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 logger = logging.getLogger("server.ml_waybills")
 
@@ -475,10 +476,11 @@ def _upstream_request(
     *,
     params: Optional[dict[str, Any]] = None,
     json_body: Any = None,
-    raw_body: Optional[bytes] = None,
+    raw_body: Any = None,
     headers: Optional[dict[str, str]] = None,
     timeout: float = 30.0,
     include_token: bool = True,
+    stream: bool = False,
 ) -> requests.Response:
     base_url, _, _ = _get_ml_base_url()
     req_headers: dict[str, str] = dict(headers or {})
@@ -487,7 +489,7 @@ def _upstream_request(
         if token:
             req_headers["X-ML-Token"] = token
 
-    if raw_body is not None:
+    if isinstance(raw_body, (bytes, bytearray)) and "Content-Length" not in req_headers:
         req_headers["Content-Length"] = str(len(raw_body))
 
     url = f"{base_url}{path}"
@@ -503,6 +505,7 @@ def _upstream_request(
             headers=req_headers,
             timeout=timeout,
             proxies={"http": None, "https": None},
+            stream=stream,
         )
 
     try:
@@ -528,9 +531,15 @@ def _upstream_request(
         ) from exc
 
     if resp.status_code >= 400:
+        err_detail = _extract_upstream_error(resp)
+        if stream:
+            try:
+                resp.close()
+            except Exception:
+                pass
         raise HTTPException(
             status_code=resp.status_code,
-            detail=_extract_upstream_error(resp),
+            detail=err_detail,
         )
     return resp
 
@@ -581,73 +590,117 @@ def create_ml_router(check_auth_fn: Callable[..., dict[str, Any]]) -> APIRouter:
         check_auth_fn(request, required_section="apt_waybills")
         content_type = (request.headers.get("content-type") or "").lower()
 
-        raw_bytes = b""
         resolved_name = (filename or "").strip()
+        tmp_path: Optional[str] = None
+        raw_bytes: Optional[bytes] = None
+        total_size = 0
 
-        if "multipart/form-data" in content_type:
-            form = await request.form()
-            file_field = form.get("file")
-            if file_field is None or not hasattr(file_field, "read"):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Не передан PDF-файл (поле 'file').",
-                )
-            raw_bytes = await file_field.read()
-            if not resolved_name:
-                resolved_name = str(getattr(file_field, "filename", "") or "waybills.pdf")
-            if "max_pages" in form:
-                try:
-                    max_pages = max(1, min(5000, int(str(form.get("max_pages")))))
-                except ValueError:
-                    pass
-        else:
-            raw_bytes = await request.body()
-            if not resolved_name:
-                resolved_name = "waybills.pdf"
+        try:
+            if "multipart/form-data" in content_type:
+                form = await request.form()
+                file_field = form.get("file")
+                if file_field is None or not hasattr(file_field, "read"):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Не передан PDF-файл (поле 'file').",
+                    )
+                if not resolved_name:
+                    resolved_name = str(getattr(file_field, "filename", "") or "waybills.pdf")
+                if "max_pages" in form:
+                    try:
+                        max_pages = max(1, min(5000, int(str(form.get("max_pages")))))
+                    except ValueError:
+                        pass
 
-        if not raw_bytes:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Загруженный файл пуст.")
-        if len(raw_bytes) > MAX_PDF_UPLOAD_BYTES:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail="Размер PDF превышает допустимый лимит 600 МБ.",
-            )
-        if not raw_bytes.startswith(b"%PDF-"):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Файл должен быть корректным PDF-документом (ожидается заголовок %PDF-).",
-            )
+                tmp_fd, tmp_path = tempfile.mkstemp(prefix="puls_pdf_", suffix=".pdf")
+                os.close(tmp_fd)
+                first_chunk = True
+                with open(tmp_path, "wb") as tmp_out:
+                    while True:
+                        chunk = await file_field.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        if first_chunk:
+                            first_chunk = False
+                            if not chunk.startswith(b"%PDF-"):
+                                raise HTTPException(
+                                    status_code=status.HTTP_400_BAD_REQUEST,
+                                    detail="Файл должен быть корректным PDF-документом (ожидается заголовок %PDF-).",
+                                )
+                        total_size += len(chunk)
+                        if total_size > MAX_PDF_UPLOAD_BYTES:
+                            raise HTTPException(
+                                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                                detail="Размер PDF превышает допустимый лимит 600 МБ.",
+                            )
+                        tmp_out.write(chunk)
 
-        safe_filename = os.path.basename(resolved_name.replace("\\", "/")) or "waybills.pdf"
+                if total_size == 0:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Загруженный файл пуст.")
+            else:
+                raw_bytes = await request.body()
+                if not resolved_name:
+                    resolved_name = "waybills.pdf"
+                total_size = len(raw_bytes)
+                if total_size == 0:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Загруженный файл пуст.")
+                if total_size > MAX_PDF_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail="Размер PDF превышает допустимый лимит 600 МБ.",
+                    )
+                if not raw_bytes.startswith(b"%PDF-"):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Файл должен быть корректным PDF-документом (ожидается заголовок %PDF-).",
+                    )
 
-        def _forward_upload() -> requests.Response:
-            try:
+            safe_filename = os.path.basename(resolved_name.replace("\\", "/")) or "waybills.pdf"
+
+            def _send_with_pages(mp: int) -> requests.Response:
+                headers = {
+                    "Content-Type": "application/pdf",
+                    "Content-Length": str(total_size),
+                }
+                if tmp_path is not None:
+                    with open(tmp_path, "rb") as f_stream:
+                        return _upstream_request(
+                            "POST",
+                            "/api/ml/sessions/upload",
+                            params={"filename": safe_filename, "max_pages": mp},
+                            raw_body=f_stream,
+                            headers=headers,
+                            timeout=300.0,
+                        )
                 return _upstream_request(
                     "POST",
                     "/api/ml/sessions/upload",
-                    params={"filename": safe_filename, "max_pages": max_pages},
+                    params={"filename": safe_filename, "max_pages": mp},
                     raw_body=raw_bytes,
-                    headers={"Content-Type": "application/pdf"},
-                    timeout=180.0,
+                    headers=headers,
+                    timeout=300.0,
                 )
-            except HTTPException as exc:
-                if exc.status_code == 400 and max_pages > 250 and "250" in str(exc.detail):
-                    logger.warning(
-                        "ML-сервис отклонил max_pages=%s (старый лимит 250) — повторяем с max_pages=250.",
-                        max_pages,
-                    )
-                    return _upstream_request(
-                        "POST",
-                        "/api/ml/sessions/upload",
-                        params={"filename": safe_filename, "max_pages": 250},
-                        raw_body=raw_bytes,
-                        headers={"Content-Type": "application/pdf"},
-                        timeout=180.0,
-                    )
-                raise
 
-        resp = await asyncio.to_thread(_forward_upload)
-        return JSONResponse(status_code=resp.status_code, content=resp.json())
+            def _forward_upload() -> requests.Response:
+                try:
+                    return _send_with_pages(max_pages)
+                except HTTPException as exc:
+                    if exc.status_code == 400 and max_pages > 250 and "250" in str(exc.detail):
+                        logger.warning(
+                            "ML-сервис отклонил max_pages=%s (старый лимит 250) — повторяем с max_pages=250.",
+                            max_pages,
+                        )
+                        return _send_with_pages(250)
+                    raise
+
+            resp = await asyncio.to_thread(_forward_upload)
+            return JSONResponse(status_code=resp.status_code, content=resp.json())
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
     @router.get("/api/ml/sessions/{session_id}/status")
     def ml_session_status(request: Request, session_id: str):
@@ -660,7 +713,7 @@ def create_ml_router(check_auth_fn: Callable[..., dict[str, Any]]) -> APIRouter:
     def ml_get_session(request: Request, session_id: str):
         check_auth_fn(request, required_section="apt_waybills")
         sid = _validate_id(session_id, "session_id")
-        resp = _upstream_request("GET", f"/api/ml/sessions/{sid}", timeout=30.0)
+        resp = _upstream_request("GET", f"/api/ml/sessions/{sid}", timeout=90.0)
         return JSONResponse(status_code=resp.status_code, content=resp.json())
 
     @router.get("/api/ml/sessions/{session_id}/report")
@@ -697,15 +750,31 @@ def create_ml_router(check_auth_fn: Callable[..., dict[str, Any]]) -> APIRouter:
     def ml_download_export_zip(request: Request, session_id: str):
         check_auth_fn(request, required_section="apt_waybills")
         sid = _validate_id(session_id, "session_id")
-        resp = _upstream_request("GET", f"/api/ml/sessions/{sid}/export-zip", timeout=300.0)
+        resp = _upstream_request("GET", f"/api/ml/sessions/{sid}/export-zip", timeout=300.0, stream=True)
         cd = _safe_content_disposition(resp.headers.get("Content-Disposition"), f"waybills_{sid}.zip")
-        return Response(
-            content=resp.content,
+        headers = {
+            "Content-Disposition": cd,
+            "Cache-Control": "no-store",
+        }
+        cl = resp.headers.get("Content-Length")
+        if cl:
+            headers["Content-Length"] = cl
+
+        def _stream_chunks():
+            try:
+                for chunk in resp.iter_content(chunk_size=65536):
+                    if chunk:
+                        yield chunk
+            finally:
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+
+        return StreamingResponse(
+            _stream_chunks(),
             media_type="application/zip",
-            headers={
-                "Content-Disposition": cd,
-                "Cache-Control": "no-store",
-            },
+            headers=headers,
         )
 
     @router.post("/api/ml/sessions/{session_id}/finalize")
@@ -732,7 +801,7 @@ def create_ml_router(check_auth_fn: Callable[..., dict[str, Any]]) -> APIRouter:
 
             # Fallback для старой версии review_service.py без /finalize:
             # отправляем в карантин только страницы с правками оператора, где не осталось ошибок.
-            sess_resp = _upstream_request("GET", f"/api/ml/sessions/{sid}", timeout=30.0)
+            sess_resp = _upstream_request("GET", f"/api/ml/sessions/{sid}", timeout=90.0)
             sess_data = sess_resp.json()
             submitted_pages = 0
             submitted_crops = 0
@@ -743,11 +812,16 @@ def create_ml_router(check_auth_fn: Callable[..., dict[str, Any]]) -> APIRouter:
                     continue
                 windows = page.get("windows") or []
                 has_diff = any(
-                    (w.get("original_elements") or []) != (w.get("elements") or [])
+                    (
+                        (w.get("original_elements") is not None and (w.get("original_elements") or []) != (w.get("elements") or []))
+                        or w.get("review_status") in ("fixed_clean", "fixed_with_errors")
+                        or any(e.get("source") == "operator" for e in (w.get("elements") or []))
+                    )
                     for w in windows
                 )
-                all_clean = all(not (w.get("errors") or []) for w in windows)
-                if has_diff and all_clean and page.get("page_id"):
+                has_dismissed = any(w.get("review_status") == "dismissed_clean" for w in windows)
+                all_clean = all(not (w.get("errors") or []) and not (w.get("warnings") or []) for w in windows)
+                if has_diff and not has_dismissed and all_clean and page.get("page_id"):
                     sub_resp = _upstream_request(
                         "POST",
                         f"/api/ml/sessions/{sid}/pages/{page['page_id']}/submit-quarantine",

@@ -37,7 +37,7 @@
     'Исправление',
   ];
 
-  const STAGE_ORDER = { render: 1, detect: 2, analyze: 3, done: 4 };
+  const STAGE_ORDER = { queued: 0, init: 1, render: 1, detect: 2, analyze: 3, done: 4 };
 
   const state = {
     initialized: false,
@@ -185,19 +185,27 @@
 
   function hasWindowDiff(win) {
     if (!win) return false;
-    const orig = win.original_elements || [];
-    const curr = win.elements || [];
-    if (orig.length !== curr.length) return true;
-    const origMap = new Map(orig.map(e => [e.id, e]));
-    for (const el of curr) {
-      const o = origMap.get(el.id);
-      if (!o) return true;
-      if (o.label !== el.label) return true;
-      if (state.digitLabels.has(el.label) && (o.ocr_value ?? null) !== (el.ocr_value ?? null)) {
-        return true;
+    if (Array.isArray(win.original_elements)) {
+      const orig = win.original_elements;
+      const curr = win.elements || [];
+      if (orig.length !== curr.length) return true;
+      const origMap = new Map(orig.map(e => [e.id, e]));
+      for (const el of curr) {
+        const o = origMap.get(el.id);
+        if (!o) return true;
+        if (o.label !== el.label) return true;
+        if (state.digitLabels.has(el.label) && (o.ocr_value ?? null) !== (el.ocr_value ?? null)) {
+          return true;
+        }
       }
+      return false;
     }
-    return false;
+    // review_service.py v1.1.0 не отдаёт original_elements в JSON сессии
+    return (
+      win.review_status === 'fixed_clean'
+      || win.review_status === 'fixed_with_errors'
+      || (win.elements || []).some(e => e.source === 'operator')
+    );
   }
 
   function hasPageChanges(page) {
@@ -207,7 +215,11 @@
 
   function pageHasErrors(page) {
     if (!page) return false;
-    return (page.windows || []).some(w => (w.errors && w.errors.length > 0) || (w.warnings && w.warnings.length > 0));
+    return (page.windows || []).some(
+      w => (w.errors && w.errors.length > 0)
+        || (w.warnings && w.warnings.length > 0)
+        || (w.original_errors && w.original_errors.length > 0)
+    );
   }
 
   function pageHasPendingErrors(page) {
@@ -392,6 +404,7 @@
     const tot = statusData.total_pages ?? 0;
     const stageLabels = {
       queued: 'Постановка в очередь...',
+      init: 'Инициализация и загрузка моделей...',
       render: 'Рендер страниц PDF...',
       detect: 'Детекция окон, печатей и подписей...',
       analyze: 'OCR и проверка правил окон...',
@@ -558,6 +571,7 @@
       { label: 'С ошибками (модель)', value: s.error_pages ?? 0, cls: 'is-danger' },
       { label: 'Ожидают проверки', value: s.pending_pages ?? 0, cls: (s.pending_pages ?? 0) > 0 ? 'is-danger' : 'is-success' },
       { label: 'Подтверждено ошибок', value: s.confirmed_error_pages ?? 0, cls: '' },
+      { label: 'Принято (ошибки нет)', value: s.dismissed_clean_pages ?? 0, cls: 'is-success' },
       { label: 'Исправлено в норму', value: s.fixed_clean_pages ?? 0, cls: 'is-success' },
       { label: 'В дообучении', value: s.quarantined_pages ?? 0, cls: 'is-primary' },
     ];
@@ -825,7 +839,12 @@
     }
 
     if (resetBtn) {
-      const dirty = hasWindowDiff(win) || ((win.review_meta && win.review_meta.actions_count) > 0) || win.review_status === 'confirmed_error';
+      const dirty = (
+        hasWindowDiff(win)
+        || ((win.review_meta && win.review_meta.actions_count) > 0)
+        || win.review_status === 'confirmed_error'
+        || win.review_status === 'dismissed_clean'
+      );
       resetBtn.disabled = !dirty || state.actionPending;
     }
 
@@ -1133,25 +1152,36 @@
       let x2 = Math.min(page.width || 10000, Math.round(m.cx1 + (rx + rw) / m.scaleX));
       let y2 = Math.min(page.height || 10000, Math.round(m.cy1 + (ry + rh) / m.scaleY));
 
-      // Жёсткое ограничение рамки границами текущего окна аптеки (допуск ±25 px)
-      if (Array.isArray(win.bbox) && win.bbox.length === 4) {
-        const [wx1, wy1, wx2, wy2] = win.bbox;
-        const pad = 25;
-        x1 = Math.max(Math.max(0, wx1 - pad), x1);
-        y1 = Math.max(Math.max(0, wy1 - pad), y1);
-        x2 = Math.min(wx2 + pad, x2);
-        y2 = Math.min(wy2 + pad, y2);
-        const winArea = Math.max(1, (wx2 - wx1) * (wy2 - wy1));
-        const boxArea = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
-        if (boxArea > winArea * 0.85) {
-          alert('Нельзя обвести почти всё окно целиком. Выделите только конкретный пропущенный элемент.');
-          return;
-        }
-      }
-
       if (x2 - x1 < 14 || y2 - y1 < 14) {
         alert('Выделенная область слишком маленькая (минимум 14×14 пикселей). Протяните рамку чуть крупнее.');
         return;
+      }
+
+      // Синхронизация валидации габаритов с review_service.py v1.1.0
+      if (Array.isArray(win.bbox) && win.bbox.length === 4) {
+        const [wx1, wy1, wx2, wy2] = win.bbox;
+        const winW = Math.max(1, wx2 - wx1);
+        const winH = Math.max(1, wy2 - wy1);
+        const winArea = winW * winH;
+        const bw = x2 - x1;
+        const bh = y2 - y1;
+        const boxArea = bw * bh;
+        const cx = (x1 + x2) / 2;
+        const cy = (y1 + y2) / 2;
+
+        if (cx < wx1 - 45 || cx > wx2 + 45 || cy < wy1 - 45 || cy > wy2 + 45) {
+          alert('Центр новой рамки должен находиться в пределах текущего окна аптеки.');
+          return;
+        }
+        if (state.digitLabels.has(targetLabel)) {
+          if (bw > winW * 0.35 || bh > winH * 0.65 || boxArea > winArea * 0.15) {
+            alert('Рамка цифры слишком велика (допустимо до 15% площади и 35% ширины окна).');
+            return;
+          }
+        } else if (bw > winW * 0.65 || bh > winH * 1.15 || boxArea > winArea * 0.55) {
+          alert('Рамка слишком велика для элемента окна (допустимо до 55% площади и 65% ширины окна).');
+          return;
+        }
       }
 
       const body = {
@@ -1160,9 +1190,15 @@
         bbox: [x1, y1, x2, y2],
       };
       if (state.digitLabels.has(targetLabel)) {
-        const parsed = parseInt(optionalDigitRaw, 10);
+        let digitInput = optionalDigitRaw;
+        if (!digitInput) {
+          const prompted = prompt('Введите целое число от 1 до 99 для выделенной цифры:', '');
+          if (prompted === null) return;
+          digitInput = prompted.trim();
+        }
+        const parsed = parseInt(digitInput, 10);
         if (!Number.isInteger(parsed) || parsed < 1 || parsed > 99) {
-          alert('Для добавления цифры обязательно укажите целое число от 1 до 99 в поле над снимком.');
+          alert('Укажите целое число от 1 до 99.');
           return;
         }
         body.new_value = parsed;
@@ -1297,12 +1333,23 @@
     if (win.review_status === 'dismissed_clean') {
       banner.style.display = 'block';
       banner.className = 'apt-win-status-banner is-clean';
+      const origList = (win.original_errors || []);
+      const origHtml = origList.length > 0
+        ? `<div style="margin-top:6px; font-size:12px; font-weight:500; color:#334155;">Исходные замечания модели: ${origList.map(e => escapeHtml(e)).join('; ')}</div>`
+        : '';
       banner.innerHTML = `
         <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
-          <div><b>Отмечено: ошибки нет</b> — окно попадёт в отчёт и архив как валидное (без отправки в дообучение).</div>
-          <button type="button" class="btn btn-outline btn-sm" id="apt-banner-reset-decision-btn">Изменить решение</button>
+          <div>
+            <b>Отмечено: ошибки нет</b> — окно попадёт в отчёт и архив как валидное (без отправки в дообучение).
+            ${origHtml}
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button type="button" class="btn btn-outline btn-sm" id="apt-banner-confirm-err-btn" style="border-color:#fca5a5; color:#991b1b;">Реальная ошибка</button>
+            <button type="button" class="btn btn-outline btn-sm" id="apt-banner-reset-decision-btn">Вернуть замечания</button>
+          </div>
         </div>
       `;
+      $('apt-banner-confirm-err-btn')?.addEventListener('click', () => sendWindowAction({ action: 'confirm_real_error', comment: '' }, { autoAdvanceAlways: true }));
       $('apt-banner-reset-decision-btn')?.addEventListener('click', () => sendWindowAction({ action: 'reset_window' }));
     } else if (win.review_status === 'confirmed_error') {
       banner.style.display = 'block';
@@ -1662,11 +1709,16 @@
       await loadFullSession(state.activeSessionId);
       refreshQuarantineBadge();
       if (finBanner) {
-        const subPages = Number(res.submitted_pages || res.quarantined_pages || 0);
+        const subPages = Number(res.submitted_pages || res.auto_quarantined_pages || res.quarantined_pages || 0);
+        const validWb = res.valid_waybills;
+        const errWb = res.error_waybills;
+        const wbPart = (validWb !== undefined && errWb !== undefined)
+          ? ` Валидных МЛ: ${validWb}, на доработку: ${errWb}.`
+          : '';
         finBanner.style.display = 'block';
         finBanner.textContent = subPages > 0
-          ? `Проверка завершена. Отчёт и архив МЛ готовы к скачиванию; в очередь дообучения передано страниц: ${subPages}.`
-          : 'Проверка завершена. Итоговый отчёт (.txt) и архив МЛ (.zip) готовы к скачиванию.';
+          ? `Проверка завершена.${wbPart} Отчёт (.txt) и архив МЛ (.zip) готовы к скачиванию; в очередь дообучения передано страниц: ${subPages}.`
+          : `Проверка завершена.${wbPart} Итоговый отчёт (.txt) и архив МЛ (.zip) готовы к скачиванию.`;
       }
     } catch (err) {
       alert('Ошибка завершения проверки: ' + err.message);
