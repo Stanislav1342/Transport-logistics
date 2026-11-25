@@ -751,16 +751,14 @@ def create_ml_router(check_auth_fn: Callable[..., dict[str, Any]]) -> APIRouter:
         resp = _upstream_request("GET", "/api/ml/sessions", params={"limit": limit}, timeout=15.0)
         return JSONResponse(status_code=resp.status_code, content=resp.json())
 
-    @router.post("/api/ml/sessions/upload")
-    async def ml_upload_pdf(
+    async def _read_pdf_from_request(
         request: Request,
-        filename: Optional[str] = Query(None),
-        max_pages: int = Query(3500, ge=1, le=5000),
-    ):
-        check_auth_fn(request, required_section="apt_waybills")
+        filename: Optional[str] = None,
+        default_max_pages: int = 3500,
+    ) -> tuple[Optional[str], Optional[bytes], int, str, int]:
         content_type = (request.headers.get("content-type") or "").lower()
-
         resolved_name = (filename or "").strip()
+        max_pages = default_max_pages
         tmp_path: Optional[str] = None
         raw_bytes: Optional[bytes] = None
         total_size = 0
@@ -824,43 +822,82 @@ def create_ml_router(check_auth_fn: Callable[..., dict[str, Any]]) -> APIRouter:
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="Файл должен быть корректным PDF-документом (ожидается заголовок %PDF-).",
                     )
+        except Exception:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+            raise
 
-            safe_filename = os.path.basename(resolved_name.replace("\\", "/")) or "waybills.pdf"
+        safe_filename = os.path.basename(resolved_name.replace("\\", "/")) or "waybills.pdf"
+        return tmp_path, raw_bytes, total_size, safe_filename, max_pages
 
-            def _send_with_pages(mp: int) -> requests.Response:
-                headers = {
-                    "Content-Type": "application/pdf",
-                    "Content-Length": str(total_size),
-                }
-                if tmp_path is not None:
-                    with open(tmp_path, "rb") as f_stream:
-                        return _upstream_request(
-                            "POST",
-                            "/api/ml/sessions/upload",
-                            params={"filename": safe_filename, "max_pages": mp},
-                            raw_body=f_stream,
-                            headers=headers,
-                            timeout=300.0,
-                        )
+    def _forward_pdf_to(
+        upstream_path: str,
+        params: dict[str, Any],
+        tmp_path: Optional[str],
+        raw_bytes: Optional[bytes],
+        total_size: int,
+    ) -> requests.Response:
+        headers = {
+            "Content-Type": "application/pdf",
+            "Content-Length": str(total_size),
+        }
+        if tmp_path is not None:
+            with open(tmp_path, "rb") as f_stream:
                 return _upstream_request(
                     "POST",
-                    "/api/ml/sessions/upload",
-                    params={"filename": safe_filename, "max_pages": mp},
-                    raw_body=raw_bytes,
+                    upstream_path,
+                    params=params,
+                    raw_body=f_stream,
                     headers=headers,
                     timeout=300.0,
                 )
+        return _upstream_request(
+            "POST",
+            upstream_path,
+            params=params,
+            raw_body=raw_bytes,
+            headers=headers,
+            timeout=300.0,
+        )
+
+    @router.post("/api/ml/sessions/upload")
+    async def ml_upload_pdf(
+        request: Request,
+        filename: Optional[str] = Query(None),
+        max_pages: int = Query(3500, ge=1, le=5000),
+    ):
+        check_auth_fn(request, required_section="apt_waybills")
+        tmp_path: Optional[str] = None
+        try:
+            tmp_path, raw_bytes, total_size, safe_filename, max_pages = await _read_pdf_from_request(
+                request, filename=filename, default_max_pages=max_pages
+            )
 
             def _forward_upload() -> requests.Response:
                 try:
-                    return _send_with_pages(max_pages)
+                    return _forward_pdf_to(
+                        "/api/ml/sessions/upload",
+                        {"filename": safe_filename, "max_pages": max_pages},
+                        tmp_path,
+                        raw_bytes,
+                        total_size,
+                    )
                 except HTTPException as exc:
                     if exc.status_code == 400 and max_pages > 250 and "250" in str(exc.detail):
                         logger.warning(
                             "ML-сервис отклонил max_pages=%s (старый лимит 250) — повторяем с max_pages=250.",
                             max_pages,
                         )
-                        return _send_with_pages(250)
+                        return _forward_pdf_to(
+                            "/api/ml/sessions/upload",
+                            {"filename": safe_filename, "max_pages": 250},
+                            tmp_path,
+                            raw_bytes,
+                            total_size,
+                        )
                     raise
 
             resp = await asyncio.to_thread(_forward_upload)
@@ -871,6 +908,92 @@ def create_ml_router(check_auth_fn: Callable[..., dict[str, Any]]) -> APIRouter:
                     os.unlink(tmp_path)
                 except OSError:
                     pass
+
+    @router.post("/api/ml/sessions/batch")
+    async def ml_create_batch_session(request: Request):
+        user = check_auth_fn(request, required_section="apt_waybills")
+        payload = await _parse_json_object(request, allow_empty=False)
+        files_total = payload.get("files_total")
+        if not isinstance(files_total, int) or isinstance(files_total, bool) or not (2 <= files_total <= 50):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Поле 'files_total' должно быть целым числом от 2 до 50.",
+            )
+        max_pages_raw = payload.get("max_pages", 3500)
+        if not isinstance(max_pages_raw, int) or isinstance(max_pages_raw, bool) or not (1 <= max_pages_raw <= 5000):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Поле 'max_pages' должно быть целым числом от 1 до 5000.",
+            )
+        upstream_payload = {
+            "files_total": files_total,
+            "max_pages": max_pages_raw,
+            "user": user["login"],
+            "user_name": user.get("full_name") or user["login"],
+        }
+        try:
+            resp = await asyncio.to_thread(
+                _upstream_request,
+                "POST",
+                "/api/ml/sessions/batch",
+                json_body=upstream_payload,
+                timeout=30.0,
+            )
+        except HTTPException as exc:
+            detail_low = str(exc.detail).lower()
+            if exc.status_code == 404 and ("маршрут" in detail_low or "unknown" in detail_low):
+                raise HTTPException(
+                    status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                    detail="Загрузка нескольких файлов поддерживается после обновления ML-модуля (review_service.py v1.3.0).",
+                ) from exc
+            raise
+        return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+    @router.post("/api/ml/sessions/{session_id}/files")
+    async def ml_upload_batch_file(
+        request: Request,
+        session_id: str,
+        filename: Optional[str] = Query(None),
+    ):
+        check_auth_fn(request, required_section="apt_waybills")
+        sid = _validate_id(session_id, "session_id")
+        tmp_path: Optional[str] = None
+        try:
+            tmp_path, raw_bytes, total_size, safe_filename, _ = await _read_pdf_from_request(
+                request, filename=filename
+            )
+            resp = await asyncio.to_thread(
+                _forward_pdf_to,
+                f"/api/ml/sessions/{sid}/files",
+                {"filename": safe_filename},
+                tmp_path,
+                raw_bytes,
+                total_size,
+            )
+            return JSONResponse(status_code=resp.status_code, content=resp.json())
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+    @router.post("/api/ml/sessions/{session_id}/start")
+    async def ml_start_batch_session(request: Request, session_id: str):
+        user = check_auth_fn(request, required_section="apt_waybills")
+        sid = _validate_id(session_id, "session_id")
+        upstream_payload = {
+            "user": user["login"],
+            "user_name": user.get("full_name") or user["login"],
+        }
+        resp = await asyncio.to_thread(
+            _upstream_request,
+            "POST",
+            f"/api/ml/sessions/{sid}/start",
+            json_body=upstream_payload,
+            timeout=30.0,
+        )
+        return JSONResponse(status_code=resp.status_code, content=resp.json())
 
     @router.get("/api/ml/sessions/{session_id}/status")
     def ml_session_status(request: Request, session_id: str):

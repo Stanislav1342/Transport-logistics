@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Стили раздела «АПТ → Маршрутные листы» и админ-очереди дообучения (v2.4)
+   Стили раздела «АПТ → Маршрутные листы» и админ-очереди дообучения (v2.5)
    Совместимы с корпоративной палитрой «ПУЛЬС — Транспортная логистика».
    ========================================================================== */
 
@@ -817,6 +817,62 @@ dialog.apt-dialog::backdrop {
   flex-wrap: wrap;
   padding-top: 10px;
   border-top: 1px solid var(--border-light);
+}
+
+/* ─── Список нескольких PDF на вход (v2.5) ─── */
+.apt-file-list {
+  list-style: none;
+  margin: 4px 0 6px;
+  padding: 0;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.apt-file-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border-light);
+  font-size: 13px;
+}
+
+.apt-file-row:last-child {
+  border-bottom: none;
+}
+
+.apt-file-row-name {
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apt-file-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.apt-file-remove-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.apt-file-remove-btn:hover {
+  color: var(--error);
+  background: #fee2e2;
 }
 
 .apt-class-pills {

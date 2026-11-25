@@ -45,7 +45,7 @@
     digitLabels: new Set(DEFAULT_DIGIT_LABELS),
     operatorAddLabels: [...DEFAULT_OPERATOR_LABELS],
     editableLabels: new Set(QUICK_RELABEL_ORDER),
-    selectedFile: null,
+    selectedFiles: [],
     uploading: false,
     actionPending: false,
     pollTimer: null,
@@ -369,35 +369,90 @@
     const loadedBox = $('apt-pdf-loaded');
     const startBtn = $('apt-start-check-btn');
     const clearBtn = $('apt-pdf-clear');
+    const statusEl = $('apt-pdf-status');
+    const listEl = $('apt-pdf-list');
+    const sizeEl = $('apt-pdf-size');
     if (!emptyBox || !loadedBox || !startBtn) return;
 
-    if (!state.selectedFile) {
+    if (!state.selectedFiles || state.selectedFiles.length === 0) {
       emptyBox.hidden = false;
       loadedBox.hidden = true;
       startBtn.disabled = true;
       if (clearBtn) clearBtn.disabled = false;
+      if (listEl) listEl.innerHTML = '';
       return;
     }
 
     emptyBox.hidden = true;
     loadedBox.hidden = false;
-    $('apt-pdf-name').textContent = state.selectedFile.name;
-    $('apt-pdf-size').textContent = formatBytes(state.selectedFile.size);
+    const totalBytes = state.selectedFiles.reduce((acc, f) => acc + (f.size || 0), 0);
+    if (statusEl) {
+      statusEl.textContent = state.selectedFiles.length === 1
+        ? 'PDF-файл выбран'
+        : `Выбрано PDF-файлов: ${state.selectedFiles.length}`;
+    }
+    if (sizeEl) {
+      sizeEl.textContent = state.selectedFiles.length === 1
+        ? formatBytes(totalBytes)
+        : `Всего: ${formatBytes(totalBytes)}`;
+    }
+    if (listEl) {
+      listEl.innerHTML = state.selectedFiles.map((f, idx) => `
+        <li class="apt-file-row">
+          <span class="apt-file-row-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
+          <span class="apt-file-row-meta">
+            <span>${escapeHtml(formatBytes(f.size))}</span>
+            <button type="button" class="apt-file-remove-btn" data-file-idx="${idx}" aria-label="Убрать файл ${escapeHtml(f.name)}" title="Убрать файл" ${state.uploading ? 'disabled' : ''}>&times;</button>
+          </span>
+        </li>
+      `).join('');
+      listEl.querySelectorAll('.apt-file-remove-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          if (state.uploading) return;
+          const idx = Number(btn.getAttribute('data-file-idx'));
+          if (Number.isInteger(idx) && idx >= 0 && idx < state.selectedFiles.length) {
+            state.selectedFiles.splice(idx, 1);
+            if (state.selectedFiles.length === 0) {
+              clearSelectedPdf();
+            } else {
+              updateDropzoneUI();
+            }
+          }
+        });
+      });
+    }
     startBtn.disabled = state.uploading;
     if (clearBtn) clearBtn.disabled = state.uploading;
   }
 
-  function handlePdfFileSelect(file) {
-    if (!file) return;
-    if (!file.name.toLowerCase().endsWith('.pdf')) {
-      alert('Пожалуйста, выберите файл в формате PDF.');
-      return;
+  function handlePdfFilesSelect(fileList) {
+    const incoming = Array.from(fileList || []);
+    if (incoming.length === 0) return;
+
+    const existingKeys = new Set(
+      state.selectedFiles.map(f => `${f.name}:${f.size}:${f.lastModified}`)
+    );
+    for (const file of incoming) {
+      if (!file.name.toLowerCase().endsWith('.pdf')) {
+        alert(`Файл «${file.name}» не является PDF.`);
+        continue;
+      }
+      if (file.size > 600 * 1024 * 1024) {
+        alert(`Файл «${file.name}» превышает максимальный размер 600 МБ.`);
+        continue;
+      }
+      if (state.selectedFiles.length >= 50) {
+        alert('Можно добавить не более 50 PDF-файлов за одну проверку.');
+        break;
+      }
+      const key = `${file.name}:${file.size}:${file.lastModified}`;
+      if (!existingKeys.has(key)) {
+        existingKeys.add(key);
+        state.selectedFiles.push(file);
+      }
     }
-    if (file.size > 600 * 1024 * 1024) {
-      alert('Файл превышает максимальный размер 600 МБ.');
-      return;
-    }
-    state.selectedFile = file;
+    const inp = $('apt-pdf-input');
+    if (inp) inp.value = '';
     updateDropzoneUI();
   }
 
@@ -433,7 +488,7 @@
 
   function clearSelectedPdf() {
     if (state.uploading) return;
-    state.selectedFile = null;
+    state.selectedFiles = [];
     const inp = $('apt-pdf-input');
     if (inp) inp.value = '';
     updateDropzoneUI();
@@ -483,8 +538,12 @@
     };
     const txt = $('apt-progress-text');
     if (txt) {
+      const filesTot = Number(statusData.files_total || 0);
+      const filePrefix = filesTot > 1
+        ? `Файл ${statusData.current_file_idx || 1} из ${filesTot}${statusData.current_filename ? ` (${statusData.current_filename})` : ''} · `
+        : '';
       const pagePart = tot > 0 ? ` (${proc} из ${tot} стр.)` : '';
-      txt.textContent = `${stageLabels[stage] || stage}${pagePart} — ${pct}%`;
+      txt.textContent = `${filePrefix}${stageLabels[stage] || stage}${pagePart} — ${pct}%`;
     }
 
     const errBox = $('apt-progress-error');
@@ -499,7 +558,7 @@
   }
 
   async function startPdfCheck() {
-    if (!state.selectedFile || state.uploading) return;
+    if (!state.selectedFiles.length || state.uploading) return;
     stopPolling();
     state.uploading = true;
     updateDropzoneUI();
@@ -514,13 +573,42 @@
     }
 
     try {
-      const fd = new FormData();
-      fd.append('file', state.selectedFile, state.selectedFile.name);
-
-      const res = await apiJson(
-        `/api/ml/sessions/upload?filename=${encodeURIComponent(state.selectedFile.name)}`,
-        { method: 'POST', body: fd }
-      );
+      let res;
+      if (state.selectedFiles.length === 1) {
+        const file = state.selectedFiles[0];
+        const fd = new FormData();
+        fd.append('file', file, file.name);
+        res = await apiJson(
+          `/api/ml/sessions/upload?filename=${encodeURIComponent(file.name)}`,
+          { method: 'POST', body: fd }
+        );
+      } else {
+        const batchRes = await apiJson('/api/ml/sessions/batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ files_total: state.selectedFiles.length }),
+        });
+        const sid = batchRes.session_id;
+        for (let i = 0; i < state.selectedFiles.length; i++) {
+          const f = state.selectedFiles[i];
+          if (startBtn) {
+            startBtn.textContent = `Загрузка файла ${i + 1} из ${state.selectedFiles.length}...`;
+          }
+          const fd = new FormData();
+          fd.append('file', f, f.name);
+          await apiJson(
+            `/api/ml/sessions/${encodeURIComponent(sid)}/files?filename=${encodeURIComponent(f.name)}`,
+            { method: 'POST', body: fd }
+          );
+        }
+        if (startBtn) startBtn.textContent = 'Запуск проверки...';
+        res = await apiJson(`/api/ml/sessions/${encodeURIComponent(sid)}/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        if (!res.session_id) res.session_id = sid;
+      }
 
       state.activeSessionId = res.session_id;
       renderProgress(res);
@@ -2753,7 +2841,7 @@
     const dropLoaded = $('apt-pdf-loaded');
 
     pdfInp?.addEventListener('change', e => {
-      if (e.target.files?.[0]) handlePdfFileSelect(e.target.files[0]);
+      if (e.target.files?.length) handlePdfFilesSelect(e.target.files);
     });
 
     [dropEmpty, dropLoaded].forEach(zone => {
@@ -2766,7 +2854,7 @@
       zone.addEventListener('drop', e => {
         e.preventDefault();
         zone.classList.remove('dragover');
-        if (e.dataTransfer?.files?.[0]) handlePdfFileSelect(e.dataTransfer.files[0]);
+        if (e.dataTransfer?.files?.length) handlePdfFilesSelect(e.dataTransfer.files);
       });
     });
 

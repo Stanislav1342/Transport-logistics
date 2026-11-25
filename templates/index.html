@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ПУЛЬС — Транспортная логистика</title>
-  <link rel="stylesheet" href="/static/apt_waybills.css?v=2.4">
+  <link rel="stylesheet" href="/static/apt_waybills.css?v=2.5">
   <style>
     :root {
       --primary: #174ea6;
@@ -1109,7 +1109,7 @@
             <p>Единый корпоративный портал автоматизации транспортной логистики ФК «ПУЛЬС» (РЦ Черная Грязь)</p>
           </div>
           <span class="badge" id="portal-version-badge">
-            <span class="badge-dot"></span> Версия 2.4
+            <span class="badge-dot"></span> Версия 2.5
           </span>
         </div>
 
@@ -1711,7 +1711,7 @@
         <div class="card">
           <div class="card-title">1. Загрузка пачки маршрутных листов (PDF)</div>
           <div class="dropzone-wrapper" id="apt-pdf-dropzone-wrapper">
-            <input type="file" id="apt-pdf-input" class="visually-hidden" accept=".pdf,application/pdf">
+            <input type="file" id="apt-pdf-input" class="visually-hidden" accept=".pdf,application/pdf" multiple>
             <label for="apt-pdf-input" class="dropzone" id="apt-pdf-dropzone">
               <div class="dropzone-icon-wrap" aria-hidden="true">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -1720,8 +1720,8 @@
                   <line x1="12" y1="3" x2="12" y2="15"></line>
                 </svg>
               </div>
-              <div class="dropzone-text">Перетащите PDF с маршрутными листами сюда или нажмите для выбора</div>
-              <div class="dropzone-subtext">Поддерживаются многостраничные сканы PDF до 600 МБ</div>
+              <div class="dropzone-text">Перетащите один или несколько PDF с маршрутными листами сюда или нажмите для выбора</div>
+              <div class="dropzone-subtext">Поддерживаются многостраничные сканы PDF (до 600 МБ каждый)</div>
             </label>
             <div class="dropzone-loaded" id="apt-pdf-loaded" hidden>
               <div class="dropzone-file-badge" aria-hidden="true">
@@ -1732,15 +1732,15 @@
                 <span class="dropzone-file-ext">PDF</span>
               </div>
               <div class="dropzone-file-info">
-                <div class="dropzone-file-status">PDF-файл выбран</div>
-                <div class="dropzone-file-name" id="apt-pdf-name">—</div>
+                <div class="dropzone-file-status" id="apt-pdf-status">PDF-файл выбран</div>
+                <ul class="apt-file-list" id="apt-pdf-list"></ul>
                 <div class="dropzone-file-meta">
                   <span class="dropzone-file-chip" id="apt-pdf-size">—</span>
                 </div>
               </div>
               <div class="dropzone-actions">
-                <label for="apt-pdf-input" class="btn btn-outline dropzone-replace-btn" id="apt-pdf-replace">Заменить файл</label>
-                <button type="button" class="dropzone-clear-btn" id="apt-pdf-clear" title="Убрать файл" aria-label="Убрать файл">&times;</button>
+                <label for="apt-pdf-input" class="btn btn-outline dropzone-replace-btn" id="apt-pdf-replace">Добавить файлы</label>
+                <button type="button" class="dropzone-clear-btn" id="apt-pdf-clear" title="Убрать все файлы" aria-label="Убрать все файлы">&times;</button>
               </div>
             </div>
           </div>
@@ -2307,7 +2307,7 @@
     function getClientPortalVersion() {
       const badge = document.getElementById('portal-version-badge');
       const m = (badge?.textContent || '').match(/(\d+\.\d+(?:\.\d+)?)/);
-      return m ? m[1] : '2.4';
+      return m ? m[1] : '2.5';
     }
 
     function isPortalBusy() {
@@ -4439,7 +4439,7 @@
       }
     }
   </script>
-  <script src="/static/apt_box_editor.js?v=2.4"></script>
-  <script src="/static/apt_waybills.js?v=2.4"></script>
+  <script src="/static/apt_box_editor.js?v=2.5"></script>
+  <script src="/static/apt_waybills.js?v=2.5"></script>
 </body>
 </html>
