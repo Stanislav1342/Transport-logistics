@@ -977,7 +977,24 @@ def create_ml_router(check_auth_fn: Callable[..., dict[str, Any]]) -> APIRouter:
         payload["user"] = user["login"]
         payload["user_name"] = user.get("full_name") or user["login"]
 
+        raw_manual_ids = payload.get("manual_markup_page_ids")
+        manual_page_ids: list[str] = []
+        if isinstance(raw_manual_ids, list):
+            seen_manual: set[str] = set()
+            for item in raw_manual_ids:
+                if item is None:
+                    continue
+                pid = _validate_id(str(item), "page_id")
+                if pid not in seen_manual:
+                    seen_manual.add(pid)
+                    manual_page_ids.append(pid)
+        if manual_page_ids:
+            payload["manual_markup_page_ids"] = manual_page_ids
+        else:
+            payload.pop("manual_markup_page_ids", None)
+
         def _do_finalize() -> dict[str, Any]:
+            result: dict[str, Any]
             try:
                 resp = _upstream_request(
                     "POST",
@@ -985,57 +1002,107 @@ def create_ml_router(check_auth_fn: Callable[..., dict[str, Any]]) -> APIRouter:
                     json_body=payload,
                     timeout=120.0,
                 )
-                return resp.json()
+                result = resp.json()
             except HTTPException as exc:
                 if exc.status_code != 404:
                     raise
 
-            # Fallback для старой версии review_service.py без /finalize:
-            # отправляем в карантин только страницы с правками оператора, где не осталось ошибок.
-            sess_resp = _upstream_request("GET", f"/api/ml/sessions/{sid}", timeout=90.0)
-            sess_data = sess_resp.json()
-            submitted_pages = 0
-            submitted_crops = 0
-            last_summary = sess_data.get("summary")
+                # Fallback для старой версии review_service.py без /finalize:
+                # отправляем в карантин только страницы с правками оператора, где не осталось ошибок.
+                sess_resp = _upstream_request("GET", f"/api/ml/sessions/{sid}", timeout=90.0)
+                sess_data = sess_resp.json()
+                submitted_pages = 0
+                submitted_crops = 0
+                last_summary = sess_data.get("summary")
 
-            for page in sess_data.get("pages") or []:
-                if page.get("quarantine_item_id"):
-                    continue
-                windows = page.get("windows") or []
-                has_diff = any(
-                    (
-                        (w.get("original_elements") is not None and (w.get("original_elements") or []) != (w.get("elements") or []))
-                        or w.get("review_status") in ("fixed_clean", "fixed_with_errors")
-                        or any(e.get("source") == "operator" for e in (w.get("elements") or []))
+                for page in sess_data.get("pages") or []:
+                    if page.get("quarantine_item_id"):
+                        continue
+                    windows = page.get("windows") or []
+                    has_diff = any(
+                        (
+                            (w.get("original_elements") is not None and (w.get("original_elements") or []) != (w.get("elements") or []))
+                            or w.get("review_status") in ("fixed_clean", "fixed_with_errors")
+                            or any(e.get("source") == "operator" for e in (w.get("elements") or []))
+                        )
+                        for w in windows
                     )
-                    for w in windows
-                )
-                has_dismissed = any(w.get("review_status") == "dismissed_clean" for w in windows)
-                all_clean = all(not (w.get("errors") or []) and not (w.get("warnings") or []) for w in windows)
-                if has_diff and not has_dismissed and all_clean and page.get("page_id"):
-                    sub_resp = _upstream_request(
-                        "POST",
-                        f"/api/ml/sessions/{sid}/pages/{page['page_id']}/submit-quarantine",
-                        json_body={
-                            "user": payload["user"],
-                            "user_name": payload["user_name"],
-                            "comment": payload.get("comment") or "",
-                        },
-                        timeout=30.0,
-                    )
-                    sub_json = sub_resp.json()
-                    submitted_pages += 1
-                    submitted_crops += int(sub_json.get("digit_crops_count") or 0)
-                    if sub_json.get("session_summary"):
-                        last_summary = sub_json["session_summary"]
+                    has_dismissed = any(w.get("review_status") == "dismissed_clean" for w in windows)
+                    all_clean = all(not (w.get("errors") or []) and not (w.get("warnings") or []) for w in windows)
+                    if has_diff and not has_dismissed and all_clean and page.get("page_id"):
+                        sub_resp = _upstream_request(
+                            "POST",
+                            f"/api/ml/sessions/{sid}/pages/{page['page_id']}/submit-quarantine",
+                            json_body={
+                                "user": payload["user"],
+                                "user_name": payload["user_name"],
+                                "comment": payload.get("comment") or "",
+                            },
+                            timeout=30.0,
+                        )
+                        sub_json = sub_resp.json()
+                        submitted_pages += 1
+                        submitted_crops += int(sub_json.get("digit_crops_count") or 0)
+                        if sub_json.get("session_summary"):
+                            last_summary = sub_json["session_summary"]
 
-            return {
-                "status": "finalized",
-                "fallback": True,
-                "submitted_pages": submitted_pages,
-                "submitted_crops": submitted_crops,
-                "session_summary": last_summary,
-            }
+                result = {
+                    "status": "finalized",
+                    "fallback": True,
+                    "submitted_pages": submitted_pages,
+                    "submitted_crops": submitted_crops,
+                    "session_summary": last_summary,
+                }
+
+            # Гарантируем попадание страниц с ручной правкой класса/рамки в очередь дообучения,
+            # даже если окно осталось со статусом confirmed_error (например: Печать -> Плохая печать).
+            if manual_page_ids:
+                sess_resp = _upstream_request("GET", f"/api/ml/sessions/{sid}", timeout=90.0)
+                sess_data = sess_resp.json()
+                manual_set = set(manual_page_ids)
+                extra_pages = 0
+                extra_crops = 0
+                last_summary = result.get("session_summary") or sess_data.get("summary")
+
+                for page in sess_data.get("pages") or []:
+                    pid = page.get("page_id")
+                    if not pid or pid not in manual_set or page.get("quarantine_item_id"):
+                        continue
+                    windows = page.get("windows") or []
+                    has_dismissed = any(w.get("review_status") == "dismissed_clean" for w in windows)
+                    has_unresolved = any(w.get("review_status") in ("pending", "fixed_with_errors") for w in windows)
+                    if has_dismissed or has_unresolved:
+                        continue
+                    try:
+                        sub_resp = _upstream_request(
+                            "POST",
+                            f"/api/ml/sessions/{sid}/pages/{pid}/submit-quarantine",
+                            json_body={
+                                "user": payload["user"],
+                                "user_name": payload["user_name"],
+                                "comment": "[РУЧНАЯ ПРАВКА] Ручное исправление класса/рамки на изображении",
+                            },
+                            timeout=30.0,
+                        )
+                        sub_json = sub_resp.json()
+                        extra_pages += 1
+                        extra_crops += int(sub_json.get("digit_crops_count") or 0)
+                        if sub_json.get("session_summary"):
+                            last_summary = sub_json["session_summary"]
+                    except HTTPException as sub_exc:
+                        if sub_exc.status_code == 400:
+                            continue
+                        raise
+
+                if extra_pages > 0:
+                    base_pages = int(result.get("submitted_pages") or result.get("auto_quarantined_pages") or result.get("quarantined_pages") or 0)
+                    base_crops = int(result.get("submitted_crops") or 0)
+                    result["submitted_pages"] = base_pages + extra_pages
+                    result["submitted_crops"] = base_crops + extra_crops
+                    if last_summary is not None:
+                        result["session_summary"] = last_summary
+
+            return result
 
         data = await asyncio.to_thread(_do_finalize)
         return JSONResponse(status_code=200, content=data)

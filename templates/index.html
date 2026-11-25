@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ПУЛЬС — Транспортная логистика</title>
-  <link rel="stylesheet" href="/static/apt_waybills.css?v=2.1">
+  <link rel="stylesheet" href="/static/apt_waybills.css?v=2.2">
   <style>
     :root {
       --primary: #174ea6;
@@ -1109,7 +1109,7 @@
             <p>Единый корпоративный портал автоматизации транспортной логистики ФК «ПУЛЬС» (РЦ Черная Грязь)</p>
           </div>
           <span class="badge" id="portal-version-badge">
-            <span class="badge-dot"></span> Версия 2.1
+            <span class="badge-dot"></span> Версия 2.2
           </span>
         </div>
 
@@ -1828,6 +1828,19 @@
                 </div>
               </div>
 
+              <div class="apt-image-edit-banner" id="apt-image-edit-banner" style="display: none;">
+                <div>
+                  <b>Режим правки разметки (Ошибка на изображении)</b> — нажмите на любую рамку на фото, чтобы сменить класс (например, «Печать» → «Плохая печать»), перетащить или изменить размер за уголки.
+                </div>
+                <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                  <select class="apt-select" id="apt-image-edit-add-sel" style="max-width:195px; font-size:12px; padding:4px 8px;"></select>
+                  <button type="button" class="btn btn-primary btn-sm" id="apt-image-edit-add-btn">➕ Добавить рамку</button>
+                  <button type="button" class="btn btn-outline btn-sm" id="apt-image-edit-exit-btn">Готово</button>
+                </div>
+              </div>
+
+              <div class="apt-box-inspector" id="apt-box-inspector" style="display: none;"></div>
+
               <div class="apt-canvas-stage" id="apt-canvas-stage">
                 <canvas id="apt-window-canvas"></canvas>
               </div>
@@ -1839,10 +1852,11 @@
                   <span class="apt-legend-item"><span class="apt-legend-swatch" style="border-color:#0284c7; background:rgba(2,132,199,0.15);"></span> Правка оператора</span>
                   <span class="apt-legend-item"><span class="apt-legend-swatch" style="border-color:#64748b; border-style:dashed;"></span> Защищённый слой</span>
                 </div>
-                <button type="button" class="btn btn-outline btn-sm" id="apt-btn-reset-window" disabled>Сбросить правки окна</button>
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                  <button type="button" class="btn btn-outline btn-sm apt-btn-image-edit" id="apt-btn-image-edit-mode">✏️ Ошибка на изображении</button>
+                  <button type="button" class="btn btn-outline btn-sm" id="apt-btn-reset-window" disabled>Сбросить правки окна</button>
+                </div>
               </div>
-
-              <div class="apt-box-inspector" id="apt-box-inspector" style="display: none;"></div>
             </div>
           </div>
         </div>
@@ -1906,7 +1920,7 @@
                     <th>Сотрудник</th>
                     <th>Отправлено</th>
                     <th>Правки (+ / - / ~ / #)</th>
-                    <th>Бизнес-правила</th>
+                    <th>Тип правки / Статус окна</th>
                     <th>Кропы цифр</th>
                     <th>Действие</th>
                   </tr>
@@ -2293,7 +2307,7 @@
     function getClientPortalVersion() {
       const badge = document.getElementById('portal-version-badge');
       const m = (badge?.textContent || '').match(/(\d+\.\d+(?:\.\d+)?)/);
-      return m ? m[1] : '2.1';
+      return m ? m[1] : '2.2';
     }
 
     function isPortalBusy() {
@@ -4425,6 +4439,6 @@
       }
     }
   </script>
-  <script src="/static/apt_waybills.js?v=2.1"></script>
+  <script src="/static/apt_waybills.js?v=2.2"></script>
 </body>
 </html>

@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Стили раздела «АПТ → Маршрутные листы» и админ-очереди дообучения (v2.1)
+   Стили раздела «АПТ → Маршрутные листы» и админ-очереди дообучения (v2.2)
    Совместимы с корпоративной палитрой «ПУЛЬС — Транспортная логистика».
    ========================================================================== */
 
@@ -774,4 +774,72 @@ dialog.apt-dialog::backdrop {
   border-radius: 6px;
   background: #fff;
   border: 1px solid var(--border-light);
+}
+
+/* ─── Режим правки класса и размера рамки (v2.2: «Ошибка на изображении») ─── */
+.apt-btn-image-edit.is-active {
+  background: #eff6ff;
+  border-color: #2563eb;
+  color: #1d4ed8;
+  font-weight: 700;
+}
+
+.apt-image-edit-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #eff6ff;
+  border: 1px solid #93c5fd;
+  color: #1e3a8a;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.apt-class-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.apt-class-pill {
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #ffffff;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.apt-class-pill:hover {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.apt-class-pill.is-selected {
+  background: #2563eb;
+  border-color: #1d4ed8;
+  color: #ffffff;
+}
+
+.apt-manual-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fcd34d;
+  margin-bottom: 4px;
 }
