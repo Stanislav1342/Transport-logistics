@@ -49,3 +49,7 @@ AGENTS.md
 *.docx
 contacts_*.json
 carriers_contacts.json
+
+# Локальный контекст агентов (содержит локальные пути)
+GEMINI.md
+STATE.md

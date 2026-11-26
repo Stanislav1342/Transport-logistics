@@ -75,6 +75,7 @@
       onCommit,
       onAfterCommit,
       onStateChange,
+      isBoxesHidden,
       commitLabel = '✅ Завершить правку снимка',
     } = opts;
 
@@ -203,6 +204,10 @@
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0);
 
+      if (typeof isBoxesHidden === 'function' && isBoxesHidden() && !(drag && drag.mode === 'draw')) {
+        return;
+      }
+
       const m = getMetrics(ctxObj);
 
       if (ctxObj.returnSplitY !== null && ctxObj.returnSplitY !== undefined) {
@@ -329,30 +334,33 @@
             Обведите на снимке рамку «${escapeHtml(addLabel)}» (Esc — отмена)
           </div>
         `;
-      } else if (menu === 'add') {
-        subHtml = `
-          <div class="apt-class-pills">
-            ${labels.map(l => `
-              <button type="button" class="apt-class-pill" data-ed-act="pick-add" data-lbl="${escapeHtml(l)}">${escapeHtml(l)}</button>
-            `).join('')}
-          </div>
-        `;
-      } else if (menu === 'relabel' && sel) {
-        const relabelOpts = labels.filter(l => l !== sel.label);
-        subHtml = `
-          <div class="apt-class-pills">
-            ${relabelOpts.map(l => `
-              <button type="button" class="apt-class-pill" data-ed-act="pick-relabel" data-lbl="${escapeHtml(l)}">${escapeHtml(l)}</button>
-            `).join('')}
-          </div>
-        `;
       }
+
+      const relabelOpts = sel ? labels.filter(l => l !== sel.label) : [];
 
       panel.innerHTML = `
         <div class="apt-edit-row">
-          <button type="button" class="btn btn-outline btn-sm" data-ed-act="toggle-add" ${busy ? 'disabled' : ''}>➕ Добавить рамку</button>
+          <div class="apt-edit-dropdown-wrap">
+            <button type="button" class="btn btn-outline btn-sm" data-ed-act="toggle-add" ${busy ? 'disabled' : ''}>➕ Добавить рамку</button>
+            ${menu === 'add' ? `
+              <div class="apt-class-menu" role="menu">
+                ${labels.map(l => `
+                  <button type="button" class="apt-class-menu-item" role="menuitem" data-ed-act="pick-add" data-lbl="${escapeHtml(l)}">${escapeHtml(l)}</button>
+                `).join('')}
+              </div>
+            ` : ''}
+          </div>
           ${sel ? `
-            <button type="button" class="btn btn-outline btn-sm" data-ed-act="toggle-relabel" ${busy ? 'disabled' : ''}>🏷️ Изменить класс</button>
+            <div class="apt-edit-dropdown-wrap">
+              <button type="button" class="btn btn-outline btn-sm" data-ed-act="toggle-relabel" ${busy ? 'disabled' : ''}>🏷️ Изменить класс</button>
+              ${menu === 'relabel' ? `
+                <div class="apt-class-menu" role="menu">
+                  ${relabelOpts.map(l => `
+                    <button type="button" class="apt-class-menu-item" role="menuitem" data-ed-act="pick-relabel" data-lbl="${escapeHtml(l)}">${escapeHtml(l)}</button>
+                  `).join('')}
+                </div>
+              ` : ''}
+            </div>
             <button type="button" class="btn btn-danger btn-sm" data-ed-act="delete-sel" ${busy ? 'disabled' : ''}>🗑️ Удалить рамку</button>
             ${isDigitSel ? `
               <label style="display:inline-flex; align-items:center; gap:6px; font-size:12.5px; font-weight:600;">
@@ -628,14 +636,24 @@
 
     if (typeof document !== 'undefined') {
       document.addEventListener('keydown', evt => {
-        if (!active || evt.key !== 'Escape') return;
-        if (addLabel || menu || selectedId) {
-          evt.preventDefault();
-          addLabel = null;
-          menu = null;
-          selectedId = null;
-          renderPanel();
-          draw();
+        if (!active) return;
+        if (evt.key === 'Escape') {
+          if (addLabel || menu || selectedId) {
+            evt.preventDefault();
+            addLabel = null;
+            menu = null;
+            selectedId = null;
+            renderPanel();
+            draw();
+          }
+          return;
+        }
+        if (evt.key === 'Enter' && !busy && hasChanges()) {
+          const tag = (evt.target && evt.target.tagName) || '';
+          if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT' && tag !== 'BUTTON') {
+            evt.preventDefault();
+            commit();
+          }
         }
       });
     }
@@ -644,7 +662,13 @@
       panel.addEventListener('click', evt => {
         if (!active || busy) return;
         const btn = evt.target.closest('[data-ed-act]');
-        if (!btn) return;
+        if (!btn) {
+          if (menu && !evt.target.closest('.apt-edit-dropdown-wrap')) {
+            menu = null;
+            renderPanel();
+          }
+          return;
+        }
         const act = btn.getAttribute('data-ed-act');
         message = '';
 
@@ -698,6 +722,30 @@
         } else if (act === 'commit') {
           commit();
         }
+      });
+
+      panel.addEventListener('keydown', evt => {
+        if (!active || busy || evt.key !== 'Enter') return;
+        const inp = evt.target.closest('[data-ed-act="digit-input"]');
+        if (!inp) return;
+        evt.preventDefault();
+        const sel = findSelected();
+        if (!sel) return;
+        const raw = String(inp.value || '').trim();
+        const parsed = parseInt(raw, 10);
+        if (!Number.isInteger(parsed) || parsed < 1 || parsed > 99) {
+          message = 'Укажите целое число от 1 до 99.';
+          renderPanel();
+          return;
+        }
+        sel.ocr_value = parsed;
+        sel._valueTouched = true;
+        if (sel._state !== 'added') sel._state = 'modified';
+        selectedId = null;
+        menu = null;
+        message = '';
+        renderPanel();
+        draw();
       });
 
       panel.addEventListener('change', evt => {

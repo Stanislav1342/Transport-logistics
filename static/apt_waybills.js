@@ -66,6 +66,9 @@
     operatorEditor: null,
     adminEditor: null,
     reviewAreaForced: false,
+    hideOperatorBoxes: false,
+    qHideBeforeBoxes: false,
+    qHideAfterBoxes: false,
     manualMarkupPages: new Set(), // page_id страниц с ручной правкой класса/рамки
     currentWindowImg: null,
     currentWindowImgKey: null,
@@ -474,11 +477,17 @@
     state.expandedHintKey = null;
     state.windowHistory = [];
     state.manualMarkupPages.clear();
+    state.hideOperatorBoxes = false;
+    updateEyeButton('apt-op-eye-btn', false);
     revokeUrlPool(state.operatorUrls);
     const ws = $('apt-session-workspace');
     if (ws) ws.style.display = 'none';
     const pc = $('apt-progress-card');
     if (pc) pc.style.display = 'none';
+    const repCard = $('apt-report-preview-card');
+    if (repCard) repCard.style.display = 'none';
+    const repBody = $('apt-report-preview-body');
+    if (repBody) repBody.textContent = '';
     const finBanner = $('apt-finalize-banner');
     if (finBanner) {
       finBanner.style.display = 'none';
@@ -708,6 +717,12 @@
     const ws = $('apt-session-workspace');
     if (ws) ws.style.display = 'block';
     renderAllSessionUI();
+    if (state.sessionFinalized) {
+      loadReportPreview(state.activeSessionId);
+    } else {
+      const repCard = $('apt-report-preview-card');
+      if (repCard) repCard.style.display = 'none';
+    }
   }
 
   // ─── Рендер рабочей области оператора ───────────────────────────────
@@ -1148,6 +1163,26 @@
     };
   }
 
+  function updateEyeButton(btnId, hidden) {
+    const btn = $(btnId);
+    if (!btn) return;
+    btn.classList.toggle('is-hidden', Boolean(hidden));
+    btn.setAttribute('aria-pressed', String(Boolean(hidden)));
+    btn.title = hidden ? 'Показать рамки классов' : 'Скрыть рамки классов';
+    btn.textContent = hidden ? '👁️‍🗨️ Скрыты' : '👁️';
+  }
+
+  function getWindowErrorElementIds(win) {
+    const ids = new Set();
+    for (const h of (win?.error_hints || [])) {
+      if (h.kind === 'missing' || h.status === 'confirmed') continue;
+      for (const id of (h.related_element_ids || [])) {
+        ids.add(id);
+      }
+    }
+    return ids;
+  }
+
   function drawWindowCanvas() {
     if (state.operatorEditor && state.operatorEditor.isActive()) {
       state.operatorEditor.draw();
@@ -1166,6 +1201,24 @@
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(img, 0, 0);
+
+    if (state.hideOperatorBoxes) {
+      if (state.drawMode && state.dragState) {
+        const rx = Math.min(state.dragState.startX, state.dragState.currX);
+        const ry = Math.min(state.dragState.startY, state.dragState.currY);
+        const rw = Math.abs(state.dragState.currX - state.dragState.startX);
+        const rh = Math.abs(state.dragState.currY - state.dragState.startY);
+        ctx.save();
+        ctx.fillStyle = 'rgba(2, 132, 199, 0.18)';
+        ctx.fillRect(rx, ry, rw, rh);
+        ctx.strokeStyle = '#0284c7';
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([6, 4]);
+        ctx.strokeRect(rx, ry, rw, rh);
+        ctx.restore();
+      }
+      return;
+    }
 
     const m = getCanvasMetrics(win, canvas);
 
@@ -1198,7 +1251,7 @@
     }
 
     // Элементы внутри окна
-    const hasErr = Boolean((win.errors && win.errors.length) || (win.warnings && win.warnings.length));
+    const errorElIds = getWindowErrorElementIds(win);
     for (const el of (win.elements || [])) {
       const [x1, y1, x2, y2] = el.bbox;
       const drawX = (x1 - m.cx1) * m.scaleX;
@@ -1216,15 +1269,12 @@
       if (!editable) {
         stroke = 'rgba(100, 116, 139, 0.7)';
         fill = 'rgba(100, 116, 139, 0.04)';
-      } else if (isHighlighted || (hasErr && el.label === 'Плохая печать')) {
+      } else if (isHighlighted || errorElIds.has(el.id)) {
         stroke = '#dc2626';
         fill = 'rgba(220, 38, 38, 0.16)';
       } else if (el.source === 'operator') {
         stroke = '#0284c7';
         fill = 'rgba(2, 132, 199, 0.14)';
-      } else if (hasErr && state.digitLabels.has(el.label)) {
-        stroke = '#dc2626';
-        fill = 'rgba(220, 38, 38, 0.12)';
       }
 
       ctx.save();
@@ -1321,12 +1371,6 @@
     if (banner) {
       banner.style.display = 'flex';
       $('apt-draw-label-name').textContent = label;
-      const digitWrap = $('apt-draw-digit-wrap');
-      const digitInp = $('apt-draw-digit-val');
-      if (digitWrap && digitInp) {
-        digitWrap.style.display = state.digitLabels.has(label) ? 'inline-flex' : 'none';
-        digitInp.value = '';
-      }
     }
     drawWindowCanvas();
   }
@@ -1403,7 +1447,6 @@
       const page = getCurrentPage();
       const drag = state.dragState;
       const targetLabel = state.drawMode.label;
-      const optionalDigitRaw = ($('apt-draw-digit-val')?.value || '').trim();
 
       try {
         canvas.releasePointerCapture(evt.pointerId);
@@ -1435,20 +1478,6 @@
         new_label: targetLabel,
         bbox: [x1, y1, x2, y2],
       };
-      if (state.digitLabels.has(targetLabel)) {
-        let digitInput = optionalDigitRaw;
-        if (!digitInput) {
-          const prompted = prompt('Введите целое число от 1 до 99 для выделенной цифры:', '');
-          if (prompted === null) return;
-          digitInput = prompted.trim();
-        }
-        const parsed = parseInt(digitInput, 10);
-        if (!Number.isInteger(parsed) || parsed < 1 || parsed > 99) {
-          alert('Укажите целое число от 1 до 99.');
-          return;
-        }
-        body.new_value = parsed;
-      }
       await sendWindowAction(body, { autoAdvanceIfClean: true });
     };
 
@@ -1511,11 +1540,55 @@
 
       const updatedWin = resp.window || getCurrentWindow();
       const noMoreIssues = updatedWin && !(updatedWin.errors && updatedWin.errors.length) && !(updatedWin.warnings && updatedWin.warnings.length);
-      if (options.autoAdvanceAlways || (options.autoAdvanceIfClean && noMoreIssues)) {
+      const isResolved = updatedWin && !['pending', 'fixed_with_errors'].includes(updatedWin.review_status);
+      if (options.autoAdvanceAlways || (options.autoAdvanceIfResolved && isResolved) || (options.autoAdvanceIfClean && noMoreIssues)) {
         advanceAfterDecision();
       }
     } catch (err) {
       alert('Ошибка действия: ' + err.message);
+    } finally {
+      state.actionPending = false;
+      renderNavigationControls();
+      loadAndDrawCurrentWindowCanvas();
+    }
+  }
+
+  async function sendBatchDigitEdits(edits) {
+    if (!confirmLeaveImageEdit()) return;
+    const page = getCurrentPage();
+    const win = getCurrentWindow();
+    if (!state.activeSessionId || !page || !win || state.actionPending || !edits.length) return;
+
+    state.actionPending = true;
+    const url = `/api/ml/sessions/${encodeURIComponent(state.activeSessionId)}/pages/${encodeURIComponent(page.page_id)}/windows/${win.window_idx}/action`;
+    const postAction = body => apiJson(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    try {
+      let resp;
+      try {
+        resp = await postAction({ action: 'batch_edit', edits });
+      } catch (err) {
+        const msg = String(err?.message || '');
+        if (!msg.includes('Неизвестное действие') && !msg.includes('batch_edit')) {
+          throw err;
+        }
+        for (const edit of edits) {
+          resp = await postAction(edit);
+        }
+      }
+      if (resp) applyWindowActionResponse(page, win, resp);
+      renderAllSessionUI();
+      const updatedWin = (resp && resp.window) || getCurrentWindow();
+      const noMoreIssues = updatedWin && !(updatedWin.errors && updatedWin.errors.length) && !(updatedWin.warnings && updatedWin.warnings.length);
+      if (noMoreIssues) {
+        advanceAfterDecision();
+      }
+    } catch (err) {
+      alert('Ошибка сохранения цифр: ' + err.message);
     } finally {
       state.actionPending = false;
       renderNavigationControls();
@@ -1726,13 +1799,18 @@
     list.innerHTML = hints.map((hint, idx) => {
       const hintKey = `${win.window_idx}:${idx}:${hint.code}`;
       const isExpanded = state.expandedHintKey === hintKey;
+      const isConfirmed = hint.status === 'confirmed'
+        || (Array.isArray(win.confirmed_errors) && win.confirmed_errors.some(ce => ce === hint.raw_error || ce.endsWith(hint.message)));
       return `
-        <div class="apt-hint-card" data-hint-idx="${idx}" data-hint-key="${escapeHtml(hintKey)}">
+        <div class="apt-hint-card ${isConfirmed ? 'is-confirmed' : ''}" data-hint-idx="${idx}" data-hint-key="${escapeHtml(hintKey)}">
           <div class="apt-hint-title">${idx + 1}. ${escapeHtml(hint.message)}</div>
-          <div class="apt-hint-primary-actions">
-            <button type="button" class="btn btn-outline btn-sm apt-btn-real-err" style="border-color:#fca5a5; color:#991b1b;">
-              Реальная ошибка
-            </button>
+          ${isConfirmed ? `<div style="font-size:12px; font-weight:700; color:#166534; margin-bottom:8px;">✓ Подтверждена как реальная ошибка</div>` : ''}
+          <div class="apt-hint-primary-actions" ${isConfirmed ? 'style="grid-template-columns: repeat(2, minmax(160px, 1fr));"' : ''}>
+            ${isConfirmed ? '' : `
+              <button type="button" class="btn btn-outline btn-sm apt-btn-real-err" style="border-color:#fca5a5; color:#991b1b;">
+                Реальная ошибка
+              </button>
+            `}
             <button type="button" class="btn btn-outline btn-sm apt-btn-no-err" style="border-color:#86efac; color:#166534;">
               Ошибки нет
             </button>
@@ -1760,11 +1838,26 @@
       });
 
       card.querySelector('.apt-btn-real-err')?.addEventListener('click', () => {
-        sendWindowAction({ action: 'confirm_real_error', comment: '' }, { autoAdvanceAlways: true });
+        sendWindowAction(
+          {
+            action: 'confirm_real_error',
+            comment: '',
+            error_message: hint.raw_error || hint.message,
+            error_index: idx,
+          },
+          { autoAdvanceIfResolved: true }
+        );
       });
 
       card.querySelector('.apt-btn-no-err')?.addEventListener('click', () => {
-        sendWindowAction({ action: 'mark_valid' }, { autoAdvanceAlways: true });
+        sendWindowAction(
+          {
+            action: 'mark_valid',
+            error_message: hint.raw_error || hint.message,
+            error_index: idx,
+          },
+          { autoAdvanceIfResolved: true }
+        );
       });
 
       card.querySelector('.apt-btn-model-fix')?.addEventListener('click', () => {
@@ -1855,8 +1948,7 @@
               </div>
               <div style="font-size:11.5px; font-weight:600;">Какое число на самом деле? (1..99)</div>
               <div class="apt-digit-input-row">
-                <input type="number" min="1" max="99" class="apt-digit-input apt-fix-val-inp" value="${escapeHtml(el.ocr_value ?? '')}">
-                <button type="button" class="btn btn-primary btn-sm apt-fix-save-btn">OK</button>
+                <input type="number" min="1" max="99" class="apt-digit-input apt-fix-val-inp" data-orig-val="${escapeHtml(el.ocr_value ?? '')}" value="${escapeHtml(el.ocr_value ?? '')}">
               </div>
               <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;">
                 <button type="button" class="btn btn-danger btn-sm apt-del-digit-btn" style="padding:5px 8px; font-size:11.5px;">Это не цифра — удалить</button>
@@ -1866,7 +1958,37 @@
             </div>
           `).join('')}
         </div>
+        <div style="display:flex; justify-content:flex-end; margin-top:10px;">
+          <button type="button" class="btn btn-primary btn-sm apt-fix-apply-all-btn">✅ Применить значения (Enter)</button>
+        </div>
       `;
+
+      const applyAllDigitFixes = () => {
+        const edits = [];
+        for (const card of drawer.querySelectorAll('.apt-crop-card')) {
+          const eid = card.getAttribute('data-el-id');
+          const inp = card.querySelector('.apt-fix-val-inp');
+          if (!inp) continue;
+          const origRaw = String(inp.getAttribute('data-orig-val') || '').trim();
+          const curRaw = String(inp.value || '').trim();
+          if (curRaw !== origRaw && curRaw !== '') {
+            const val = parseInt(curRaw, 10);
+            if (!Number.isInteger(val) || val < 1 || val > 99) {
+              alert('Укажите целое число от 1 до 99.');
+              inp.focus();
+              return;
+            }
+            edits.push({ action: 'fix_digit', element_id: eid, new_value: val });
+          }
+        }
+        if (edits.length === 0) {
+          alert('Измените хотя бы одно значение цифры перед подтверждением.');
+          return;
+        }
+        sendBatchDigitEdits(edits);
+      };
+
+      drawer.querySelector('.apt-fix-apply-all-btn')?.addEventListener('click', applyAllDigitFixes);
 
       drawer.querySelectorAll('.apt-crop-card').forEach(card => {
         const eid = card.getAttribute('data-el-id');
@@ -1878,13 +2000,11 @@
           })
           .catch(() => {});
 
-        card.querySelector('.apt-fix-save-btn')?.addEventListener('click', () => {
-          const val = parseInt(card.querySelector('.apt-fix-val-inp')?.value || '', 10);
-          if (!Number.isInteger(val) || val < 1 || val > 99) {
-            alert('Укажите целое число от 1 до 99.');
-            return;
+        card.querySelector('.apt-fix-val-inp')?.addEventListener('keydown', e => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            applyAllDigitFixes();
           }
-          sendWindowAction({ action: 'fix_digit', element_id: eid, new_value: val }, { autoAdvanceIfClean: true });
         });
         card.querySelector('.apt-del-digit-btn')?.addEventListener('click', () => {
           sendWindowAction({ action: 'delete_box', element_id: eid }, { autoAdvanceIfClean: true });
@@ -1910,8 +2030,7 @@
               <div style="font-size:12px; font-weight:700;">Рукописная #${i + 1} (${escapeHtml(el.ocr_value ?? '?')})</div>
               <div class="apt-crop-img-wrap"><img alt="Кроп цифры" class="apt-crop-thumb"></div>
               <div class="apt-digit-input-row">
-                <input type="number" min="1" max="99" class="apt-digit-input apt-fix-val-inp" value="${escapeHtml(el.ocr_value ?? '')}">
-                <button type="button" class="btn btn-primary btn-sm apt-fix-save-btn">Исправить</button>
+                <input type="number" min="1" max="99" class="apt-digit-input apt-fix-val-inp" data-orig-val="${escapeHtml(el.ocr_value ?? '')}" value="${escapeHtml(el.ocr_value ?? '')}">
               </div>
               <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;">
                 <button type="button" class="btn btn-danger btn-sm apt-del-digit-btn" style="padding:5px 8px; font-size:11.5px;">Это не цифра — удалить</button>
@@ -1921,8 +2040,38 @@
             </div>
           `).join('')}
         </div>
-        <button type="button" class="btn btn-outline btn-sm" id="apt-twohw-add-stamp">Обвести вторую печать рядом (Печать)</button>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; justify-content:space-between; margin-top:10px;">
+          <button type="button" class="btn btn-outline btn-sm" id="apt-twohw-add-stamp">Обвести вторую печать рядом (Печать)</button>
+          <button type="button" class="btn btn-primary btn-sm apt-fix-apply-all-btn">✅ Применить значения (Enter)</button>
+        </div>
       `;
+
+      const applyAllTwoHwFixes = () => {
+        const edits = [];
+        for (const card of drawer.querySelectorAll('.apt-crop-card')) {
+          const eid = card.getAttribute('data-el-id');
+          const inp = card.querySelector('.apt-fix-val-inp');
+          if (!inp) continue;
+          const origRaw = String(inp.getAttribute('data-orig-val') || '').trim();
+          const curRaw = String(inp.value || '').trim();
+          if (curRaw !== origRaw && curRaw !== '') {
+            const val = parseInt(curRaw, 10);
+            if (!Number.isInteger(val) || val < 1 || val > 99) {
+              alert('Укажите целое число от 1 до 99.');
+              inp.focus();
+              return;
+            }
+            edits.push({ action: 'fix_digit', element_id: eid, new_value: val });
+          }
+        }
+        if (edits.length === 0) {
+          alert('Измените хотя бы одно значение цифры перед подтверждением.');
+          return;
+        }
+        sendBatchDigitEdits(edits);
+      };
+
+      drawer.querySelector('.apt-fix-apply-all-btn')?.addEventListener('click', applyAllTwoHwFixes);
 
       drawer.querySelectorAll('.apt-crop-card').forEach(card => {
         const eid = card.getAttribute('data-el-id');
@@ -1934,13 +2083,11 @@
           })
           .catch(() => {});
 
-        card.querySelector('.apt-fix-save-btn')?.addEventListener('click', () => {
-          const val = parseInt(card.querySelector('.apt-fix-val-inp')?.value || '', 10);
-          if (!Number.isInteger(val) || val < 1 || val > 99) {
-            alert('Укажите целое число от 1 до 99.');
-            return;
+        card.querySelector('.apt-fix-val-inp')?.addEventListener('keydown', e => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            applyAllTwoHwFixes();
           }
-          sendWindowAction({ action: 'fix_digit', element_id: eid, new_value: val }, { autoAdvanceIfClean: true });
         });
         card.querySelector('.apt-del-digit-btn')?.addEventListener('click', () => {
           sendWindowAction({ action: 'delete_box', element_id: eid }, { autoAdvanceIfClean: true });
@@ -2077,6 +2224,7 @@
       state.sessionFinalized = true;
       updateFinalizeAndExportButtons();
       refreshQuarantineBadge();
+      loadReportPreview(state.activeSessionId);
       if (finBanner) {
         const subPages = Number(res.submitted_pages || res.auto_quarantined_pages || res.quarantined_pages || 0);
         const validWb = res.valid_waybills;
@@ -2097,6 +2245,24 @@
         btn.disabled = false;
         btn.textContent = 'Завершить проверку и сформировать отчёт';
       }
+    }
+  }
+
+  async function loadReportPreview(sessionId) {
+    const card = $('apt-report-preview-card');
+    const body = $('apt-report-preview-body');
+    if (!card || !body || !sessionId) return;
+    try {
+      const resp = await fetch(
+        `/api/ml/sessions/${encodeURIComponent(sessionId)}/report`,
+        { headers: authHeaders(), cache: 'no-store' }
+      );
+      if (!resp.ok) return;
+      const text = await resp.text();
+      body.textContent = text;
+      card.style.display = 'block';
+    } catch (_) {
+      // не мешаем основному UI при сетевой ошибке
     }
   }
 
@@ -2338,13 +2504,15 @@
     }
   }
 
-  function drawQuarantineOverlayCanvas(canvas, img, cropRect, elements, origMap, isAfter, returnSplitY = null) {
+  function drawQuarantineOverlayCanvas(canvas, img, cropRect, elements, origMap, isAfter, returnSplitY = null, hideBoxes = false) {
     if (!canvas || !img) return;
     canvas.width = img.naturalWidth;
     canvas.height = img.naturalHeight;
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(img, 0, 0);
+
+    if (hideBoxes) return;
 
     const [cx1, cy1, cx2, cy2] = cropRect;
     const scaleX = canvas.width / Math.max(1, cx2 - cx1);
@@ -2502,13 +2670,13 @@
     const aCanv = $('apt-q-after-canvas');
     const origMap = new Map((w.original_elements || []).map(e => [e.id, e]));
     if (bCanv) {
-      drawQuarantineOverlayCanvas(bCanv, img, w.crop_rect, w.original_elements, null, false, w.return_split_y ?? null);
+      drawQuarantineOverlayCanvas(bCanv, img, w.crop_rect, w.original_elements, null, false, w.return_split_y ?? null, state.qHideBeforeBoxes);
     }
     if (aCanv) {
       if (state.adminEditor && state.adminEditor.isActive()) {
         state.adminEditor.draw();
       } else {
-        drawQuarantineOverlayCanvas(aCanv, img, w.crop_rect, w.edited_elements, origMap, true, w.return_split_y ?? null);
+        drawQuarantineOverlayCanvas(aCanv, img, w.crop_rect, w.edited_elements, origMap, true, w.return_split_y ?? null, state.qHideAfterBoxes);
       }
     }
   }
@@ -2519,10 +2687,10 @@
 
     const metaBox = $('apt-q-review-meta');
     const tabsBox = $('apt-q-window-tabs');
-    const diffBox = $('apt-q-diff-summary');
     const errBox = $('apt-q-after-errors');
     const beforeTitle = $('apt-q-before-title');
     const afterTitle = $('apt-q-after-title');
+    const cropsSection = $('apt-q-crops-section');
     const cropsBox = $('apt-q-crops-row');
     const editBtn = $('apt-q-edit-btn');
     const decisionBar = $('apt-q-decision-bar');
@@ -2569,14 +2737,18 @@
     if (curWin) {
       const diffByWin = new Map((item.window_diffs || []).map(wd => [wd.window_idx, wd.diff]));
       const d = diffByWin.get(curWin.window_idx) || { added: [], deleted: [], relabeled: [], digit_fixed: [] };
-      const summaryParts = [];
-      if (d.added?.length) summaryParts.push(`+добавлено: ${d.added.map(a => escapeHtml(a.label)).join(', ')}`);
-      if (d.deleted?.length) summaryParts.push(`-удалено: ${d.deleted.map(a => escapeHtml(a.label)).join(', ')}`);
-      if (d.relabeled?.length) summaryParts.push(`~класс: ${d.relabeled.map(r => `${escapeHtml(r.from_label)} → ${escapeHtml(r.to_label)}`).join(', ')}`);
-      if (d.digit_fixed?.length) summaryParts.push(`#цифры: ${d.digit_fixed.map(f => `${escapeHtml(f.from_value ?? '?')} → ${escapeHtml(f.to_value)}`).join(', ')}`);
-      if (diffBox) {
-        diffBox.innerHTML = summaryParts.join(' | ') || 'Без изменений элементов';
+      const beforeParts = [];
+      const afterParts = [];
+      if (d.relabeled?.length) {
+        beforeParts.push(`класс: ${d.relabeled.map(r => escapeHtml(r.from_label)).join(', ')}`);
+        afterParts.push(`класс: ${d.relabeled.map(r => `${escapeHtml(r.from_label)} → ${escapeHtml(r.to_label)}`).join(', ')}`);
       }
+      if (d.digit_fixed?.length) {
+        beforeParts.push(`цифра: ${d.digit_fixed.map(f => escapeHtml(f.from_value ?? '?')).join(', ')}`);
+        afterParts.push(`цифра: ${d.digit_fixed.map(f => `${escapeHtml(f.from_value ?? '?')} → ${escapeHtml(f.to_value)}`).join(', ')}`);
+      }
+      if (d.added?.length) afterParts.push(`+добавлено: ${d.added.map(a => escapeHtml(a.label)).join(', ')}`);
+      if (d.deleted?.length) afterParts.push(`-удалено: ${d.deleted.map(a => escapeHtml(a.label)).join(', ')}`);
 
       const errs = curWin.errors || [];
       if (errBox) {
@@ -2589,19 +2761,23 @@
 
       if (beforeTitle) {
         beforeTitle.style.color = '#991b1b';
-        beforeTitle.textContent = `Было (модель) — ошибок: ${(curWin.original_errors || []).length}`;
+        beforeTitle.innerHTML = `Было (модель) — ошибок: ${(curWin.original_errors || []).length}`
+          + (beforeParts.length ? `<span class="apt-q-diff-badge">${beforeParts.join(' · ')}</span>` : '');
       }
       if (afterTitle) {
         afterTitle.style.color = errs.length > 0 ? '#991b1b' : '#166534';
-        afterTitle.textContent = `Стало — ошибок: ${errs.length}`;
+        afterTitle.innerHTML = `Стало — ошибок: ${errs.length}`
+          + (afterParts.length ? `<span class="apt-q-diff-badge">${afterParts.join(' · ')}</span>` : '');
       }
     }
 
     if (cropsBox) {
-      const crops = item.digit_crops || [];
+      const crops = (item.digit_crops || []).filter(c => (curWin ? Number(c.window_idx) === Number(curWin.window_idx) : true));
       if (crops.length === 0) {
-        cropsBox.innerHTML = '<div class="apt-muted">По этой странице нет вырезанных кропов цифр.</div>';
+        if (cropsSection) cropsSection.style.display = 'none';
+        cropsBox.innerHTML = '';
       } else {
+        if (cropsSection) cropsSection.style.display = 'block';
         cropsBox.innerHTML = crops.map((c, idx) => `
           <div class="apt-crop-card" style="flex:0 0 175px;">
             <div style="font-size:12px; font-weight:700;">${escapeHtml(c.label)}</div>
@@ -2622,27 +2798,39 @@
       }
     }
 
-    const isPending = item.status === 'pending';
+    const isExported = Boolean(item.exported_at);
+    const canEdit = !isExported;
     const isAdminEditing = Boolean(state.adminEditor && state.adminEditor.isActive());
     if (editBtn) {
-      editBtn.style.display = isPending && !isAdminEditing ? '' : 'none';
+      editBtn.style.display = canEdit && !isAdminEditing ? '' : 'none';
     }
     if (decisionBar) {
-      if (isPending) {
+      if (isExported) {
+        decisionBar.innerHTML = `<div><span class="badge-status status-success">Выгружено в датасет (${escapeHtml(item.exported_at)})</span></div>`;
+      } else if (item.status === 'pending') {
         decisionBar.innerHTML = `
           <button type="button" class="btn btn-danger" id="apt-q-reject-btn">❌ Отклонить</button>
           <button type="button" class="btn btn-success" id="apt-q-approve-btn">✅ Одобрить</button>
         `;
         $('apt-q-reject-btn')?.addEventListener('click', () => decideQuarantineReview('reject'));
         $('apt-q-approve-btn')?.addEventListener('click', () => decideQuarantineReview('approve'));
+      } else if (item.status === 'approved') {
+        decisionBar.innerHTML = `
+          <span class="badge-status status-success">Одобрено</span>
+          <button type="button" class="btn btn-danger" id="apt-q-reject-btn">❌ Перевести в отклонённые</button>
+        `;
+        $('apt-q-reject-btn')?.addEventListener('click', () => decideQuarantineReview('reject'));
       } else {
-        const stBadge = item.status === 'approved'
-          ? '<span class="badge-status status-success">Одобрено</span>'
-          : '<span class="badge-status status-error">Отклонено</span>';
-        decisionBar.innerHTML = `<div>Статус записи: ${stBadge}</div>`;
+        decisionBar.innerHTML = `
+          <span class="badge-status status-error">Отклонено</span>
+          <button type="button" class="btn btn-success" id="apt-q-approve-btn">✅ Одобрить</button>
+        `;
+        $('apt-q-approve-btn')?.addEventListener('click', () => decideQuarantineReview('approve'));
       }
     }
 
+    updateEyeButton('apt-q-before-eye-btn', state.qHideBeforeBoxes);
+    updateEyeButton('apt-q-after-eye-btn', state.qHideAfterBoxes);
     drawQuarantineReviewCanvases();
   }
 
@@ -2666,7 +2854,7 @@
     const item = state.qReview.item;
     const isEd = Boolean(state.adminEditor && state.adminEditor.isActive());
     if (editBtn) {
-      editBtn.style.display = (item && item.status === 'pending' && !isEd) ? '' : 'none';
+      editBtn.style.display = (item && !item.exported_at && !isEd) ? '' : 'none';
     }
     drawQuarantineReviewCanvases();
   }
@@ -2694,6 +2882,12 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ decision }),
       });
+
+      if (item.status !== 'pending') {
+        refreshQuarantineBadge();
+        await openQuarantineReview(item.item_id, state.qReview.order);
+        return;
+      }
 
       const order = state.qReview.order || [];
       const curPos = order.indexOf(item.item_id);
@@ -2807,6 +3001,7 @@
       onCommit: commitOperatorImageEdits,
       onAfterCommit: afterOperatorImageCommit,
       onStateChange: updateImageEditButtons,
+      isBoxesHidden: () => state.hideOperatorBoxes,
     }) : null;
 
     state.adminEditor = window.AptBoxEditor ? window.AptBoxEditor.create({
@@ -2833,6 +3028,7 @@
       onCommit: commitAdminQuarantineEdits,
       onAfterCommit: () => renderQuarantineReview(),
       onStateChange: updateAdminEditButton,
+      isBoxesHidden: () => state.qHideAfterBoxes,
       commitLabel: '✅ Сохранить правки разметки',
     }) : null;
 
@@ -2933,8 +3129,25 @@
     $('apt-btn-image-edit-mode')?.addEventListener('click', () => {
       cancelDrawMode();
       state.selectedElementId = null;
+      state.hideOperatorBoxes = false;
+      updateEyeButton('apt-op-eye-btn', false);
       renderBoxInspector();
       state.operatorEditor?.activate();
+    });
+    $('apt-op-eye-btn')?.addEventListener('click', () => {
+      state.hideOperatorBoxes = !state.hideOperatorBoxes;
+      updateEyeButton('apt-op-eye-btn', state.hideOperatorBoxes);
+      drawWindowCanvas();
+    });
+    $('apt-q-before-eye-btn')?.addEventListener('click', () => {
+      state.qHideBeforeBoxes = !state.qHideBeforeBoxes;
+      updateEyeButton('apt-q-before-eye-btn', state.qHideBeforeBoxes);
+      drawQuarantineReviewCanvases();
+    });
+    $('apt-q-after-eye-btn')?.addEventListener('click', () => {
+      state.qHideAfterBoxes = !state.qHideAfterBoxes;
+      updateEyeButton('apt-q-after-eye-btn', state.qHideAfterBoxes);
+      drawQuarantineReviewCanvases();
     });
     $('apt-draw-cancel-btn')?.addEventListener('click', cancelDrawMode);
 
@@ -2976,7 +3189,11 @@
       openQuarantineReview(state.qItems[0].item_id, state.qItems.map(i => i.item_id));
     });
     $('apt-q-back-btn')?.addEventListener('click', () => closeQuarantineReview(false));
-    $('apt-q-edit-btn')?.addEventListener('click', () => state.adminEditor?.activate());
+    $('apt-q-edit-btn')?.addEventListener('click', () => {
+      state.qHideAfterBoxes = false;
+      updateEyeButton('apt-q-after-eye-btn', false);
+      state.adminEditor?.activate();
+    });
     $('apt-q-full-page-btn')?.addEventListener('click', () => {
       const item = state.qReview.item;
       if (!item) return;

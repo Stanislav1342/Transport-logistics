@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ПУЛЬС — Транспортная логистика</title>
-  <link rel="stylesheet" href="/static/apt_waybills.css?v=2.5">
+  <link rel="stylesheet" href="/static/apt_waybills.css?v=2.6">
   <style>
     :root {
       --primary: #174ea6;
@@ -1109,7 +1109,7 @@
             <p>Единый корпоративный портал автоматизации транспортной логистики ФК «ПУЛЬС» (РЦ Черная Грязь)</p>
           </div>
           <span class="badge" id="portal-version-badge">
-            <span class="badge-dot"></span> Версия 2.5
+            <span class="badge-dot"></span> Версия 2.6
           </span>
         </div>
 
@@ -1777,6 +1777,13 @@
             </div>
             <div id="apt-finalize-banner" class="apt-finalize-banner" style="display: none;"></div>
             <div class="apt-kpi-grid" id="apt-kpi-grid"></div>
+            <div id="apt-report-preview-card" class="apt-report-preview" style="display: none;">
+              <div class="apt-report-preview-header">
+                <b>Итоговый отчёт по маршрутным листам</b>
+                <span class="apt-muted" id="apt-report-preview-meta"></span>
+              </div>
+              <pre class="apt-report-preview-body" id="apt-report-preview-body"></pre>
+            </div>
           </div>
 
           <div id="apt-review-area">
@@ -1821,15 +1828,12 @@
                     <span style="font-weight:500; opacity:0.85;">(Esc — отмена)</span>
                   </div>
                   <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-                    <span id="apt-draw-digit-wrap" style="display:none; align-items:center; gap:6px;">
-                      <span style="font-size:12px;">Число (1..99):</span>
-                      <input type="number" min="1" max="99" id="apt-draw-digit-val" style="width:66px; padding:4px 6px; border:1px solid #93c5fd; border-radius:6px; font-weight:700;">
-                    </span>
                     <button type="button" class="btn btn-outline btn-sm" id="apt-draw-cancel-btn">Отмена</button>
                   </div>
                 </div>
 
                 <div class="apt-canvas-stage" id="apt-canvas-stage">
+                  <button type="button" class="apt-eye-btn" id="apt-op-eye-btn" title="Скрыть рамки классов" aria-label="Скрыть рамки классов" aria-pressed="false">👁️</button>
                   <canvas id="apt-window-canvas"></canvas>
                 </div>
 
@@ -1930,12 +1934,17 @@
           </div>
 
           <div class="apt-window-tabs" id="apt-q-window-tabs" style="margin-top:12px;"></div>
-          <div id="apt-q-diff-summary" style="font-size:13px; color:var(--primary); font-weight:600; margin-bottom:10px;"></div>
           <div id="apt-q-after-errors" style="margin-bottom:12px;"></div>
+
+          <div id="apt-q-crops-section" style="display:none; margin-bottom:14px;">
+            <div style="font-size:13px; font-weight:700; margin-bottom:6px;">Кропы исправленных цифр</div>
+            <div class="apt-crops-row" id="apt-q-crops-row"></div>
+          </div>
 
           <div class="apt-pane-card" style="margin-bottom:14px;">
             <div class="apt-q-canvas-title" id="apt-q-before-title">Было (модель)</div>
             <div class="apt-canvas-stage">
+              <button type="button" class="apt-eye-btn" id="apt-q-before-eye-btn" title="Скрыть рамки классов" aria-label="Скрыть рамки классов" aria-pressed="false">👁️</button>
               <canvas id="apt-q-before-canvas"></canvas>
             </div>
           </div>
@@ -1943,6 +1952,7 @@
           <div class="apt-pane-card" style="margin-bottom:14px;">
             <div class="apt-q-canvas-title" id="apt-q-after-title">Стало (оператор)</div>
             <div class="apt-canvas-stage">
+              <button type="button" class="apt-eye-btn" id="apt-q-after-eye-btn" title="Скрыть рамки классов" aria-label="Скрыть рамки классов" aria-pressed="false">👁️</button>
               <canvas id="apt-q-after-canvas"></canvas>
             </div>
             <div class="apt-image-edit-panel" id="apt-q-edit-panel" hidden></div>
@@ -1950,8 +1960,6 @@
               <button type="button" class="btn btn-outline btn-sm" id="apt-q-edit-btn">✏️ Исправить разметку</button>
             </div>
           </div>
-
-          <div class="apt-crops-row" id="apt-q-crops-row" style="margin-bottom:14px;"></div>
 
           <div class="apt-q-decision-bar" id="apt-q-decision-bar">
             <button type="button" class="btn btn-danger" id="apt-q-reject-btn">❌ Отклонить</button>
@@ -2307,7 +2315,7 @@
     function getClientPortalVersion() {
       const badge = document.getElementById('portal-version-badge');
       const m = (badge?.textContent || '').match(/(\d+\.\d+(?:\.\d+)?)/);
-      return m ? m[1] : '2.5';
+      return m ? m[1] : '2.6';
     }
 
     function isPortalBusy() {
@@ -4439,7 +4447,7 @@
       }
     }
   </script>
-  <script src="/static/apt_box_editor.js?v=2.5"></script>
-  <script src="/static/apt_waybills.js?v=2.5"></script>
+  <script src="/static/apt_box_editor.js?v=2.6"></script>
+  <script src="/static/apt_waybills.js?v=2.6"></script>
 </body>
 </html>

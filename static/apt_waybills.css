@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Стили раздела «АПТ → Маршрутные листы» и админ-очереди дообучения (v2.5)
+   Стили раздела «АПТ → Маршрутные листы» и админ-очереди дообучения (v2.6)
    Совместимы с корпоративной палитрой «ПУЛЬС — Транспортная логистика».
    ========================================================================== */
 
@@ -873,6 +873,127 @@ dialog.apt-dialog::backdrop {
 .apt-file-remove-btn:hover {
   color: var(--error);
   background: #fee2e2;
+}
+
+/* ─── Глазик скрытия рамок, выпадающий список классов, отчёт под сводкой (v2.6) ─── */
+.apt-eye-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.12);
+  transition: all 0.15s ease;
+}
+
+.apt-eye-btn:hover {
+  background: #ffffff;
+  border-color: var(--primary);
+}
+
+.apt-eye-btn.is-hidden {
+  background: #1e3a8a;
+  border-color: #1d4ed8;
+  color: #ffffff;
+}
+
+.apt-edit-dropdown-wrap {
+  position: relative;
+  display: inline-block;
+}
+
+.apt-class-menu {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  min-width: 220px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 10px 25px rgba(15, 23, 42, 0.14);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.apt-class-menu-item {
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.apt-class-menu-item:hover {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.apt-report-preview {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-light);
+}
+
+.apt-report-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13.5px;
+}
+
+.apt-report-preview-body {
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  max-height: 420px;
+  overflow-y: auto;
+  background: #f8fafc;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 8px 0 0;
+}
+
+.apt-q-diff-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  background: #eff6ff;
+  color: #1e40af;
+  border: 1px solid #bfdbfe;
+  margin-left: 8px;
+}
+
+.apt-hint-card.is-confirmed {
+  border-color: #86efac;
+  border-left-color: #16a34a;
+  background: #f0fdf4;
 }
 
 .apt-class-pills {
