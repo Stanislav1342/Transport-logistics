@@ -264,29 +264,123 @@ class WindowsOneCExporter(BaseOneCExporter):
         self._paste_clipboard()
         time.sleep(0.1)
 
-    def _enter_date_field(self, click_x: int, click_y: int, date_str: str) -> None:
-        """
-        Гарантированно очищает и вставляет дату в поле 1С:
-        1. Двойной клик в центр поля (выделяет существующее значение).
-        2. Выделение всеми способами: Ctrl+A и Home + Shift+End.
-        3. Вставка даты через буфер обмена (Ctrl+V).
-        """
-        self.pywinauto.mouse.click(coords=(click_x, click_y))
-        time.sleep(0.1)
-        self.pywinauto.mouse.double_click(coords=(click_x, click_y))
-        time.sleep(0.1)
+    def _get_uia_field_value(self, elem) -> str:
+        """Безопасно считывает текущее строковое значение UIA-элемента."""
+        if elem is None:
+            return ""
+        for getter in (
+            lambda: elem.get_value(),
+            lambda: elem.legacy_properties().get("Value", ""),
+            lambda: elem.window_text(),
+            lambda: getattr(elem.element_info, "name", "") or "",
+        ):
+            try:
+                val = getter()
+                if val is not None and str(val).strip():
+                    return str(val).strip()
+            except Exception:
+                continue
+        return ""
 
-        set_clipboard(date_str)
-        time.sleep(0.06)
-
+    def _clear_focused_field(self) -> None:
+        """Выделяет и очищает текущее сфокусированное поле (Ctrl+A → BackSpace → Delete)."""
         self._send_hotkey(self.win32con.VK_CONTROL, 0x41)  # Ctrl + A
         time.sleep(0.05)
-        self._send_hotkey(self.win32con.VK_HOME)
+        self._send_hotkey(self.win32con.VK_BACK)
         time.sleep(0.05)
-        self._send_hotkey(self.win32con.VK_SHIFT, self.win32con.VK_END)
-        time.sleep(0.05)
+        self._send_hotkey(self.win32con.VK_DELETE)
+        time.sleep(0.06)
 
-        self._paste_clipboard()
+    @staticmethod
+    def _field_matches_date(field_value: str, date_str: str) -> bool:
+        """Проверяет, соответствует ли значение UIA-поля введённой дате."""
+        if not field_value:
+            return False
+        if date_str in field_value:
+            return True
+        expected_digits = re.sub(r"\D", "", date_str)
+        actual_digits = re.sub(r"\D", "", field_value)
+        return bool(expected_digits) and actual_digits.startswith(expected_digits)
+
+    def _enter_date_field(
+        self,
+        click_x: int,
+        click_y: int,
+        date_str: str,
+        field_elem=None,
+    ) -> None:
+        """
+        Надёжный ввод даты в маскированное поле 1С:
+        1. Клик/фокус поля.
+        2. Очистка: Ctrl+A → BackSpace → Delete.
+        3. Ввод: Ctrl+V с UIA-проверкой (get_value()/window_text()) или посимвольный ввод
+           цифр даты через send_keys (без точек), с fallback на ввод с точками.
+        4. Нажатие Tab для фиксации значения в 1С.
+        """
+        if field_elem is not None:
+            try:
+                field_elem.set_focus()
+            except Exception:
+                pass
+            try:
+                field_elem.click_input()
+            except Exception:
+                self.pywinauto.mouse.click(coords=(click_x, click_y))
+        else:
+            self.pywinauto.mouse.click(coords=(click_x, click_y))
+            try:
+                field_elem = self.Desktop(backend="uia").from_point(click_x, click_y)
+            except Exception:
+                field_elem = None
+        time.sleep(0.12)
+
+        digits_only = re.sub(r"\D", "", date_str)
+        initial_val = self._get_uia_field_value(field_elem)
+        uia_is_date_value = bool(
+            initial_val and re.search(r"\d{2}\.\d{2}\.\d{4}|\d{2}\D\d{2}\D\d{4}|__", initial_val)
+        )
+
+        # Очистка текущего поля без Home + Shift+End
+        self._clear_focused_field()
+
+        entered = False
+        if uia_is_date_value:
+            set_clipboard(date_str)
+            time.sleep(0.06)
+            self._paste_clipboard()
+            time.sleep(0.15)
+            val = self._get_uia_field_value(field_elem)
+            if self._field_matches_date(val, date_str):
+                entered = True
+            else:
+                logger.debug("Ctrl+V не обновил поле даты (%r != %r), переход к send_keys", val, date_str)
+
+        if not entered:
+            if uia_is_date_value:
+                self._clear_focused_field()
+            try:
+                self.send_keys(digits_only, with_spaces=False, pause=0.04)
+                time.sleep(0.15)
+            except Exception as e:
+                logger.debug("send_keys(digits_only) error: %s, fallback Ctrl+V", e)
+                set_clipboard(date_str)
+                time.sleep(0.06)
+                self._paste_clipboard()
+                time.sleep(0.15)
+
+            if uia_is_date_value:
+                val = self._get_uia_field_value(field_elem)
+                if not self._field_matches_date(val, date_str):
+                    logger.debug("send_keys(digits) не совпал (%r != %r), пробуем с точками", val, date_str)
+                    self._clear_focused_field()
+                    try:
+                        self.send_keys(date_str, with_spaces=False, pause=0.04)
+                        time.sleep(0.15)
+                    except Exception as e:
+                        logger.debug("send_keys(date_str) error: %s", e)
+
+        # Нажатие Tab для фиксации значения поля в 1С
+        self._hotkey_tab()
         time.sleep(0.12)
 
     # ---------------------------------------------------------------------
@@ -899,34 +993,36 @@ class WindowsOneCExporter(BaseOneCExporter):
     def _verify_etrn_period_pill(self, d_from_str: str, d_to_str: str) -> Tuple[bool, str]:
         """
         Проверяет текст на плашке периода списка «ЭТРН» (в левой части тулбара).
-        Возвращает (True, pill_text), если период валиден.
+        Возвращает (True, pill_text) только если плашка не начинается с '-'
+        и содержит обе требуемые даты (d_from_str и d_to_str).
         """
+        last_pill_txt = ""
         try:
             for el in self.main_win.descendants():
                 try:
                     r = el.rectangle()
-                    if r.left <= 300 and 60 <= r.top <= 140:
+                    if r.left <= 300 and 60 <= r.top <= 145:
                         txt = (el.element_info.name or el.window_text() or "").strip()
-                        if re.search(r"\d{2}\.\d{2}\.\d{4}", txt) or "-" in txt:
+                        if re.search(r"\d{2}\.\d{2}\.\d{4}", txt) or ("-" in txt and len(txt) <= 40):
+                            last_pill_txt = txt
                             if txt.startswith("-"):
                                 return False, txt
-                            if d_from_str in txt:
+                            if d_from_str in txt and d_to_str in txt:
                                 return True, txt
-                            return True, txt
                 except Exception:
                     continue
         except Exception:
             pass
-        return True, ""
+        return False, last_pill_txt or "Плашка периода не найдена"
 
     def _set_etrn_period(self, date_from: datetime, date_to: datetime) -> None:
         """
         Устанавливает период для списка ЭТРН через диалог «Выберите период».
-        Основано на проверенной рабочей логике коммита f2f3e2f:
-        1. Клик по плашке периода строго в левой части тулбара (r.left <= 300, 60 <= r.top <= 140).
+        1. Клик по плашке периода строго в левой части тулбара (r.left <= 300, 60 <= r.top <= 145).
         2. Если не открылась — открытие через меню «Еще ▾» ➔ «Установить период...».
-        3. Заполнение полей «Дата начала» и «Дата окончания» (через Edit или координаты/Tab).
-        4. Нажатие «Выбрать» / Enter.
+        3. Заполнение полей «Дата начала» и «Дата окончания» через _enter_date_field.
+        4. Нажатие «Выбрать» / Enter и обязательная проверка плашки периода.
+        5. Повтор при несовпадении; RuntimeError после исчерпания попыток.
         """
         d_from_str = date_from.strftime("%d.%m.%Y")
         d_to_str = date_to.strftime("%d.%m.%Y")
@@ -938,15 +1034,15 @@ class WindowsOneCExporter(BaseOneCExporter):
         for attempt in range(1, max_attempts + 1):
             opened_dialog = False
 
-            # 1. Клик по плашке периода строго в левой части тулбара (r.left <= 300, 60 <= r.top <= 140)
+            # 1. Клик по плашке периода строго в левой части тулбара (r.left <= 300, 60 <= r.top <= 145)
             # Ограничение r.left <= 300 на 100% исключает случайные клики по ячейкам таблицы списка
             try:
                 for el in self.main_win.descendants():
                     try:
                         r = el.rectangle()
-                        if r.left <= 300 and 60 <= r.top <= 140:
+                        if r.left <= 300 and 60 <= r.top <= 145:
                             txt = (el.element_info.name or el.window_text() or "").strip()
-                            if re.search(r"\d{2}\.\d{2}\.\d{4}", txt) or "-" in txt:
+                            if re.search(r"\d{2}\.\d{2}\.\d{4}", txt) or ("-" in txt and len(txt) <= 40):
                                 click_x = r.left + 25
                                 click_y = r.top + r.height() // 2
                                 print(f"[1С:Windows] Клик по плашке периода «{txt}» в coords=({click_x}, {click_y})...")
@@ -1012,11 +1108,15 @@ class WindowsOneCExporter(BaseOneCExporter):
                 box1_y = dlg_r.top + int(dlg_r.height() * 0.14)
                 box2_x = dlg_r.left + int(dlg_r.width() * 0.50)
                 box2_y = box1_y
+                field1_elem = None
+                field2_elem = None
 
-                # Если UIA видит Edit-элементы в верхней строке, уточняем координаты
+                # Если UIA видит Edit-элементы в верхней строке, уточняем координаты и передаём элементы
                 if len(edits) >= 2 and edits[0].rectangle().top < dlg_r.top + int(dlg_r.height() * 0.3):
-                    r0 = edits[0].rectangle()
-                    r1 = edits[1].rectangle()
+                    field1_elem = edits[0]
+                    field2_elem = edits[1]
+                    r0 = field1_elem.rectangle()
+                    r1 = field2_elem.rectangle()
                     box1_x = r0.left + r0.width() // 2
                     box1_y = r0.top + r0.height() // 2
                     box2_x = r1.left + r1.width() // 2
@@ -1027,11 +1127,11 @@ class WindowsOneCExporter(BaseOneCExporter):
 
                 # Ввод даты начала
                 print(f"[1С:Windows] Заполнение даты начала ({d_from_str}) в ({box1_x}, {box1_y})...")
-                self._enter_date_field(box1_x, box1_y, d_from_str)
+                self._enter_date_field(box1_x, box1_y, d_from_str, field_elem=field1_elem)
 
                 # Ввод даты окончания
                 print(f"[1С:Windows] Заполнение даты окончания ({d_to_str}) в ({box2_x}, {box2_y})...")
-                self._enter_date_field(box2_x, box2_y, d_to_str)
+                self._enter_date_field(box2_x, box2_y, d_to_str, field_elem=field2_elem)
 
                 # Нажатие кнопки «Выбрать» / «ОК»
                 selected = False
@@ -1055,7 +1155,8 @@ class WindowsOneCExporter(BaseOneCExporter):
                     except Exception:
                         pass
                     time.sleep(0.2)
-                    self._hotkey_enter()
+                    if self._is_dialog_open("период"):
+                        self._hotkey_enter()
 
                 # Ожидание закрытия диалога «Выберите период»
                 for _ in range(15):
@@ -1064,13 +1165,29 @@ class WindowsOneCExporter(BaseOneCExporter):
                     time.sleep(0.3)
 
                 time.sleep(1.5)
-                print(f"[1С:Windows] ✓ Период списка «ЭТРН» успешно установлен: с {d_from_str} по {d_to_str}.")
-                return
+
+                # 5. Обязательная проверка плашки периода после закрытия диалога
+                is_valid, pill_txt = self._verify_etrn_period_pill(d_from_str, d_to_str)
+                if is_valid:
+                    print(f"[1С:Windows] ✓ Период списка «ЭТРН» подтвержден на плашке: «{pill_txt}».")
+                    return
+
+                print(
+                    f"[1С:Windows] ⚠ Плашка периода не соответствует {d_from_str} - {d_to_str} "
+                    f"(текущее значение: «{pill_txt}»). Попытка {attempt}/{max_attempts}..."
+                )
+                time.sleep(1.0)
             else:
                 print(f"[1С:Windows] ⚠ Диалог периода не открылся на попытке {attempt}/{max_attempts}, повтор...")
                 time.sleep(1.0)
 
-        print(f"[1С:Windows] ⚠ Диалог периода не был открыт после {max_attempts} попыток, продолжаем выгрузку списка...")
+        is_valid, pill_txt = self._verify_etrn_period_pill(d_from_str, d_to_str)
+        if not is_valid:
+            raise RuntimeError(
+                f"Не удалось установить период с {d_from_str} по {d_to_str} в разделе «ЭТРН» "
+                f"после {max_attempts} попыток! Текущее значение плашки: «{pill_txt}». "
+                "Выгрузка остановлена во избежание выборки данных за неверный период."
+            )
 
     def _configure_etrn_columns(self, dlg) -> None:
         """
