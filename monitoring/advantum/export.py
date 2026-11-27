@@ -1099,7 +1099,10 @@ class AdvantumTokenManager:
             if login_fn is not None:
                 tok = str(login_fn(config) or "")
             else:
-                from browser import create_driver, login_to_advantum
+                try:
+                    from .browser import create_driver, login_to_advantum
+                except ImportError:
+                    from browser import create_driver, login_to_advantum
 
                 drv = None
                 try:
@@ -1234,7 +1237,10 @@ class _AdvantumApiClient:
             if self.config is None:
                 return None
             try:
-                from browser import create_driver, login_to_advantum
+                try:
+                    from .browser import create_driver, login_to_advantum
+                except ImportError:
+                    from browser import create_driver, login_to_advantum
 
                 drv = create_driver(self.config, headless=True)
                 login_to_advantum(drv, self.config)
@@ -3126,7 +3132,10 @@ def export_thermographs(
         def _ensure_ui_session() -> tuple[WebDriver, WebDriverWait]:
             nonlocal active_driver, active_wait, owned_ui_driver, ui_ready
             if active_driver is None:
-                from browser import create_driver, login_to_advantum
+                try:
+                    from .browser import create_driver, login_to_advantum
+                except ImportError:
+                    from browser import create_driver, login_to_advantum
 
                 owned_ui_driver = create_driver(config, headless=True)
                 active_driver = owned_ui_driver
