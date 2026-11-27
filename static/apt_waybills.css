@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Стили раздела «АПТ → Маршрутные листы» и админ-очереди дообучения (v2.6)
+   Стили раздела «АПТ → Маршрутные листы» и админ-очереди дообучения (v2.7)
    Совместимы с корпоративной палитрой «ПУЛЬС — Транспортная логистика».
    ========================================================================== */
 
@@ -915,15 +915,15 @@ dialog.apt-dialog::backdrop {
 .apt-class-menu {
   position: absolute;
   left: 0;
-  top: calc(100% + 4px);
-  z-index: 20;
+  bottom: calc(100% + 4px);
+  z-index: 40;
   min-width: 220px;
   max-height: 260px;
   overflow-y: auto;
   background: #ffffff;
   border: 1px solid var(--border);
   border-radius: 10px;
-  box-shadow: 0 10px 25px rgba(15, 23, 42, 0.14);
+  box-shadow: 0 -10px 25px rgba(15, 23, 42, 0.16);
   padding: 4px;
   display: flex;
   flex-direction: column;

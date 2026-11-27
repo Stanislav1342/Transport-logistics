@@ -24,6 +24,9 @@ schedule_baselines.json
 advantum_shipments_cache.db
 advantum_shipments_cache.db-wal
 advantum_shipments_cache.db-shm
+mail_contacts.db
+mail_contacts.db-wal
+mail_contacts.db-shm
 
 # WebDriver Manager cache
 .wdm/

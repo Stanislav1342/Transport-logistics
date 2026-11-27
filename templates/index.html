@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ПУЛЬС — Транспортная логистика</title>
-  <link rel="stylesheet" href="/static/apt_waybills.css?v=2.6">
+  <link rel="stylesheet" href="/static/apt_waybills.css?v=2.7">
   <style>
     :root {
       --primary: #174ea6;
@@ -733,6 +733,36 @@
     .carrier-tag { background: #f1f5f9; border: 1px solid var(--border-light); padding: 4px 10px; border-radius: 6px; font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
     .carrier-tag span { background: #e2e8f0; font-weight: 700; border-radius: 10px; padding: 1px 6px; font-size: 11px; }
 
+    /* Выпадающий выбор разделов доступа (v2.7) */
+    .perm-dropdown { position: relative; display: inline-block; }
+    .perm-dropdown-btn {
+      display: inline-flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 7px 12px; border: 1px solid var(--border); border-radius: 8px;
+      background: #ffffff; color: var(--text); font-size: 13px; font-weight: 600;
+      cursor: pointer; min-width: 210px; text-align: left;
+    }
+    .perm-dropdown-btn:hover:not(:disabled) { border-color: var(--primary); background: #f8fafc; }
+    .perm-dropdown-btn:disabled { opacity: 0.7; cursor: default; background: #f1f5f9; }
+    .perm-dropdown-menu {
+      position: fixed; z-index: 1200; min-width: 265px; max-height: 320px; overflow-y: auto;
+      background: #ffffff; border: 1px solid var(--border); border-radius: 10px;
+      box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16); padding: 8px; display: none;
+    }
+    .perm-dropdown-menu.open { display: block; }
+    .perm-dropdown-group-title {
+      font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+      color: var(--text-muted); padding: 6px 8px 3px;
+    }
+    .perm-dropdown-item {
+      display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+      border-radius: 6px; font-size: 13px; cursor: pointer; margin: 0;
+    }
+    .perm-dropdown-item:hover { background: #eff6ff; }
+    .perm-dropdown-footer {
+      display: flex; justify-content: space-between; gap: 6px;
+      border-top: 1px solid var(--border-light); margin-top: 6px; padding-top: 6px;
+    }
+
     /* Формы и таблицы */
     .form-group { margin-bottom: 18px; }
     .form-label, .form-group label { display: block; font-size: 13.5px; font-weight: 600; color: #1e293b; margin-bottom: 6px; }
@@ -1063,6 +1093,10 @@
             <svg class="nav-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
             <span>Управление доступом</span>
           </button>
+          <button class="nav-item" id="nav-admin-mail-contacts" onclick="openSection('admin-mail-contacts')">
+            <svg class="nav-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+            <span>База почт</span>
+          </button>
         </div>
       </nav>
 
@@ -1109,7 +1143,7 @@
             <p>Единый корпоративный портал автоматизации транспортной логистики ФК «ПУЛЬС» (РЦ Черная Грязь)</p>
           </div>
           <span class="badge" id="portal-version-badge">
-            <span class="badge-dot"></span> Версия 2.6
+            <span class="badge-dot"></span> Версия 2.7
           </span>
         </div>
 
@@ -1342,7 +1376,10 @@
               <span>📁 Папка сохранения заявок:</span> <b id="ordersPathText">Загрузка...</b>
             </div>
 
-            <div style="margin-top: 15px; display: flex; justify-content: flex-end;">
+            <div style="margin-top: 15px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+              <button type="button" class="btn btn-outline" id="pullOrdersNotebookBtn" onclick="pullOrdersFromNotebook()">
+                📒 Подтянуть данные из Тетради
+              </button>
               <button class="btn btn-primary" id="processOrdersBtn" style="display:none;" onclick="uploadAndProcessOrders()">
                 ⚡ Сформировать заявки
               </button>
@@ -1638,23 +1675,28 @@
             </div>
 
             <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; background: #f8fafc; padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border-light);">
-              <div style="display: flex; align-items: center; gap: 18px; flex-wrap: wrap;">
+              <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
                 <span style="font-size: 13px; font-weight: 700;">Доступные разделы и подразделы:</span>
-                <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
-                  <input type="checkbox" id="new-perm-opt-schedules" checked> 📊 ОПТ: Графики РК
-                </label>
-                <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
-                  <input type="checkbox" id="new-perm-opt-orders" checked> 📝 ОПТ: Заявки перевозчикам
-                </label>
-                <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
-                  <input type="checkbox" id="new-perm-apt-waybills" checked> 📋 АПТ: Маршрутные листы
-                </label>
-                <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
-                  <input type="checkbox" id="new-perm-thermo" checked> 🌡️ Температурные графики
-                </label>
-                <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
-                  <input type="checkbox" id="new-perm-etrn" checked> 📑 Отчет по ЭТРН
-                </label>
+                <div class="perm-dropdown" id="new-user-perms-dropdown">
+                  <button type="button" class="perm-dropdown-btn" id="new-user-perms-btn" onclick="togglePermDropdown(this, 'new-user-perms-menu')">
+                    <span>Выбрано: 5 из 5</span>
+                    <span>▼</span>
+                  </button>
+                  <div class="perm-dropdown-menu" id="new-user-perms-menu">
+                    <div class="perm-dropdown-group-title">ОПТ</div>
+                    <label class="perm-dropdown-item"><input type="checkbox" id="new-perm-opt-schedules" value="opt_schedules" checked onchange="updateNewUserPermsLabel()"> 📊 Графики РК</label>
+                    <label class="perm-dropdown-item"><input type="checkbox" id="new-perm-opt-orders" value="opt_orders" checked onchange="updateNewUserPermsLabel()"> 📝 Заявки перевозчикам</label>
+                    <div class="perm-dropdown-group-title">АПТ</div>
+                    <label class="perm-dropdown-item"><input type="checkbox" id="new-perm-apt-waybills" value="apt_waybills" checked onchange="updateNewUserPermsLabel()"> 📋 Маршрутные листы</label>
+                    <div class="perm-dropdown-group-title">Мониторинг</div>
+                    <label class="perm-dropdown-item"><input type="checkbox" id="new-perm-thermo" value="thermo" checked onchange="updateNewUserPermsLabel()"> 🌡️ Температурные графики</label>
+                    <label class="perm-dropdown-item"><input type="checkbox" id="new-perm-etrn" value="etrn" checked onchange="updateNewUserPermsLabel()"> 📑 Отчет по ЭТРН</label>
+                    <div class="perm-dropdown-footer">
+                      <button type="button" class="btn btn-outline btn-sm" style="font-size:11px;padding:4px 8px;" onclick="setAllNewUserPerms(true)">Выбрать все</button>
+                      <button type="button" class="btn btn-outline btn-sm" style="font-size:11px;padding:4px 8px;" onclick="setAllNewUserPerms(false)">Снять все</button>
+                    </div>
+                  </div>
+                </div>
               </div>
               <button type="submit" class="btn btn-primary">Создать учетную запись</button>
             </div>
@@ -1680,6 +1722,87 @@
                 </tr>
               </thead>
               <tbody id="admin-users-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================================================== -->
+      <!-- СЕКЦИЯ: АДМИН-ПАНЕЛЬ — БАЗА ПОЧТ (SQLite)             -->
+      <!-- ===================================================== -->
+      <section id="section-admin-mail-contacts" class="section-view">
+        <div class="page-header">
+          <div>
+            <h2>Администрирование: База почт</h2>
+            <p>Единый справочник email-адресов по разделам и подразделам портала (хранится в SQLite)</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title" style="justify-content: space-between;">
+            <span id="mc-form-title">➕ Добавить почту в базу</span>
+            <button type="button" class="btn btn-outline btn-sm" id="mc-cancel-edit-btn" style="display:none;" onclick="resetMailContactForm()">Отмена редактирования</button>
+          </div>
+          <form onsubmit="event.preventDefault(); submitMailContactForm();">
+            <input type="hidden" id="mc-edit-id" value="">
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-bottom: 14px;">
+              <div>
+                <label class="form-label" for="mc-group-select">Раздел:</label>
+                <select id="mc-group-select" onchange="onMailGroupChange()">
+                  <option value="ОПТ">ОПТ</option>
+                  <option value="Мониторинг">Мониторинг</option>
+                  <option value="АПТ">АПТ</option>
+                </select>
+              </div>
+              <div>
+                <label class="form-label" for="mc-section-select">Подраздел:</label>
+                <select id="mc-section-select"></select>
+              </div>
+              <div>
+                <label class="form-label" for="mc-recipient-name">К кому относится:</label>
+                <input type="text" id="mc-recipient-name" placeholder="Например: ИП Козлов / ООО Логистика / Отдел контроля" required>
+              </div>
+              <div>
+                <label class="form-label" for="mc-email">Email (можно несколько через ;):</label>
+                <input type="text" id="mc-email" placeholder="mail@example.ru; copy@example.ru" required>
+              </div>
+              <div>
+                <label class="form-label" for="mc-role-select">Тип адресата:</label>
+                <select id="mc-role-select">
+                  <option value="to">Кому (To)</option>
+                  <option value="cc">Копия (CC)</option>
+                </select>
+              </div>
+            </div>
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+              <button type="submit" class="btn btn-primary" id="mc-submit-btn">➕ Добавить в базу</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="card">
+          <div class="card-title" style="justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+            <span>📒 Справочник почт</span>
+            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+              <input type="text" id="mc-search-input" placeholder="Поиск по названию или email..." oninput="renderMailContactsTable()" style="width: 240px; padding: 6px 10px; font-size: 13px;">
+              <button type="button" class="btn btn-outline btn-sm" onclick="loadAdminMailContacts()">🔄 Обновить</button>
+            </div>
+          </div>
+
+          <div id="mc-filter-tabs" style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px;"></div>
+
+          <div class="table-responsive">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Раздел / Подраздел</th>
+                  <th>К кому относится</th>
+                  <th>Email</th>
+                  <th style="width: 95px;">Тип</th>
+                  <th style="text-align: right; width: 170px;">Действия</th>
+                </tr>
+              </thead>
+              <tbody id="mc-table-body"></tbody>
             </table>
           </div>
         </div>
@@ -2315,7 +2438,7 @@
     function getClientPortalVersion() {
       const badge = document.getElementById('portal-version-badge');
       const m = (badge?.textContent || '').match(/(\d+\.\d+(?:\.\d+)?)/);
-      return m ? m[1] : '2.6';
+      return m ? m[1] : '2.7';
     }
 
     function isPortalBusy() {
@@ -2661,6 +2784,7 @@
       'etrn': 'Мониторинг / Отчет по ЭТРН',
       'admin-quarantine': 'Администрирование / Очередь дообучения',
       'admin': 'Администрирование / Управление доступом',
+      'admin-mail-contacts': 'Администрирование / База почт',
     };
 
     let sidebarCloseTimer = null;
@@ -2849,12 +2973,87 @@
           generateRandomPinForInput();
         }
       }
+
+      if (section === 'admin-mail-contacts') {
+        loadAdminMailContacts();
+      }
     }
 
     // =========================================================================
     // АДМИН-ПАНЕЛЬ УПРАВЛЕНИЯ УЧЕТКАМИ
     // =========================================================================
     window.adminUsersList = [];
+
+    const PORTAL_PERM_DEFS = [
+      { key: 'opt_schedules', group: 'ОПТ', label: '📊 Графики РК' },
+      { key: 'opt_orders', group: 'ОПТ', label: '📝 Заявки перевозчикам' },
+      { key: 'apt_waybills', group: 'АПТ', label: '📋 Маршрутные листы' },
+      { key: 'thermo', group: 'Мониторинг', label: '🌡️ Температурные графики' },
+      { key: 'etrn', group: 'Мониторинг', label: '📑 Отчет по ЭТРН' },
+    ];
+
+    function formatPermSummary(perms) {
+      const active = PORTAL_PERM_DEFS.filter(d => perms.includes(d.key));
+      if (active.length === 0) return 'Нет доступов';
+      if (active.length === PORTAL_PERM_DEFS.length) return `Выбрано: ${active.length} из ${PORTAL_PERM_DEFS.length}`;
+      if (active.length <= 2) return active.map(d => d.label.replace(/^[^\s]+\s+/, '')).join(', ');
+      return `Выбрано: ${active.length} из ${PORTAL_PERM_DEFS.length}`;
+    }
+
+    function closeAllPermDropdowns() {
+      document.querySelectorAll('.perm-dropdown-menu.open').forEach(m => m.classList.remove('open'));
+    }
+
+    function togglePermDropdown(btn, menuId) {
+      const menu = document.getElementById(menuId);
+      if (!menu) return;
+      const wasOpen = menu.classList.contains('open');
+      closeAllPermDropdowns();
+      if (wasOpen) return;
+
+      const rect = btn.getBoundingClientRect();
+      menu.classList.add('open');
+      const menuH = Math.min(320, menu.scrollHeight || 260);
+      const spaceBelow = window.innerHeight - rect.bottom;
+      if (spaceBelow >= menuH + 8 || spaceBelow >= rect.top) {
+        menu.style.top = `${Math.round(rect.bottom + 4)}px`;
+        menu.style.bottom = 'auto';
+      } else {
+        menu.style.top = `${Math.max(8, Math.round(rect.top - menuH - 4))}px`;
+        menu.style.bottom = 'auto';
+      }
+      const left = Math.min(rect.left, window.innerWidth - 280);
+      menu.style.left = `${Math.max(8, Math.round(left))}px`;
+    }
+
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.perm-dropdown')) {
+        closeAllPermDropdowns();
+      }
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeAllPermDropdowns();
+    });
+    window.addEventListener('scroll', closeAllPermDropdowns, true);
+
+    function updateNewUserPermsLabel() {
+      const perms = PORTAL_PERM_DEFS
+        .filter(d => document.getElementById(`new-perm-${d.key.replace(/_/g, '-')}`)?.checked)
+        .map(d => d.key);
+      const btn = document.getElementById('new-user-perms-btn');
+      if (btn) {
+        const span = btn.querySelector('span');
+        if (span) span.textContent = formatPermSummary(perms);
+      }
+    }
+
+    function setAllNewUserPerms(checked) {
+      PORTAL_PERM_DEFS.forEach(d => {
+        const cb = document.getElementById(`new-perm-${d.key.replace(/_/g, '-')}`);
+        if (cb) cb.checked = checked;
+      });
+      updateNewUserPermsLabel();
+    }
 
     async function generateRandomPinForInput() {
       const pinInput = document.getElementById('new-user-pin');
@@ -2931,6 +3130,21 @@
           const hasThermo = u.role === 'admin' || perms.includes('thermo');
           const hasEtrn = u.role === 'admin' || perms.includes('etrn');
 
+          const activePerms = PORTAL_PERM_DEFS
+            .filter(d => (u.role === 'admin') || perms.includes(d.key) || (d.key.startsWith('opt_') && perms.includes('opt')))
+            .map(d => d.key);
+          const safeLoginId = u.login.replace(/[^a-zA-Z0-9_-]/g, '_');
+          const menuId = `user-perm-menu-${safeLoginId}`;
+          const btnLabel = u.is_master ? 'Все разделы (админ)' : formatPermSummary(activePerms);
+
+          let lastGroup = '';
+          const menuItemsHtml = PORTAL_PERM_DEFS.map(d => {
+            const grpHtml = d.group !== lastGroup ? `<div class="perm-dropdown-group-title">${d.group}</div>` : '';
+            lastGroup = d.group;
+            const checked = activePerms.includes(d.key) ? 'checked' : '';
+            return `${grpHtml}<label class="perm-dropdown-item"><input type="checkbox" class="perm-cb-${u.login}" value="${d.key}" ${checked} ${u.is_master ? 'disabled' : ''} onchange="saveUserPermissions('${u.login}', '${menuId}')"> ${d.label}</label>`;
+          }).join('');
+
           const tr = document.createElement('tr');
           tr.innerHTML = `
             <td>
@@ -2943,32 +3157,14 @@
               <button class="btn btn-outline btn-sm" style="margin-left:6px;padding:2px 7px;font-size:11px;" title="Изменить должность" onclick="promptChangePosition('${u.login}', '${(u.position || '').replace(/'/g, "\\'")}')">✏️</button>
             </td>
             <td>
-              <div style="display:flex;gap:14px;flex-wrap:wrap;">
-                <label style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;cursor:pointer;">
-                  <input type="checkbox" class="perm-cb-${u.login}" value="opt_schedules" ${hasOptSch ? 'checked' : ''} ${u.is_master ? 'disabled' : ''}
-                    onchange="saveUserPermissions('${u.login}')">
-                  📊 ОПТ: Графики РК
-                </label>
-                <label style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;cursor:pointer;">
-                  <input type="checkbox" class="perm-cb-${u.login}" value="opt_orders" ${hasOptOrd ? 'checked' : ''} ${u.is_master ? 'disabled' : ''}
-                    onchange="saveUserPermissions('${u.login}')">
-                  📝 ОПТ: Заявки
-                </label>
-                <label style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;cursor:pointer;">
-                  <input type="checkbox" class="perm-cb-${u.login}" value="apt_waybills" ${hasAptWaybills ? 'checked' : ''} ${u.is_master ? 'disabled' : ''}
-                    onchange="saveUserPermissions('${u.login}')">
-                  📋 АПТ: МЛ
-                </label>
-                <label style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;cursor:pointer;">
-                  <input type="checkbox" class="perm-cb-${u.login}" value="thermo" ${hasThermo ? 'checked' : ''} ${u.is_master ? 'disabled' : ''}
-                    onchange="saveUserPermissions('${u.login}')">
-                  🌡️ Термографики
-                </label>
-                <label style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;cursor:pointer;">
-                  <input type="checkbox" class="perm-cb-${u.login}" value="etrn" ${hasEtrn ? 'checked' : ''} ${u.is_master ? 'disabled' : ''}
-                    onchange="saveUserPermissions('${u.login}')">
-                  📑 ЭТРН
-                </label>
+              <div class="perm-dropdown">
+                <button type="button" class="perm-dropdown-btn" id="perm-btn-${safeLoginId}" ${u.is_master ? 'disabled' : `onclick="togglePermDropdown(this, '${menuId}')"`}>
+                  <span>${btnLabel}</span>
+                  <span>▼</span>
+                </button>
+                <div class="perm-dropdown-menu" id="${menuId}">
+                  ${menuItemsHtml}
+                </div>
               </div>
             </td>
             <td>
@@ -3051,18 +3247,188 @@
       }
     }
 
-    async function saveUserPermissions(login) {
+    async function saveUserPermissions(login, menuId) {
       const checkboxes = document.querySelectorAll(`.perm-cb-${CSS.escape(login)}`);
       const perms = [];
       checkboxes.forEach(cb => {
         if (cb.checked) perms.push(cb.value);
       });
+      const safeLoginId = login.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const btn = document.getElementById(`perm-btn-${safeLoginId}`);
+      if (btn) {
+        const span = btn.querySelector('span');
+        if (span) span.textContent = formatPermSummary(perms);
+      }
       await fetch(`/api/admin/users/${encodeURIComponent(login)}/update`, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ permissions: perms })
       });
-      loadAdminUsers();
+    }
+
+    // =========================================================================
+    // АДМИН-ПАНЕЛЬ: БАЗА ПОЧТ (SQLite)
+    // =========================================================================
+    let mcSections = [];
+    let mcContacts = [];
+    let mcCounts = {};
+    let mcActiveFilter = 'all';
+
+    function onMailGroupChange(selectedKey = null) {
+      const group = document.getElementById('mc-group-select')?.value || 'ОПТ';
+      const secSel = document.getElementById('mc-section-select');
+      if (!secSel) return;
+      const list = mcSections.filter(s => s.group === group);
+      secSel.innerHTML = list.map(s => `<option value="${s.key}">${s.label}</option>`).join('');
+      if (selectedKey && list.some(s => s.key === selectedKey)) {
+        secSel.value = selectedKey;
+      }
+    }
+
+    function resetMailContactForm() {
+      document.getElementById('mc-edit-id').value = '';
+      document.getElementById('mc-form-title').textContent = '➕ Добавить почту в базу';
+      document.getElementById('mc-submit-btn').textContent = '➕ Добавить в базу';
+      document.getElementById('mc-cancel-edit-btn').style.display = 'none';
+      document.getElementById('mc-recipient-name').value = '';
+      document.getElementById('mc-email').value = '';
+      document.getElementById('mc-role-select').value = 'to';
+    }
+
+    function startEditMailContact(id) {
+      const item = mcContacts.find(c => c.id === id);
+      if (!item) return;
+      document.getElementById('mc-edit-id').value = String(item.id);
+      document.getElementById('mc-form-title').textContent = '✏️ Редактировать запись';
+      document.getElementById('mc-submit-btn').textContent = '💾 Сохранить изменения';
+      document.getElementById('mc-cancel-edit-btn').style.display = 'inline-flex';
+      document.getElementById('mc-group-select').value = item.section_group || 'ОПТ';
+      onMailGroupChange(item.section_key);
+      document.getElementById('mc-recipient-name').value = item.recipient_name || '';
+      document.getElementById('mc-email').value = item.email || '';
+      document.getElementById('mc-role-select').value = item.mail_role || 'to';
+      document.getElementById('mc-recipient-name').focus();
+    }
+
+    async function loadAdminMailContacts() {
+      try {
+        const resp = await fetch('/api/admin/mail-contacts', { headers: authHeaders() });
+        if (resp.status === 401) { lockScreen('Сессия завершена'); return; }
+        const data = await resp.json();
+        if (data.status !== 'success') return;
+        mcSections = data.sections || [];
+        mcContacts = data.contacts || [];
+        mcCounts = data.counts || {};
+        onMailGroupChange(document.getElementById('mc-section-select')?.value);
+        renderMailContactsFilterTabs();
+        renderMailContactsTable();
+      } catch (e) {
+        console.error('Ошибка загрузки базы почт:', e);
+      }
+    }
+
+    function renderMailContactsFilterTabs() {
+      const box = document.getElementById('mc-filter-tabs');
+      if (!box) return;
+      const total = mcContacts.length;
+      let html = `<button type="button" class="btn btn-sm ${mcActiveFilter === 'all' ? 'btn-primary' : 'btn-outline'}" onclick="setMailContactsFilter('all')">Все (${total})</button>`;
+      mcSections.forEach(s => {
+        const cnt = mcCounts[s.key] || 0;
+        const cls = mcActiveFilter === s.key ? 'btn-primary' : 'btn-outline';
+        html += `<button type="button" class="btn btn-sm ${cls}" onclick="setMailContactsFilter('${s.key}')">${s.group}: ${s.label} (${cnt})</button>`;
+      });
+      box.innerHTML = html;
+    }
+
+    function setMailContactsFilter(key) {
+      mcActiveFilter = key;
+      renderMailContactsFilterTabs();
+      renderMailContactsTable();
+    }
+
+    function renderMailContactsTable() {
+      const tbody = document.getElementById('mc-table-body');
+      if (!tbody) return;
+      const q = (document.getElementById('mc-search-input')?.value || '').trim().toLowerCase();
+      const filtered = mcContacts.filter(c => {
+        if (mcActiveFilter !== 'all' && c.section_key !== mcActiveFilter) return false;
+        if (q) {
+          const hay = `${c.recipient_name} ${c.email} ${c.section_label} ${c.section_group}`.toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        return true;
+      });
+      if (filtered.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:var(--text-muted); padding:18px;">Записей не найдено</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = filtered.map(c => {
+        const roleBadge = c.mail_role === 'cc'
+          ? `<span class="badge-status" style="background:#fef3c7;color:#92400e;">Копия</span>`
+          : `<span class="badge-status status-success">Кому</span>`;
+        const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return `
+          <tr>
+            <td><div style="font-size:11.5px;color:var(--text-muted);">${esc(c.section_group)}</div><b>${esc(c.section_label)}</b></td>
+            <td><b>${esc(c.recipient_name)}</b></td>
+            <td style="font-family: ui-monospace, monospace; font-size:12.5px;">${esc(c.email)}</td>
+            <td>${roleBadge}</td>
+            <td style="text-align:right;">
+              <div style="display:inline-flex; gap:6px;">
+                <button type="button" class="btn btn-outline btn-sm" onclick="startEditMailContact(${c.id})">✏️ Изменить</button>
+                <button type="button" class="btn btn-danger btn-sm" onclick="deleteMailContact(${c.id})">Удалить</button>
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    async function submitMailContactForm() {
+      const editId = document.getElementById('mc-edit-id').value.trim();
+      const payload = {
+        section_key: document.getElementById('mc-section-select').value,
+        recipient_name: document.getElementById('mc-recipient-name').value.trim(),
+        email: document.getElementById('mc-email').value.trim(),
+        mail_role: document.getElementById('mc-role-select').value,
+      };
+      const url = editId
+        ? `/api/admin/mail-contacts/${encodeURIComponent(editId)}/update`
+        : '/api/admin/mail-contacts';
+      try {
+        const resp = await fetch(url, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          alert('Ошибка: ' + (data.detail || 'Не удалось сохранить запись'));
+          return;
+        }
+        resetMailContactForm();
+        await loadAdminMailContacts();
+      } catch (e) {
+        alert('Ошибка сети: ' + e);
+      }
+    }
+
+    async function deleteMailContact(id) {
+      if (!confirm('Удалить эту почту из базы?')) return;
+      try {
+        const resp = await fetch(`/api/admin/mail-contacts/${encodeURIComponent(id)}/delete`, {
+          method: 'POST',
+          headers: authHeaders(),
+        });
+        if (!resp.ok) {
+          const data = await resp.json().catch(() => ({}));
+          alert('Ошибка: ' + (data.detail || 'Не удалось удалить запись'));
+          return;
+        }
+        await loadAdminMailContacts();
+      } catch (e) {
+        alert('Ошибка сети: ' + e);
+      }
     }
 
     async function toggleUserActive(login, newState) {
@@ -3664,6 +4030,83 @@
       }
     }
 
+    function renderOrdersResult(data) {
+      document.getElementById('statOrdersCarriers').innerText = data.total_carriers;
+      document.getElementById('statOrdersPallets').innerText = data.total_pallets;
+      document.getElementById('statOrdersDate').innerText = data.date_tag;
+      document.getElementById('statOrdersDocsCount').innerText = data.orders.length + ' Word + 1 Excel';
+
+      const savedFolder = document.getElementById('ordersSavedFolderLabel');
+      if (savedFolder && data.output_dir) {
+        savedFolder.innerHTML = 'Папка: <b>' + data.output_dir + '</b>'
+          + (data.source_filename ? ` · Источник: <b>${data.source_filename}</b>` : '');
+      }
+
+      const tbody = document.getElementById('ordersTableBody');
+      tbody.innerHTML = '';
+
+      data.orders.forEach((ord, idx) => {
+        tbody.innerHTML += `
+          <tr>
+            <td>${idx + 1}</td>
+            <td>
+              <b>${ord.carrier}</b>
+              ${ord.addr_ref ? `<div style="font-size: 11px; color: #475569; margin-top: 2px;">Клиент: <b>${ord.addr_ref}</b></div>` : ''}
+            </td>
+            <td style="text-align: center; font-weight: 700; color: var(--primary);">${ord.trucks}</td>
+            <td style="text-align: right; font-weight: 600;">${ord.pallets_str}</td>
+            <td>${ord.route}</td>
+            <td style="text-align: center;"><span style="background: #e0f2fe; color: #0369a1; padding: 2px 6px; border-radius: 4px; font-size: 11px;">${ord.temp}</span></td>
+            <td>📄 ${ord.filename}</td>
+            <td style="text-align: center;"><span style="color: #166534; font-weight: 600; font-size: 12px;">✅ Сохранен</span></td>
+          </tr>
+        `;
+      });
+
+      availableOrdersCarriers = data.carriers || [];
+      const selOrders = document.getElementById('ordersCarrierSelect');
+      if (selOrders) {
+        selOrders.innerHTML = '';
+        availableOrdersCarriers.forEach(c => {
+          const opt = document.createElement('option');
+          opt.value = c.name;
+          opt.textContent = `${c.name} (${c.orders_count} ${c.orders_count === 1 ? 'заявка' : 'заявок'}, ${c.pallets_str || c.total_pallets} пал.)`;
+          selOrders.appendChild(opt);
+        });
+      }
+
+      document.getElementById('ordersResultCard').style.display = 'block';
+      document.getElementById('ordersEmailCard').style.display = 'block';
+    }
+
+    async function pullOrdersFromNotebook() {
+      const btn = document.getElementById('pullOrdersNotebookBtn');
+      const origText = btn ? btn.innerText : '📒 Подтянуть данные из Тетради';
+      if (btn) {
+        btn.disabled = true;
+        btn.innerText = '⏳ Чтение Тетради...';
+      }
+      try {
+        const resp = await fetch('/api/orders/generate-from-notebook', {
+          method: 'POST',
+          headers: authHeaders(),
+        });
+        const data = await resp.json();
+        if (data.status === 'success') {
+          renderOrdersResult(data);
+        } else {
+          alert('Ошибка загрузки из Тетради: ' + (data.message || 'Файл не найден'));
+        }
+      } catch (err) {
+        alert('Ошибка связи с сервером: ' + err);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerText = origText;
+        }
+      }
+    }
+
     async function uploadAndProcessOrders() {
       if (!selectedOrdersFile) return;
       const btn = document.getElementById('processOrdersBtn');
@@ -3682,51 +4125,7 @@
         const data = await resp.json();
 
         if (data.status === 'success') {
-          document.getElementById('statOrdersCarriers').innerText = data.total_carriers;
-          document.getElementById('statOrdersPallets').innerText = data.total_pallets;
-          document.getElementById('statOrdersDate').innerText = data.date_tag;
-          document.getElementById('statOrdersDocsCount').innerText = data.orders.length + ' Word + 1 Excel';
-
-          const savedFolder = document.getElementById('ordersSavedFolderLabel');
-          if (savedFolder && data.output_dir) {
-            savedFolder.innerHTML = 'Папка: <b>' + data.output_dir + '</b>';
-          }
-
-          const tbody = document.getElementById('ordersTableBody');
-          tbody.innerHTML = '';
-
-          data.orders.forEach((ord, idx) => {
-            tbody.innerHTML += `
-              <tr>
-                <td>${idx + 1}</td>
-                <td>
-                  <b>${ord.carrier}</b>
-                  ${ord.addr_ref ? `<div style="font-size: 11px; color: #475569; margin-top: 2px;">Клиент: <b>${ord.addr_ref}</b></div>` : ''}
-                </td>
-                <td style="text-align: center; font-weight: 700; color: var(--primary);">${ord.trucks}</td>
-                <td style="text-align: right; font-weight: 600;">${ord.pallets_str}</td>
-                <td>${ord.route}</td>
-                <td style="text-align: center;"><span style="background: #e0f2fe; color: #0369a1; padding: 2px 6px; border-radius: 4px; font-size: 11px;">${ord.temp}</span></td>
-                <td>📄 ${ord.filename}</td>
-                <td style="text-align: center;"><span style="color: #166534; font-weight: 600; font-size: 12px;">✅ Сохранен</span></td>
-              </tr>
-            `;
-          });
-
-          availableOrdersCarriers = data.carriers || [];
-          const selOrders = document.getElementById('ordersCarrierSelect');
-          if (selOrders) {
-            selOrders.innerHTML = '';
-            availableOrdersCarriers.forEach(c => {
-              const opt = document.createElement('option');
-              opt.value = c.name;
-              opt.textContent = `${c.name} (${c.orders_count} ${c.orders_count === 1 ? 'заявка' : 'заявок'}, ${c.pallets_str || c.total_pallets} пал.)`;
-              selOrders.appendChild(opt);
-            });
-          }
-
-          document.getElementById('ordersResultCard').style.display = 'block';
-          document.getElementById('ordersEmailCard').style.display = 'block';
+          renderOrdersResult(data);
           markDropzoneProcessed('orders', '✓ Заявки успешно сформированы');
           btn.innerText = '✅ Заявки сформированы';
         } else {
@@ -4447,7 +4846,7 @@
       }
     }
   </script>
-  <script src="/static/apt_box_editor.js?v=2.6"></script>
-  <script src="/static/apt_waybills.js?v=2.6"></script>
+  <script src="/static/apt_box_editor.js?v=2.7"></script>
+  <script src="/static/apt_waybills.js?v=2.7"></script>
 </body>
 </html>

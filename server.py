@@ -45,6 +45,7 @@ from config import Config, load_config
 from export import ExportResult, export_thermographs
 import generate_orders as orders_core
 import generate_schedule as core
+import mail_contacts_db
 
 # ─── Инициализация путей и логов ──────────────────────────────────────────────
 
@@ -70,9 +71,14 @@ try:
 except ImportError:
     pass
 
+try:
+    mail_contacts_db.init_db(BASE_DIR, os.environ.get("NETWORK_BASE_DIR", "").strip())
+except Exception as _mc_exc:
+    logger.warning("Ошибка инициализации SQLite-базы почт: %s", _mc_exc)
+
 # ─── Настройка FastAPI и CORS ─────────────────────────────────────────────────
 
-PORTAL_VERSION = "2.6"
+PORTAL_VERSION = "2.7"
 app = FastAPI(title="ПУЛЬС — Транспортная логистика", version=f"v{PORTAL_VERSION}")
 
 ALLOWED_ORIGIN_REGEX = (
@@ -704,6 +710,9 @@ def get_orders_dir() -> str:
 
 
 def load_schedules_contacts() -> dict[str, str]:
+    db_map = mail_contacts_db.get_contacts_dict(BASE_DIR, "opt_schedules")
+    if db_map:
+        return db_map
     folders = [BASE_DIR]
     net_dir = get_network_base_dir()
     if net_dir:
@@ -760,6 +769,9 @@ def get_schedule_carrier_email(carrier_name: str, fallback_email: str = "") -> s
 
 
 def load_orders_contacts() -> dict[str, str]:
+    db_map = mail_contacts_db.get_contacts_dict(BASE_DIR, "opt_orders")
+    if db_map:
+        return db_map
     folders = [BASE_DIR]
     net_dir = get_network_base_dir()
     if net_dir:
@@ -1427,6 +1439,92 @@ def send_free_trips_emails(req: EmailRequest, request: Request):
         return {"status": "error", "message": f"Ошибка Outlook: {str(e)}"}
 
 
+def _generate_orders_from_excel_path(excel_path: str, user_login: str) -> dict[str, Any]:
+    """Общий helper генерации заявок перевозчикам из локального/временного Excel-файла."""
+    template_candidates = [os.path.join(BASE_DIR, "Шаблон.docx")]
+    net_dir = get_network_base_dir()
+    if net_dir:
+        template_candidates.append(os.path.join(net_dir, "Шаблон.docx"))
+        template_candidates.append(os.path.join(net_dir, "Заявки", "Шаблон.docx"))
+    template_path = template_candidates[0]
+    for cand in template_candidates:
+        if os.path.exists(cand):
+            template_path = cand
+            break
+
+    res = orders_core.process_daily_orders(
+        input_excel_path=excel_path,
+        template_docx_path=template_path,
+        output_dir=get_orders_dir(),
+    )
+    _set_user_orders_state(user_login, res)
+    return res
+
+
+def _find_latest_excel_in_dir(folder: str) -> Optional[str]:
+    if not folder or not os.path.isdir(folder):
+        return None
+    best_path = None
+    best_mtime = -1.0
+    try:
+        for fname in os.listdir(folder):
+            if fname.startswith("~$") or not fname.lower().endswith((".xlsx", ".xlsm")):
+                continue
+            fpath = os.path.join(folder, fname)
+            if os.path.isfile(fpath):
+                mt = os.path.getmtime(fpath)
+                if mt > best_mtime:
+                    best_mtime = mt
+                    best_path = fpath
+    except Exception:
+        return None
+    return best_path
+
+
+def resolve_orders_notebook_file() -> tuple[Optional[str], str]:
+    """Ищет файл «Тетрадь» через ORDERS_NOTEBOOK_PATH или NETWORK_BASE_DIR."""
+    explicit = os.environ.get("ORDERS_NOTEBOOK_PATH", "").strip()
+    if explicit:
+        if os.path.isfile(explicit):
+            return explicit, ""
+        if os.path.isdir(explicit):
+            found = _find_latest_excel_in_dir(explicit)
+            if found:
+                return found, ""
+            return None, f"В папке {explicit} не найдено Excel-файлов (.xlsx/.xlsm)."
+        return None, f"Указанный путь ORDERS_NOTEBOOK_PATH не найден: {explicit}"
+
+    net_dir = get_network_base_dir()
+    if net_dir and os.path.isdir(net_dir):
+        for fname in ("Тетрадь.xlsx", "Тетрадь.xlsm", "Тетрадь.xls"):
+            cand = os.path.join(net_dir, fname)
+            if os.path.isfile(cand):
+                return cand, ""
+        try:
+            for fname in os.listdir(net_dir):
+                if fname.startswith("~$"):
+                    continue
+                stem, ext = os.path.splitext(fname)
+                if stem.strip().lower() == "тетрадь" and ext.lower() in (".xlsx", ".xlsm", ".xls"):
+                    cand = os.path.join(net_dir, fname)
+                    if os.path.isfile(cand):
+                        return cand, ""
+        except Exception:
+            pass
+        nb_sub = os.path.join(net_dir, "Тетрадь")
+        if os.path.isfile(nb_sub):
+            return nb_sub, ""
+        if os.path.isdir(nb_sub):
+            found = _find_latest_excel_in_dir(nb_sub)
+            if found:
+                return found, ""
+
+    return (
+        None,
+        "Файл «Тетрадь» не найден. Проверьте доступ к сетевой папке (NETWORK_BASE_DIR) или задайте путь ORDERS_NOTEBOOK_PATH в .env.",
+    )
+
+
 @app.post("/api/orders/generate")
 def generate_orders_api(request: Request, file: UploadFile = File(...)):
     user = check_auth(request, required_section="opt_orders")
@@ -1436,24 +1534,34 @@ def generate_orders_api(request: Request, file: UploadFile = File(...)):
         temp_path = os.path.join(req_temp_dir, safe_name)
         with open(temp_path, "wb") as f:
             shutil.copyfileobj(file.file, f)
+        return _generate_orders_from_excel_path(temp_path, user["login"])
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        shutil.rmtree(req_temp_dir, ignore_errors=True)
 
-        template_candidates = [os.path.join(BASE_DIR, "Шаблон.docx")]
-        net_dir = get_network_base_dir()
-        if net_dir:
-            template_candidates.append(os.path.join(net_dir, "Шаблон.docx"))
-            template_candidates.append(os.path.join(net_dir, "Заявки", "Шаблон.docx"))
-        template_path = template_candidates[0]
-        for cand in template_candidates:
-            if os.path.exists(cand):
-                template_path = cand
-                break
 
-        res = orders_core.process_daily_orders(
-            input_excel_path=temp_path,
-            template_docx_path=template_path,
-            output_dir=get_orders_dir(),
-        )
-        _set_user_orders_state(user["login"], res)
+@app.post("/api/orders/generate-from-notebook")
+def generate_orders_from_notebook(request: Request):
+    user = check_auth(request, required_section="opt_orders")
+    src_path, err_msg = resolve_orders_notebook_file()
+    if not src_path:
+        return {"status": "error", "message": err_msg}
+
+    req_temp_dir = tempfile.mkdtemp(prefix="puls_orders_nb_")
+    try:
+        safe_name = os.path.basename(src_path)
+        temp_path = os.path.join(req_temp_dir, safe_name)
+        shutil.copyfile(src_path, temp_path)
+        res = _generate_orders_from_excel_path(temp_path, user["login"])
+        if isinstance(res, dict):
+            res["source_filename"] = safe_name
+            try:
+                res["source_mtime_str"] = datetime.datetime.fromtimestamp(
+                    os.path.getmtime(src_path)
+                ).strftime("%d.%m.%Y %H:%M")
+            except Exception:
+                res["source_mtime_str"] = ""
         return res
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -2051,23 +2159,114 @@ async def download_single_pdf(task_id: str, filename: str, request: Request):
 
 
 def get_thermo_email_to() -> str:
+    db_to, _ = mail_contacts_db.get_recipients_to_cc(BASE_DIR, "thermo")
+    if db_to:
+        return db_to
     return os.environ.get("THERMO_EMAIL_TO", "").strip()
 
 
 def get_thermo_email_cc() -> str:
+    _, db_cc = mail_contacts_db.get_recipients_to_cc(BASE_DIR, "thermo")
+    if db_cc:
+        return db_cc
     return os.environ.get("THERMO_EMAIL_CC", "").strip()
 
 
 @app.get("/api/mail-config")
 def get_mail_config(request: Request):
-    """Возвращает адреса рассылки из .env только для авторизованных пользователей."""
+    """Возвращает адреса рассылки из SQLite/env только для авторизованных пользователей."""
     check_auth(request)
+    etrn_to, etrn_cc = mail_contacts_db.get_recipients_to_cc(BASE_DIR, "etrn")
     return {
         "thermo_to": get_thermo_email_to(),
         "thermo_cc": get_thermo_email_cc(),
-        "etrn_to": os.environ.get("ETRN_EMAIL_TO", "").strip(),
-        "etrn_cc": os.environ.get("ETRN_EMAIL_CC", "").strip(),
+        "etrn_to": etrn_to or os.environ.get("ETRN_EMAIL_TO", "").strip(),
+        "etrn_cc": etrn_cc or os.environ.get("ETRN_EMAIL_CC", "").strip(),
     }
+
+
+class MailContactCreateRequest(BaseModel):
+    section_key: str
+    recipient_name: str
+    email: str
+    mail_role: str = "to"
+    note: str = ""
+
+
+class MailContactUpdateRequest(BaseModel):
+    section_key: Optional[str] = None
+    recipient_name: Optional[str] = None
+    email: Optional[str] = None
+    mail_role: Optional[str] = None
+    note: Optional[str] = None
+
+
+@app.get("/api/admin/mail-contacts")
+def admin_list_mail_contacts(
+    request: Request,
+    section_key: Optional[str] = None,
+    q: Optional[str] = "",
+):
+    check_auth(request, require_admin=True)
+    mail_contacts_db.init_db(BASE_DIR, get_network_base_dir())
+    return {
+        "status": "success",
+        "sections": mail_contacts_db.MAIL_SECTIONS,
+        "counts": mail_contacts_db.count_by_section(BASE_DIR),
+        "contacts": mail_contacts_db.list_contacts(BASE_DIR, section_key=section_key, query=q or ""),
+    }
+
+
+@app.post("/api/admin/mail-contacts")
+def admin_add_mail_contact(req: MailContactCreateRequest, request: Request):
+    admin = check_auth(request, require_admin=True)
+    mail_contacts_db.init_db(BASE_DIR, get_network_base_dir())
+    try:
+        item = mail_contacts_db.add_contact(
+            BASE_DIR,
+            section_key=req.section_key,
+            recipient_name=req.recipient_name,
+            email=req.email,
+            mail_role=req.mail_role,
+            note=req.note,
+            updated_by=admin["login"],
+        )
+        return {"status": "success", "contact": item}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/admin/mail-contacts/{contact_id}/update")
+def admin_update_mail_contact(contact_id: int, req: MailContactUpdateRequest, request: Request):
+    admin = check_auth(request, require_admin=True)
+    mail_contacts_db.init_db(BASE_DIR, get_network_base_dir())
+    try:
+        item = mail_contacts_db.update_contact(
+            BASE_DIR,
+            contact_id=contact_id,
+            section_key=req.section_key,
+            recipient_name=req.recipient_name,
+            email=req.email,
+            mail_role=req.mail_role,
+            note=req.note,
+            updated_by=admin["login"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not item:
+        raise HTTPException(status_code=404, detail="Контакт не найден")
+    return {"status": "success", "contact": item}
+
+
+@app.post("/api/admin/mail-contacts/{contact_id}/delete")
+@app.delete("/api/admin/mail-contacts/{contact_id}")
+def admin_delete_mail_contact(contact_id: int, request: Request):
+    check_auth(request, require_admin=True)
+    mail_contacts_db.init_db(BASE_DIR, get_network_base_dir())
+    ok = mail_contacts_db.delete_contact(BASE_DIR, contact_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Контакт не найден")
+    return {"status": "success"}
 
 
 class ThermoEmailRequest(BaseModel):

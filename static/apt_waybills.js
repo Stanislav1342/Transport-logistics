@@ -2943,10 +2943,13 @@
       if (resBox) {
         resBox.style.display = 'block';
         if (res.exported_pages > 0) {
+          const pathLine = res.export_zip
+            ? `ZIP-архив: <code>${escapeHtml(res.export_zip)}</code>`
+            : `Папка: <code>${escapeHtml(res.export_dir || '')}</code>`;
           resBox.innerHTML = `
             <div style="background:#f0fdf4; border:1px solid #86efac; border-radius:10px; padding:12px 16px; color:#166534; font-size:13.5px;">
               <b>Выгрузка завершена.</b> Страниц: <b>${Number(res.exported_pages)}</b>, кропов цифр: <b>${Number(res.exported_crops || 0)}</b>.<br>
-              <span style="font-size:12.5px;">Папка: <code>${escapeHtml(res.export_dir || '')}</code></span>
+              <span style="font-size:12.5px;">${pathLine}</span>
             </div>
           `;
         } else {
@@ -3076,6 +3079,10 @@
     });
     $('apt-filter-all-btn')?.addEventListener('click', () => {
       state.filterErrorsOnly = false;
+      if (!state.currentPageId && state.session?.pages?.length) {
+        selectPage(state.session.pages[0].page_id, false);
+        return;
+      }
       renderAllSessionUI();
     });
 
@@ -3084,8 +3091,12 @@
       const wb = (state.session?.waybills || []).find(w => w.waybill_idx === wbIdx);
       if (wb && wb.page_ids?.length) {
         const pagesById = new Map((state.session.pages || []).map(p => [p.page_id, p]));
-        const firstProb = wb.page_ids.map(id => pagesById.get(id)).find(p => p && pageHasActiveIssues(p));
-        selectPage((firstProb ? firstProb.page_id : wb.page_ids[0]), true);
+        if (state.filterErrorsOnly) {
+          const firstProb = wb.page_ids.map(id => pagesById.get(id)).find(p => p && pageHasActiveIssues(p));
+          selectPage((firstProb ? firstProb.page_id : wb.page_ids[0]), true);
+        } else {
+          selectPage(wb.page_ids[0], false);
+        }
       }
     });
 
@@ -3094,11 +3105,11 @@
       if (list.length === 0) return;
       const idx = list.findIndex(p => p.page_id === state.currentPageId);
       if (idx > 0) {
-        selectPage(list[idx - 1].page_id, true);
+        selectPage(list[idx - 1].page_id, state.filterErrorsOnly);
       } else if (idx === -1) {
         const curGlobal = Number(getCurrentPage()?.global_page_num || 0);
         const prevCand = [...list].reverse().find(p => Number(p.global_page_num || 0) < curGlobal);
-        if (prevCand) selectPage(prevCand.page_id, true);
+        if (prevCand) selectPage(prevCand.page_id, state.filterErrorsOnly);
       }
     });
 
@@ -3107,11 +3118,11 @@
       if (list.length === 0) return;
       const idx = list.findIndex(p => p.page_id === state.currentPageId);
       if (idx >= 0 && idx < list.length - 1) {
-        selectPage(list[idx + 1].page_id, true);
+        selectPage(list[idx + 1].page_id, state.filterErrorsOnly);
       } else if (idx === -1) {
         const curGlobal = Number(getCurrentPage()?.global_page_num || 0);
         const nextCand = list.find(p => Number(p.global_page_num || 0) > curGlobal) || list[0];
-        if (nextCand) selectPage(nextCand.page_id, true);
+        if (nextCand) selectPage(nextCand.page_id, state.filterErrorsOnly);
       }
     });
 
