@@ -79,6 +79,40 @@ def set_clipboard(text: str) -> None:
             pass
 
 
+def get_clipboard() -> str:
+    """Читает текст из буфера обмена Windows (CF_UNICODETEXT), fallback на ''."""
+    if sys.platform == "win32":
+        try:
+            import win32clipboard
+
+            for _ in range(3):
+                try:
+                    win32clipboard.OpenClipboard()
+                    try:
+                        if win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_UNICODETEXT):
+                            data = win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT)
+                            return str(data) if data is not None else ""
+                        if win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_TEXT):
+                            data = win32clipboard.GetClipboardData(win32clipboard.CF_TEXT)
+                            if isinstance(data, bytes):
+                                return data.decode("cp1251", errors="ignore")
+                            return str(data) if data is not None else ""
+                        return ""
+                    finally:
+                        win32clipboard.CloseClipboard()
+                except Exception:
+                    time.sleep(0.03)
+        except Exception as e:
+            logger.debug("get_clipboard error: %s", e)
+    else:
+        try:
+            res = subprocess.run(["pbpaste"], capture_output=True, text=True, check=True)
+            return res.stdout or ""
+        except Exception:
+            pass
+    return ""
+
+
 class BaseOneCExporter:
     """Интерфейс сервиса выгрузки данных из 1С."""
 
@@ -282,15 +316,6 @@ class WindowsOneCExporter(BaseOneCExporter):
                 continue
         return ""
 
-    def _clear_focused_field(self) -> None:
-        """Выделяет и очищает текущее сфокусированное поле (Ctrl+A → BackSpace → Delete)."""
-        self._send_hotkey(self.win32con.VK_CONTROL, 0x41)  # Ctrl + A
-        time.sleep(0.05)
-        self._send_hotkey(self.win32con.VK_BACK)
-        time.sleep(0.05)
-        self._send_hotkey(self.win32con.VK_DELETE)
-        time.sleep(0.06)
-
     @staticmethod
     def _field_matches_date(field_value: str, date_str: str) -> bool:
         """Проверяет, соответствует ли значение UIA-поля введённой дате."""
@@ -302,6 +327,41 @@ class WindowsOneCExporter(BaseOneCExporter):
         actual_digits = re.sub(r"\D", "", field_value)
         return bool(expected_digits) and actual_digits.startswith(expected_digits)
 
+    def _type_digits_vk(self, digits: str) -> None:
+        """
+        Посимвольный ввод цифр (0x30..0x39) через win32api.keybd_event.
+        Не зависит от активной раскладки клавиатуры (РУС/ENG) и корректно доходит до 1С.
+        """
+        for ch in digits:
+            if "0" <= ch <= "9":
+                vk_code = ord(ch)
+                self._send_vk(vk_code, down=True)
+                time.sleep(0.025)
+                self._send_vk(vk_code, down=False)
+                time.sleep(0.035)
+
+    def _read_focused_field_clipboard(self) -> str:
+        """Контрольное чтение сфокусированного поля через буфер обмена (Ctrl+A → Ctrl+C)."""
+        set_clipboard("")
+        time.sleep(0.04)
+        self._send_hotkey(self.win32con.VK_CONTROL, 0x41)  # Ctrl + A
+        time.sleep(0.05)
+        self._send_hotkey(self.win32con.VK_CONTROL, 0x43)  # Ctrl + C
+        time.sleep(0.08)
+        return get_clipboard().strip()
+
+    def _verify_date_field_value(self, field_elem, date_str: str) -> Tuple[bool, str]:
+        """Проверяет содержимое поля даты через UIA и (при необходимости) Ctrl+A → Ctrl+C."""
+        uia_val = self._get_uia_field_value(field_elem)
+        if self._field_matches_date(uia_val, date_str):
+            return True, f"UIA={uia_val!r}"
+
+        clip_val = self._read_focused_field_clipboard()
+        if self._field_matches_date(clip_val, date_str):
+            return True, f"clipboard={clip_val!r}"
+
+        return False, f"UIA={uia_val!r}, clipboard={clip_val!r}"
+
     def _enter_date_field(
         self,
         click_x: int,
@@ -311,75 +371,67 @@ class WindowsOneCExporter(BaseOneCExporter):
     ) -> None:
         """
         Надёжный ввод даты в маскированное поле 1С:
-        1. Клик/фокус поля.
-        2. Очистка: Ctrl+A → BackSpace → Delete.
-        3. Ввод: Ctrl+V с UIA-проверкой (get_value()/window_text()) или посимвольный ввод
-           цифр даты через send_keys (без точек), с fallback на ввод с точками.
-        4. Нажатие Tab для фиксации значения в 1С.
+        1. Клик в левую часть текстового поля (дальше от иконок календаря и крестика).
+        2. Способ 1 (всегда): set_clipboard(date_str) → Ctrl+A → Ctrl+V + проверка (UIA / Ctrl+C).
+        3. Способ 2 (fallback при несовпадении): Ctrl+A → BackSpace → VK_HOME → _type_digits_vk(digits)
+           + повторная проверка.
+        4. Нажатие Tab для фиксации значения поля в 1С.
         """
+        target_x, target_y = click_x, click_y
         if field_elem is not None:
             try:
                 field_elem.set_focus()
             except Exception:
                 pass
             try:
-                field_elem.click_input()
+                r = field_elem.rectangle()
+                if r.width() > 0 and r.height() > 0:
+                    target_x = r.left + min(25, max(8, r.width() // 4))
+                    target_y = r.top + r.height() // 2
             except Exception:
-                self.pywinauto.mouse.click(coords=(click_x, click_y))
-        else:
-            self.pywinauto.mouse.click(coords=(click_x, click_y))
+                pass
+
+        self.pywinauto.mouse.click(coords=(target_x, target_y))
+        if field_elem is None:
             try:
-                field_elem = self.Desktop(backend="uia").from_point(click_x, click_y)
+                field_elem = self.Desktop(backend="uia").from_point(target_x, target_y)
             except Exception:
                 field_elem = None
         time.sleep(0.12)
 
-        digits_only = re.sub(r"\D", "", date_str)
-        initial_val = self._get_uia_field_value(field_elem)
-        uia_is_date_value = bool(
-            initial_val and re.search(r"\d{2}\.\d{2}\.\d{4}|\d{2}\D\d{2}\D\d{4}|__", initial_val)
+        # Способ 1: Ctrl+A → Ctrl+V (без BackSpace/Delete, сдвигающих курсор в маске)
+        set_clipboard(date_str)
+        time.sleep(0.06)
+        self._send_hotkey(self.win32con.VK_CONTROL, 0x41)  # Ctrl + A
+        time.sleep(0.06)
+        self._paste_clipboard()
+        time.sleep(0.15)
+
+        ok, actual_info = self._verify_date_field_value(field_elem, date_str)
+        print(
+            f"[1С:Windows] Поле даты ({target_x}, {target_y}) [Ctrl+V] → "
+            f"{'OK' if ok else 'НЕ СОВПАЛО'} (ожидалось {date_str!r}, получено: {actual_info})"
         )
 
-        # Очистка текущего поля без Home + Shift+End
-        self._clear_focused_field()
-
-        entered = False
-        if uia_is_date_value:
-            set_clipboard(date_str)
-            time.sleep(0.06)
-            self._paste_clipboard()
+        # Способ 2 (fallback): Ctrl+A → BackSpace → VK_HOME → посимвольный ввод цифр через keybd_event
+        if not ok:
+            digits_only = re.sub(r"\D", "", date_str)
+            self._send_hotkey(self.win32con.VK_CONTROL, 0x41)  # Ctrl + A
+            time.sleep(0.05)
+            self._send_hotkey(self.win32con.VK_BACK)
+            time.sleep(0.05)
+            self._send_hotkey(self.win32con.VK_HOME)
+            time.sleep(0.05)
+            self._type_digits_vk(digits_only)
             time.sleep(0.15)
-            val = self._get_uia_field_value(field_elem)
-            if self._field_matches_date(val, date_str):
-                entered = True
-            else:
-                logger.debug("Ctrl+V не обновил поле даты (%r != %r), переход к send_keys", val, date_str)
 
-        if not entered:
-            if uia_is_date_value:
-                self._clear_focused_field()
-            try:
-                self.send_keys(digits_only, with_spaces=False, pause=0.04)
-                time.sleep(0.15)
-            except Exception as e:
-                logger.debug("send_keys(digits_only) error: %s, fallback Ctrl+V", e)
-                set_clipboard(date_str)
-                time.sleep(0.06)
-                self._paste_clipboard()
-                time.sleep(0.15)
+            ok2, actual_info2 = self._verify_date_field_value(field_elem, date_str)
+            print(
+                f"[1С:Windows] Поле даты ({target_x}, {target_y}) [_type_digits_vk:{digits_only}] → "
+                f"{'OK' if ok2 else 'НЕ СОВПАЛО'} (ожидалось {date_str!r}, получено: {actual_info2})"
+            )
 
-            if uia_is_date_value:
-                val = self._get_uia_field_value(field_elem)
-                if not self._field_matches_date(val, date_str):
-                    logger.debug("send_keys(digits) не совпал (%r != %r), пробуем с точками", val, date_str)
-                    self._clear_focused_field()
-                    try:
-                        self.send_keys(date_str, with_spaces=False, pause=0.04)
-                        time.sleep(0.15)
-                    except Exception as e:
-                        logger.debug("send_keys(date_str) error: %s", e)
-
-        # Нажатие Tab для фиксации значения поля в 1С
+        # Фиксация введённого значения поля в 1С
         self._hotkey_tab()
         time.sleep(0.12)
 
@@ -1210,23 +1262,23 @@ class WindowsOneCExporter(BaseOneCExporter):
 
                 dlg_r = dlg.rectangle()
 
-                # Координаты Box 1 и Box 2 по проверенным пропорциям скриншота 1С
-                box1_x = dlg_r.left + int(dlg_r.width() * 0.17)
-                box1_y = dlg_r.top + int(dlg_r.height() * 0.14)
-                box2_x = dlg_r.left + int(dlg_r.width() * 0.50)
+                # Координаты Box 1 и Box 2 (левая часть полей, совпадает с (757, 360) и (927, 360))
+                box1_x = dlg_r.left + int(dlg_r.width() * 0.12)
+                box1_y = dlg_r.top + int(dlg_r.height() * 0.13)
+                box2_x = dlg_r.left + int(dlg_r.width() * 0.44)
                 box2_y = box1_y
                 field1_elem = None
                 field2_elem = None
 
-                # Если UIA видит Edit-элементы в верхней строке, уточняем координаты и передаём элементы
+                # Если UIA видит Edit-элементы в верхней строке, берём левую часть поля и передаём элементы
                 if len(edits) >= 2 and edits[0].rectangle().top < dlg_r.top + int(dlg_r.height() * 0.3):
                     field1_elem = edits[0]
                     field2_elem = edits[1]
                     r0 = field1_elem.rectangle()
                     r1 = field2_elem.rectangle()
-                    box1_x = r0.left + r0.width() // 2
+                    box1_x = r0.left + min(25, max(8, r0.width() // 4))
                     box1_y = r0.top + r0.height() // 2
-                    box2_x = r1.left + r1.width() // 2
+                    box2_x = r1.left + min(25, max(8, r1.width() // 4))
                     box2_y = r1.top + r1.height() // 2
                     print(f"[1С:Windows] Координаты Edit-полей: Поле 1=({box1_x}, {box1_y}), Поле 2=({box2_x}, {box2_y})...")
                 else:
