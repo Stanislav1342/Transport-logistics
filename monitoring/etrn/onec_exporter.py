@@ -368,7 +368,7 @@ class WindowsOneCExporter(BaseOneCExporter):
         click_y: int,
         date_str: str,
         field_elem=None,
-    ) -> None:
+    ) -> bool:
         """
         Надёжный ввод даты в маскированное поле 1С:
         1. Клик в левую часть текстового поля (дальше от иконок календаря и крестика).
@@ -376,6 +376,7 @@ class WindowsOneCExporter(BaseOneCExporter):
         3. Способ 2 (fallback при несовпадении): Ctrl+A → BackSpace → VK_HOME → _type_digits_vk(digits)
            + повторная проверка.
         4. Нажатие Tab для фиксации значения поля в 1С.
+        Возвращает True, если дата подтверждена через UIA или get_clipboard().
         """
         target_x, target_y = click_x, click_y
         if field_elem is not None:
@@ -407,14 +408,14 @@ class WindowsOneCExporter(BaseOneCExporter):
         self._paste_clipboard()
         time.sleep(0.15)
 
-        ok, actual_info = self._verify_date_field_value(field_elem, date_str)
+        confirmed, actual_info = self._verify_date_field_value(field_elem, date_str)
         print(
             f"[1С:Windows] Поле даты ({target_x}, {target_y}) [Ctrl+V] → "
-            f"{'OK' if ok else 'НЕ СОВПАЛО'} (ожидалось {date_str!r}, получено: {actual_info})"
+            f"{'OK' if confirmed else 'НЕ СОВПАЛО'} (ожидалось {date_str!r}, получено: {actual_info})"
         )
 
         # Способ 2 (fallback): Ctrl+A → BackSpace → VK_HOME → посимвольный ввод цифр через keybd_event
-        if not ok:
+        if not confirmed:
             digits_only = re.sub(r"\D", "", date_str)
             self._send_hotkey(self.win32con.VK_CONTROL, 0x41)  # Ctrl + A
             time.sleep(0.05)
@@ -425,15 +426,16 @@ class WindowsOneCExporter(BaseOneCExporter):
             self._type_digits_vk(digits_only)
             time.sleep(0.15)
 
-            ok2, actual_info2 = self._verify_date_field_value(field_elem, date_str)
+            confirmed, actual_info2 = self._verify_date_field_value(field_elem, date_str)
             print(
                 f"[1С:Windows] Поле даты ({target_x}, {target_y}) [_type_digits_vk:{digits_only}] → "
-                f"{'OK' if ok2 else 'НЕ СОВПАЛО'} (ожидалось {date_str!r}, получено: {actual_info2})"
+                f"{'OK' if confirmed else 'НЕ СОВПАЛО'} (ожидалось {date_str!r}, получено: {actual_info2})"
             )
 
         # Фиксация введённого значения поля в 1С
         self._hotkey_tab()
         time.sleep(0.12)
+        return confirmed
 
     # ---------------------------------------------------------------------
     # Надежный поиск диалогов в Windows (Win32 EnumWindows + Desktop UIA)
@@ -1087,43 +1089,67 @@ class WindowsOneCExporter(BaseOneCExporter):
         )
         return any(re.search(p, txt) for p in patterns)
 
+    _TABLE_CELL_SUFFIXES = (
+        " номер",
+        " дата",
+        " внутренний",
+        " грузоотправитель",
+        " грузополучатель",
+        " перевозчик",
+        " текущий шаг",
+        " состояние эдо",
+    )
+
     @staticmethod
-    def _is_period_pill_candidate(txt: str, control_type: str = "") -> bool:
+    def _contains_valid_dd_mm(txt: str) -> bool:
+        """
+        Проверяет, содержит ли строка валидную дату (01..31 и 01..12) в формате
+        DD.MM, DD.MM.YY или DD.MM.YYYY. Защищает от ложных срабатываний на номера
+        документов вроде «МСК555674.00000784502».
+        """
+        if not txt:
+            return False
+        for m in re.finditer(r"(?:^|\D)(\d{2})\.(\d{2})(?:\.(\d{2}|\d{4}))?(?=\D|$)", txt):
+            dd, mm = int(m.group(1)), int(m.group(2))
+            if 1 <= dd <= 31 and 1 <= mm <= 12:
+                return True
+        return False
+
+    @classmethod
+    def _is_period_pill_candidate(cls, txt: str, control_type: str = "") -> bool:
         """Фильтрует элементы, которые не являются табличными строками и похожи на плашку периода."""
         if not txt:
             return False
         if control_type in ("DataItem", "ListItem", "TreeItem"):
             return False
         low = txt.lower()
-        if low.endswith(" дата") or "дата " in low and len(txt) > 25:
+        if any(low.endswith(sfx) for sfx in cls._TABLE_CELL_SUFFIXES) or (" дата" in low and len(txt) > 18):
             return False
-        has_date = bool(re.search(r"\d{2}\.\d{2}(?:\.\d{2,4})?", txt))
+        has_date = cls._contains_valid_dd_mm(txt)
+        if not has_date:
+            return False
         has_range_dash = bool(
             re.search(r"\d{2}\.\d{2}(?:\.\d{2,4})?\s*[-–—]|[-–—]\s*\d{2}\.\d{2}(?:\.\d{2,4})?", txt)
         )
-        if has_range_dash or ("период" in low and (has_date or "-" in txt)):
-            return True
-        if has_date and len(txt) <= 40:
+        if has_range_dash or "период" in low or len(txt) <= 40:
             return True
         return False
 
     def _scan_upper_date_elements(self) -> List[Tuple[Any, Any, str, str]]:
         """
-        Сканирует верхнюю панель окна 1С (top <= 260, left <= 1200)
-        и возвращает список (el, rect, txt, control_type) для элементов с датами.
+        Сканирует строго область над таблицей (95 <= r.top <= 148, r.left <= 1200)
+        и возвращает список (el, rect, txt, control_type) для элементов с валидными датами.
         """
         results: List[Tuple[Any, Any, str, str]] = []
         try:
             for el in self.main_win.descendants():
                 try:
                     r = el.rectangle()
-                    if r.top <= 260 and r.left <= 1200 and (r.top + r.height()) >= 0:
+                    if 95 <= r.top <= 148 and r.left <= 1200 and (r.top + r.height()) >= 0:
                         txt = self._extract_el_text_candidates(el)
                         if not txt:
                             continue
-                        if re.search(r"\d{2}\.\d{2}(?:\.\d{2,4})?", txt) or (
-                            any(d in txt for d in ("-", "–", "—")) and len(txt) <= 40 and re.search(r"\d", txt)
-                        ):
+                        if self._contains_valid_dd_mm(txt):
                             ct = str(getattr(el.element_info, "control_type", "") or "")
                             results.append((el, r, txt, ct))
                 except Exception:
@@ -1132,20 +1158,57 @@ class WindowsOneCExporter(BaseOneCExporter):
             pass
         return results
 
-    def _verify_etrn_period_pill(self, d_from_str: str, d_to_str: str) -> Tuple[bool, str]:
+    def _scan_etrn_table_dates(self) -> List[datetime.date]:
         """
-        Проверяет текст на плашке периода списка «ЭТРН» по всей верхней части окна 1С
-        (r.top <= 260, r.left <= 1200). Проверяет как полный (25.11.2026), так и короткий
-        (25.11.26 / 25.11) формат дат.
-        Возвращает (True, pill_text) только если плашка не начинается с '-'
-        и содержит обе требуемые даты (d_from_str и d_to_str).
+        Сканирует видимые ячейки дат таблицы ЭТРН («DD.MM.YYYY Дата» в 150 <= r.top <= 600)
+        и возвращает список распарсенных дат строк.
+        """
+        dates: List[datetime.date] = []
+        try:
+            for el in self.main_win.descendants():
+                try:
+                    r = el.rectangle()
+                    if 150 <= r.top <= 600:
+                        txt = self._extract_el_text_candidates(el)
+                        if not txt:
+                            continue
+                        low = txt.lower()
+                        if low.endswith(" дата"):
+                            m = re.search(r"(\d{2}\.\d{2}\.\d{4})", txt)
+                            if m:
+                                try:
+                                    dates.append(datetime.strptime(m.group(1), "%d.%m.%Y").date())
+                                except ValueError:
+                                    continue
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return dates
+
+    def _verify_etrn_period_pill(
+        self,
+        d_from_str: str,
+        d_to_str: str,
+        dialog_confirmed: bool = False,
+    ) -> Tuple[bool, str]:
+        """
+        Проверяет установленный период списка «ЭТРН»:
+        - Шаг A: если UIA видит плашку периода в 95 <= r.top <= 148 (r.left <= 1200) —
+          проверяет наличие обеих дат (25.11.2026 / 25.11.26 / 25.11) и отсутствие ведущего '-'.
+        - Шаг B: если плашка owner-drawn и не видна в UIA — проверяет видимые даты строк
+          таблицы («DD.MM.YYYY Дата» в 150 <= r.top <= 600): при наличии хотя бы одной даты
+          вне [date_from, date_to] возвращает False; если в диалоге оба поля подтверждены,
+          диалог закрылся и все видимые даты в диапазоне (или список пуст) — возвращает True.
         """
         upper_elements = self._scan_upper_date_elements()
         last_pill_txt = ""
+        found_pill_candidate = False
 
         for _, _, txt, ct in upper_elements:
             if not self._is_period_pill_candidate(txt, ct):
                 continue
+            found_pill_candidate = True
             last_pill_txt = txt
             if txt.lstrip().startswith(("-", "–", "—")) or re.search(
                 r"(?:^|:\s*)[-–—]\s*\d{2}\.\d{2}", txt
@@ -1155,26 +1218,56 @@ class WindowsOneCExporter(BaseOneCExporter):
             if self._text_contains_date(txt, d_from_str) and self._text_contains_date(txt, d_to_str):
                 return True, txt
 
-        # Диагностический вывод найденных элементов с датами в верхней панели при несовпадении
+        # Если UIA нашёл плашку, но её даты не совпали с целевыми
+        if found_pill_candidate:
+            print(
+                f"[1С:Windows] Диагностика верхней панели ЭТРН (95<=top<=148, left<=1200): "
+                f"найдено элементов с датами={len(upper_elements)}"
+            )
+            for _, r, txt, ct in upper_elements[:15]:
+                print(f"[1С:Windows]   • «{txt}» | type={ct or '?'} | rect={r}")
+            return False, last_pill_txt
+
+        # Шаг B: плашка owner-drawn не отдаётся в UIA → проверяем видимые строки таблицы
+        d_from_date = datetime.strptime(d_from_str, "%d.%m.%Y").date()
+        d_to_date = datetime.strptime(d_to_str, "%d.%m.%Y").date()
+        table_dates = self._scan_etrn_table_dates()
+        valid_dates: List[datetime.date] = []
+
+        for row_date in table_dates:
+            if row_date < d_from_date or row_date > d_to_date:
+                bad_date = row_date.strftime("%d.%m.%Y")
+                print(f"[1С:Windows] ⚠ Обнаружена строка таблицы с датой вне периода: {bad_date}")
+                return False, f"В таблице дата вне периода: {bad_date}"
+            valid_dates.append(row_date)
+
+        if dialog_confirmed:
+            msg = f"Подтверждено по диалогу и таблице (строк в периоде: {len(valid_dates)})"
+            return True, msg
+
         if upper_elements:
             print(
-                f"[1С:Windows] Диагностика верхней панели ЭТРН (top<=260, left<=1200): "
+                f"[1С:Windows] Диагностика верхней панели ЭТРН (95<=top<=148, left<=1200): "
                 f"найдено элементов с датами={len(upper_elements)}"
             )
             for _, r, txt, ct in upper_elements[:15]:
                 print(f"[1С:Windows]   • «{txt}» | type={ct or '?'} | rect={r}")
         else:
-            print("[1С:Windows] Диагностика верхней панели ЭТРН: элементы с датами (top<=260, left<=1200) не найдены.")
+            print(
+                "[1С:Windows] Плашка в UIA не видна (owner-drawn), "
+                f"видимых строк дат в таблице: {len(valid_dates)}."
+            )
 
-        return False, last_pill_txt or "Плашка периода не найдена"
+        return False, "Плашка периода не найдена"
 
     def _set_etrn_period(self, date_from: datetime, date_to: datetime) -> None:
         """
         Устанавливает период для списка ЭТРН через диалог «Выберите период».
-        1. Клик по плашке периода в верхней части окна (r.top <= 260, r.left <= 1200).
+        1. Поиск плашки периода строго над таблицей (95 <= r.top <= 148, r.left <= 1200).
         2. Если не открылась — открытие через меню «Еще ▾» ➔ «Установить период...».
-        3. Заполнение полей «Дата начала» и «Дата окончания» через _enter_date_field.
-        4. Нажатие «Выбрать» / Enter и обязательная проверка плашки периода.
+        3. Заполнение полей «Дата начала» и «Дата окончания» через _enter_date_field (-> bool).
+        4. Нажатие «Выбрать» / Enter и обязательная проверка через _verify_etrn_period_pill
+           (UIA-плашка или видимые строки таблицы при owner-drawn плашке).
         5. Повтор при несовпадении; RuntimeError после исчерпания попыток.
         """
         d_from_str = date_from.strftime("%d.%m.%Y")
@@ -1184,10 +1277,11 @@ class WindowsOneCExporter(BaseOneCExporter):
         time.sleep(1.0)
 
         max_attempts = 3
+        last_reason = "Диалог «Выберите период» не открылся"
         for attempt in range(1, max_attempts + 1):
             opened_dialog = False
 
-            # 1. Клик по плашке периода в верхней части окна (r.top <= 260, r.left <= 1200)
+            # 1. Клик по плашке периода строго над таблицей (95 <= r.top <= 148, r.left <= 1200)
             try:
                 upper_elements = self._scan_upper_date_elements()
                 pill_candidates = [
@@ -1195,7 +1289,6 @@ class WindowsOneCExporter(BaseOneCExporter):
                     for el, r, txt, ct in upper_elements
                     if self._is_period_pill_candidate(txt, ct)
                 ]
-                # Сначала элементы с диапазоном/тире или словом «период», и выше по экрану
                 pill_candidates.sort(
                     key=lambda item: (
                         0 if (re.search(r"[-–—]", item[2]) or "период" in item[2].lower()) else 1,
@@ -1286,11 +1379,11 @@ class WindowsOneCExporter(BaseOneCExporter):
 
                 # Ввод даты начала
                 print(f"[1С:Windows] Заполнение даты начала ({d_from_str}) в ({box1_x}, {box1_y})...")
-                self._enter_date_field(box1_x, box1_y, d_from_str, field_elem=field1_elem)
+                from_ok = self._enter_date_field(box1_x, box1_y, d_from_str, field_elem=field1_elem)
 
                 # Ввод даты окончания
                 print(f"[1С:Windows] Заполнение даты окончания ({d_to_str}) в ({box2_x}, {box2_y})...")
-                self._enter_date_field(box2_x, box2_y, d_to_str, field_elem=field2_elem)
+                to_ok = self._enter_date_field(box2_x, box2_y, d_to_str, field_elem=field2_elem)
 
                 # Нажатие кнопки «Выбрать» / «ОК»
                 selected = False
@@ -1318,35 +1411,40 @@ class WindowsOneCExporter(BaseOneCExporter):
                         self._hotkey_enter()
 
                 # Ожидание закрытия диалога «Выберите период»
+                dialog_closed = False
                 for _ in range(15):
                     if not self._is_dialog_open("период"):
+                        dialog_closed = True
                         break
                     time.sleep(0.3)
 
                 time.sleep(1.5)
 
-                # 5. Обязательная проверка плашки периода после закрытия диалога
-                is_valid, pill_txt = self._verify_etrn_period_pill(d_from_str, d_to_str)
+                # 5. Верификация периода: UIA-плашка или (при owner-drawn плашке) диалог + строки таблицы
+                dialog_confirmed = bool(from_ok and to_ok and dialog_closed)
+                is_valid, pill_txt = self._verify_etrn_period_pill(
+                    d_from_str, d_to_str, dialog_confirmed=dialog_confirmed
+                )
                 if is_valid:
-                    print(f"[1С:Windows] ✓ Период списка «ЭТРН» подтвержден на плашке: «{pill_txt}».")
+                    print(f"[1С:Windows] ✓ Период списка «ЭТРН» подтверждён: «{pill_txt}».")
                     return
 
+                last_reason = pill_txt
                 print(
-                    f"[1С:Windows] ⚠ Плашка периода не соответствует {d_from_str} - {d_to_str} "
-                    f"(текущее значение: «{pill_txt}»). Попытка {attempt}/{max_attempts}..."
+                    f"[1С:Windows] ⚠ Проверка периода не пройдена для {d_from_str} - {d_to_str} "
+                    f"(статус: «{pill_txt}»). Попытка {attempt}/{max_attempts}..."
                 )
                 time.sleep(1.0)
             else:
+                last_reason = "Диалог «Выберите период» не открылся"
                 print(f"[1С:Windows] ⚠ Диалог периода не открылся на попытке {attempt}/{max_attempts}, повтор...")
                 time.sleep(1.0)
 
-        is_valid, pill_txt = self._verify_etrn_period_pill(d_from_str, d_to_str)
-        if not is_valid:
-            raise RuntimeError(
-                f"Не удалось установить период с {d_from_str} по {d_to_str} в разделе «ЭТРН» "
-                f"после {max_attempts} попыток! Текущее значение плашки: «{pill_txt}». "
-                "Выгрузка остановлена во избежание выборки данных за неверный период."
-            )
+        raise RuntimeError(
+            f"Не удалось установить период с {d_from_str} по {d_to_str} в разделе «ЭТРН» "
+            f"после {max_attempts} попыток! Причина: «{last_reason}». "
+            "Выгрузка остановлена во избежание выборки данных за неверный период."
+        )
 
     def _configure_etrn_columns(self, dlg) -> None:
         """
