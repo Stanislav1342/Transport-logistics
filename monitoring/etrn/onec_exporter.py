@@ -40,7 +40,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     from .config import Config, get_config
@@ -276,8 +276,8 @@ class WindowsOneCExporter(BaseOneCExporter):
         ):
             try:
                 val = getter()
-                if val is not None and str(val).strip():
-                    return str(val).strip()
+                if isinstance(val, str) and val.strip():
+                    return val.strip()
             except Exception:
                 continue
         return ""
@@ -990,35 +990,136 @@ class WindowsOneCExporter(BaseOneCExporter):
     # ---------------------------------------------------------------------
     # Раздел 2: «Электронные транспортные накладные»
     # ---------------------------------------------------------------------
-    def _verify_etrn_period_pill(self, d_from_str: str, d_to_str: str) -> Tuple[bool, str]:
+    @staticmethod
+    def _extract_el_text_candidates(el) -> str:
+        """Извлекает читаемый текст UIA-элемента (name / window_text / Value), предпочитая строку с датой."""
+        candidates: List[str] = []
+        for getter in (
+            lambda: getattr(el.element_info, "name", ""),
+            lambda: el.window_text(),
+            lambda: el.get_value(),
+            lambda: el.legacy_properties().get("Value", ""),
+        ):
+            try:
+                val = getter()
+                if isinstance(val, str):
+                    s = val.strip()
+                    if s and s not in candidates:
+                        candidates.append(s)
+            except Exception:
+                continue
+
+        for c in candidates:
+            if re.search(r"\d{2}\.\d{2}(?:\.\d{2,4})?", c):
+                return c
+        return candidates[0] if candidates else ""
+
+    @staticmethod
+    def _text_contains_date(txt: str, full_date_str: str) -> bool:
         """
-        Проверяет текст на плашке периода списка «ЭТРН» (в левой части тулбара).
-        Возвращает (True, pill_text) только если плашка не начинается с '-'
-        и содержит обе требуемые даты (d_from_str и d_to_str).
+        Проверяет наличие даты в строке плашки в полном (25.11.2026) или
+        коротком формате (25.11.26 / 25.11) с защитой от частичного совпадения года.
         """
-        last_pill_txt = ""
+        if not txt or not full_date_str:
+            return False
+        parts = full_date_str.split(".")
+        if len(parts) != 3:
+            return full_date_str in txt
+
+        dd, mm, yyyy = parts
+        yy = yyyy[-2:]
+        patterns = (
+            rf"(?:^|\D){re.escape(dd)}\.{re.escape(mm)}\.{re.escape(yyyy)}(?:\D|$)",
+            rf"(?:^|\D){re.escape(dd)}\.{re.escape(mm)}\.{re.escape(yy)}(?:\D|$)",
+            rf"(?:^|\D){re.escape(dd)}\.{re.escape(mm)}(?!\.\d)(?:\D|$)",
+        )
+        return any(re.search(p, txt) for p in patterns)
+
+    @staticmethod
+    def _is_period_pill_candidate(txt: str, control_type: str = "") -> bool:
+        """Фильтрует элементы, которые не являются табличными строками и похожи на плашку периода."""
+        if not txt:
+            return False
+        if control_type in ("DataItem", "ListItem", "TreeItem"):
+            return False
+        low = txt.lower()
+        if low.endswith(" дата") or "дата " in low and len(txt) > 25:
+            return False
+        has_date = bool(re.search(r"\d{2}\.\d{2}(?:\.\d{2,4})?", txt))
+        has_range_dash = bool(
+            re.search(r"\d{2}\.\d{2}(?:\.\d{2,4})?\s*[-–—]|[-–—]\s*\d{2}\.\d{2}(?:\.\d{2,4})?", txt)
+        )
+        if has_range_dash or ("период" in low and (has_date or "-" in txt)):
+            return True
+        if has_date and len(txt) <= 40:
+            return True
+        return False
+
+    def _scan_upper_date_elements(self) -> List[Tuple[Any, Any, str, str]]:
+        """
+        Сканирует верхнюю панель окна 1С (top <= 260, left <= 1200)
+        и возвращает список (el, rect, txt, control_type) для элементов с датами.
+        """
+        results: List[Tuple[Any, Any, str, str]] = []
         try:
             for el in self.main_win.descendants():
                 try:
                     r = el.rectangle()
-                    if r.left <= 300 and 60 <= r.top <= 145:
-                        txt = (el.element_info.name or el.window_text() or "").strip()
-                        if re.search(r"\d{2}\.\d{2}\.\d{4}", txt) or ("-" in txt and len(txt) <= 40):
-                            last_pill_txt = txt
-                            if txt.startswith("-"):
-                                return False, txt
-                            if d_from_str in txt and d_to_str in txt:
-                                return True, txt
+                    if r.top <= 260 and r.left <= 1200 and (r.top + r.height()) >= 0:
+                        txt = self._extract_el_text_candidates(el)
+                        if not txt:
+                            continue
+                        if re.search(r"\d{2}\.\d{2}(?:\.\d{2,4})?", txt) or (
+                            any(d in txt for d in ("-", "–", "—")) and len(txt) <= 40 and re.search(r"\d", txt)
+                        ):
+                            ct = str(getattr(el.element_info, "control_type", "") or "")
+                            results.append((el, r, txt, ct))
                 except Exception:
                     continue
         except Exception:
             pass
+        return results
+
+    def _verify_etrn_period_pill(self, d_from_str: str, d_to_str: str) -> Tuple[bool, str]:
+        """
+        Проверяет текст на плашке периода списка «ЭТРН» по всей верхней части окна 1С
+        (r.top <= 260, r.left <= 1200). Проверяет как полный (25.11.2026), так и короткий
+        (25.11.26 / 25.11) формат дат.
+        Возвращает (True, pill_text) только если плашка не начинается с '-'
+        и содержит обе требуемые даты (d_from_str и d_to_str).
+        """
+        upper_elements = self._scan_upper_date_elements()
+        last_pill_txt = ""
+
+        for _, _, txt, ct in upper_elements:
+            if not self._is_period_pill_candidate(txt, ct):
+                continue
+            last_pill_txt = txt
+            if txt.lstrip().startswith(("-", "–", "—")) or re.search(
+                r"(?:^|:\s*)[-–—]\s*\d{2}\.\d{2}", txt
+            ):
+                print(f"[1С:Windows] ⚠ Обнаружена неполная плашка периода без начальной даты: «{txt}».")
+                return False, txt
+            if self._text_contains_date(txt, d_from_str) and self._text_contains_date(txt, d_to_str):
+                return True, txt
+
+        # Диагностический вывод найденных элементов с датами в верхней панели при несовпадении
+        if upper_elements:
+            print(
+                f"[1С:Windows] Диагностика верхней панели ЭТРН (top<=260, left<=1200): "
+                f"найдено элементов с датами={len(upper_elements)}"
+            )
+            for _, r, txt, ct in upper_elements[:15]:
+                print(f"[1С:Windows]   • «{txt}» | type={ct or '?'} | rect={r}")
+        else:
+            print("[1С:Windows] Диагностика верхней панели ЭТРН: элементы с датами (top<=260, left<=1200) не найдены.")
+
         return False, last_pill_txt or "Плашка периода не найдена"
 
     def _set_etrn_period(self, date_from: datetime, date_to: datetime) -> None:
         """
         Устанавливает период для списка ЭТРН через диалог «Выберите период».
-        1. Клик по плашке периода строго в левой части тулбара (r.left <= 300, 60 <= r.top <= 145).
+        1. Клик по плашке периода в верхней части окна (r.top <= 260, r.left <= 1200).
         2. Если не открылась — открытие через меню «Еще ▾» ➔ «Установить период...».
         3. Заполнение полей «Дата начала» и «Дата окончания» через _enter_date_field.
         4. Нажатие «Выбрать» / Enter и обязательная проверка плашки периода.
@@ -1034,25 +1135,31 @@ class WindowsOneCExporter(BaseOneCExporter):
         for attempt in range(1, max_attempts + 1):
             opened_dialog = False
 
-            # 1. Клик по плашке периода строго в левой части тулбара (r.left <= 300, 60 <= r.top <= 145)
-            # Ограничение r.left <= 300 на 100% исключает случайные клики по ячейкам таблицы списка
+            # 1. Клик по плашке периода в верхней части окна (r.top <= 260, r.left <= 1200)
             try:
-                for el in self.main_win.descendants():
-                    try:
-                        r = el.rectangle()
-                        if r.left <= 300 and 60 <= r.top <= 145:
-                            txt = (el.element_info.name or el.window_text() or "").strip()
-                            if re.search(r"\d{2}\.\d{2}\.\d{4}", txt) or ("-" in txt and len(txt) <= 40):
-                                click_x = r.left + 25
-                                click_y = r.top + r.height() // 2
-                                print(f"[1С:Windows] Клик по плашке периода «{txt}» в coords=({click_x}, {click_y})...")
-                                self.pywinauto.mouse.click(coords=(click_x, click_y))
-                                time.sleep(1.2)
-                                if self._is_dialog_open("период"):
-                                    opened_dialog = True
-                                break
-                    except Exception:
-                        continue
+                upper_elements = self._scan_upper_date_elements()
+                pill_candidates = [
+                    (el, r, txt, ct)
+                    for el, r, txt, ct in upper_elements
+                    if self._is_period_pill_candidate(txt, ct)
+                ]
+                # Сначала элементы с диапазоном/тире или словом «период», и выше по экрану
+                pill_candidates.sort(
+                    key=lambda item: (
+                        0 if (re.search(r"[-–—]", item[2]) or "период" in item[2].lower()) else 1,
+                        item[1].top,
+                        item[1].left,
+                    )
+                )
+                for _, r, txt, _ in pill_candidates:
+                    click_x = r.left + min(25, max(5, r.width() // 3))
+                    click_y = r.top + r.height() // 2
+                    print(f"[1С:Windows] Клик по плашке периода «{txt}» ({r}) в coords=({click_x}, {click_y})...")
+                    self.pywinauto.mouse.click(coords=(click_x, click_y))
+                    time.sleep(1.2)
+                    if self._is_dialog_open("период"):
+                        opened_dialog = True
+                    break
             except Exception as e:
                 logger.debug("Поиск плашки периода ЭТРН: %s", e)
 
