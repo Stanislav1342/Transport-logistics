@@ -40,9 +40,9 @@ _ETRN_1C_LOCK = threading.Lock()
 
 def get_etrn_email_to() -> str:
     try:
-        import mail_contacts_db
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        db_to, _ = mail_contacts_db.get_recipients_to_cc(base_dir, "etrn")
+        from core import portal_db
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        db_to, _ = portal_db.get_recipients_to_cc(base_dir, "etrn")
         if db_to:
             return db_to
     except Exception:
@@ -52,9 +52,9 @@ def get_etrn_email_to() -> str:
 
 def get_etrn_email_cc() -> str:
     try:
-        import mail_contacts_db
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        _, db_cc = mail_contacts_db.get_recipients_to_cc(base_dir, "etrn")
+        from core import portal_db
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        _, db_cc = portal_db.get_recipients_to_cc(base_dir, "etrn")
         if db_cc:
             return db_cc
     except Exception:

@@ -44,20 +44,36 @@ from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from browser import (
-    save_page_as_pdf,
-    _resolve_browser_path,
-    _resolve_chromedriver,
-)
-from cdp_driver import DirectCDPDriver
-from config import Config
-from utils import (
-    parse_driver_name,
-    parse_ts_from_print_page,
-    stable_click,
-    wait_for_new_window,
-    wait_overlays_gone,
-)
+try:
+    from .browser import (
+        save_page_as_pdf,
+        _resolve_browser_path,
+        _resolve_chromedriver,
+    )
+    from .cdp_driver import DirectCDPDriver
+    from .config import Config
+    from .utils import (
+        parse_driver_name,
+        parse_ts_from_print_page,
+        stable_click,
+        wait_for_new_window,
+        wait_overlays_gone,
+    )
+except ImportError:
+    from browser import (
+        save_page_as_pdf,
+        _resolve_browser_path,
+        _resolve_chromedriver,
+    )
+    from cdp_driver import DirectCDPDriver
+    from config import Config
+    from utils import (
+        parse_driver_name,
+        parse_ts_from_print_page,
+        stable_click,
+        wait_for_new_window,
+        wait_overlays_gone,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -595,9 +611,16 @@ def _lookup_indexed_shipment(ml: str, index: dict[str, dict[str, Any]]) -> dict[
 # ─── Глобальное ограничение конкурентности API, SQLite-кэш и JWT-менеджер ──────
 
 _GLOBAL_ADVANTUM_API_SEMAPHORE = threading.Semaphore(4)
-SHIPMENTS_CACHE_DB_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "advantum_shipments_cache.db"
-)
+_PORTAL_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SHIPMENTS_CACHE_DB_PATH = os.path.join(_PORTAL_ROOT, "data", "advantum_shipments_cache.db")
+_LEGACY_CACHE_DB_PATH = os.path.join(_PORTAL_ROOT, "advantum_shipments_cache.db")
+if os.path.isfile(_LEGACY_CACHE_DB_PATH) and not os.path.exists(SHIPMENTS_CACHE_DB_PATH):
+    try:
+        os.makedirs(os.path.dirname(SHIPMENTS_CACHE_DB_PATH), exist_ok=True)
+        import shutil as _shutil
+        _shutil.move(_LEGACY_CACHE_DB_PATH, SHIPMENTS_CACHE_DB_PATH)
+    except Exception:
+        pass
 DEFAULT_ML_RATE_PER_DAY = 160.0
 
 

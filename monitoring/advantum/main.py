@@ -13,9 +13,14 @@ import logging
 import sys
 import time
 
-from config import load_config
-from browser import create_driver, login_to_advantum
-from export import export_thermographs
+try:
+    from .config import load_config
+    from .browser import create_driver, login_to_advantum
+    from .export import export_thermographs
+except ImportError:
+    from config import load_config
+    from browser import create_driver, login_to_advantum
+    from export import export_thermographs
 
 VERSION = "v42"
 

@@ -22,8 +22,17 @@ PROTECTED_FILES = {
     "advantum_shipments_cache.db",
     "advantum_shipments_cache.db-wal",
     "advantum_shipments_cache.db-shm",
+    "mail_contacts.db",
+    "mail_contacts.db-wal",
+    "mail_contacts.db-shm",
+    "portal.db",
+    "portal.db-wal",
+    "portal.db-shm",
     "РЕЧЬ_ДЛЯ_ПРЕЗЕНТАЦИИ.md",
     "PROJECT_CONTEXT.md",
+    "AGENTS.md",
+    "GEMINI.md",
+    "STATE.md",
     "Тарифы.xlsx",
     "ТАРИФЫ РК ТАБЛИЦА.xlsx",
     "Последовательность направлений.xlsx",
@@ -32,6 +41,20 @@ PROTECTED_FILES = {
     "contacts_schedules.json",
     "contacts_orders.json",
     "carriers_contacts.json",
+}
+
+LEGACY_MOVED_FILES = {
+    "generate_schedule.py": "opt/generate_schedule.py",
+    "generate_orders.py": "opt/generate_orders.py",
+    "outlook_bridge.py": "opt/outlook_bridge.py",
+    "ml_waybills_router.py": "apt/ml_waybills_router.py",
+    "export.py": "monitoring/advantum/export.py",
+    "browser.py": "monitoring/advantum/browser.py",
+    "cdp_driver.py": "monitoring/advantum/cdp_driver.py",
+    "config.py": "monitoring/advantum/config.py",
+    "utils.py": "monitoring/advantum/utils.py",
+    "main.py": "monitoring/advantum/main.py",
+    "mail_contacts_db.py": "core/portal_db.py",
 }
 
 
@@ -44,7 +67,7 @@ def update_from_github() -> None:
 
     req = urllib.request.Request(
         REPO_ZIP_URL,
-        headers={"User-Agent": "Puls-Transport-Logistics-Updater/1.1"},
+        headers={"User-Agent": "Puls-Transport-Logistics-Updater/1.2"},
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         zip_bytes = resp.read()
@@ -57,13 +80,12 @@ def update_from_github() -> None:
             if member.is_dir():
                 continue
 
-            # Убираем корневую папку архива (Transport-logistics-main/)
             parts = member.filename.split("/", 1)
             if len(parts) < 2 or not parts[1]:
                 continue
-            rel_path = parts[1]
+            rel_path = parts[1].replace("\\", "/")
 
-            if os.path.basename(rel_path) in PROTECTED_FILES:
+            if rel_path.startswith("data/") or os.path.basename(rel_path) in PROTECTED_FILES:
                 continue
 
             dest_path = os.path.join(base_dir, rel_path)
@@ -74,9 +96,19 @@ def update_from_github() -> None:
             updated_count += 1
             print(f"  [Обновлен] {rel_path}")
 
+    for old_rel, new_rel in LEGACY_MOVED_FILES.items():
+        old_path = os.path.join(base_dir, old_rel)
+        new_path = os.path.join(base_dir, new_rel)
+        if os.path.isfile(old_path) and os.path.isfile(new_path):
+            try:
+                os.remove(old_path)
+                print(f"  [Удалён дубль] {old_rel} -> {new_rel}")
+            except Exception as exc:
+                print(f"  [Предупреждение] Не удалось удалить {old_rel}: {exc}")
+
     print("=" * 68)
     print(f"  ✅ Обновление успешно завершено! Обновлено файлов: {updated_count}")
-    print("  🔒 Ваши локальные справочники, .env и база учеток сохранены.")
+    print("  🔒 Ваши локальные базы (data/), .env и шаблоны сохранены.")
     print("=" * 68)
 
 

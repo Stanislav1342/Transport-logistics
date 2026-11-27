@@ -41,11 +41,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import uvicorn
 
-from config import Config, load_config
-from export import ExportResult, export_thermographs
-import generate_orders as orders_core
-import generate_schedule as core
-import mail_contacts_db
+from core import portal_db
+from monitoring.advantum.config import Config, load_config
+from monitoring.advantum.export import ExportResult, export_thermographs
+from opt import generate_orders as orders_core
+from opt import generate_schedule as core
 
 # ─── Инициализация путей и логов ──────────────────────────────────────────────
 
@@ -72,13 +72,13 @@ except ImportError:
     pass
 
 try:
-    mail_contacts_db.init_db(BASE_DIR, os.environ.get("NETWORK_BASE_DIR", "").strip())
+    portal_db.init_db(BASE_DIR, os.environ.get("NETWORK_BASE_DIR", "").strip())
 except Exception as _mc_exc:
-    logger.warning("Ошибка инициализации SQLite-базы почт: %s", _mc_exc)
+    logger.warning("Ошибка инициализации SQLite-базы портала: %s", _mc_exc)
 
 # ─── Настройка FastAPI и CORS ─────────────────────────────────────────────────
 
-PORTAL_VERSION = "2.7"
+PORTAL_VERSION = "2.8"
 app = FastAPI(title="ПУЛЬС — Транспортная логистика", version=f"v{PORTAL_VERSION}")
 
 ALLOWED_ORIGIN_REGEX = (
@@ -174,17 +174,10 @@ def _verify_pin_hash(pin: str, salt: str, expected_hash: str) -> bool:
 
 
 def _load_users_db() -> dict[str, dict[str, Any]]:
-    """Загружает базу пользователей из users_db.json, восстанавливает неполные записи и синхронизирует мастер-админа из .env."""
-    users: dict[str, dict[str, Any]] = {}
+    """Загружает базу пользователей из SQLite (data/portal.db), восстанавливает неполные записи и синхронизирует мастер-админа из .env."""
+    portal_db.init_db(BASE_DIR, os.environ.get("NETWORK_BASE_DIR", "").strip())
+    users: dict[str, dict[str, Any]] = portal_db.load_all_users(BASE_DIR)
     needs_resave = False
-    if os.path.exists(USERS_DB_PATH):
-        try:
-            with open(USERS_DB_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, dict):
-                    users = data
-        except Exception as e:
-            logger.error("Ошибка чтения %s: %s", USERS_DB_PATH, e)
 
     # Гарантируем наличие мастер-админа из .env
     admin_login = get_master_admin_login()
@@ -266,10 +259,9 @@ def _load_users_db() -> dict[str, dict[str, Any]]:
 
 def _save_users_db(users: dict[str, dict[str, Any]]) -> None:
     try:
-        with open(USERS_DB_PATH, "w", encoding="utf-8") as f:
-            json.dump(users, f, ensure_ascii=False, indent=2)
+        portal_db.save_all_users(BASE_DIR, users)
     except Exception as e:
-        logger.error("Ошибка сохранения %s: %s", USERS_DB_PATH, e)
+        logger.error("Ошибка сохранения пользователей в SQLite: %s", e)
 
 
 # Инициализируем базу при старте
@@ -710,7 +702,7 @@ def get_orders_dir() -> str:
 
 
 def load_schedules_contacts() -> dict[str, str]:
-    db_map = mail_contacts_db.get_contacts_dict(BASE_DIR, "opt_schedules")
+    db_map = portal_db.get_contacts_dict(BASE_DIR, "opt_schedules")
     if db_map:
         return db_map
     folders = [BASE_DIR]
@@ -769,7 +761,7 @@ def get_schedule_carrier_email(carrier_name: str, fallback_email: str = "") -> s
 
 
 def load_orders_contacts() -> dict[str, str]:
-    db_map = mail_contacts_db.get_contacts_dict(BASE_DIR, "opt_orders")
+    db_map = portal_db.get_contacts_dict(BASE_DIR, "opt_orders")
     if db_map:
         return db_map
     folders = [BASE_DIR]
@@ -1191,7 +1183,9 @@ def _is_same_host_client(request: Request) -> bool:
 @app.get("/api/outlook-bridge/download")
 def download_outlook_bridge(request: Request):
     """Позволяет сотруднику в 1 клик скачать легкий скрипт outlook_bridge.py на свой ПК."""
-    bridge_path = os.path.join(BASE_DIR, "outlook_bridge.py")
+    bridge_path = os.path.join(BASE_DIR, "opt", "outlook_bridge.py")
+    if not os.path.exists(bridge_path):
+        bridge_path = os.path.join(BASE_DIR, "outlook_bridge.py")
     if not os.path.exists(bridge_path):
         raise HTTPException(status_code=404, detail="Файл outlook_bridge.py не найден на сервере")
     return FileResponse(
@@ -1441,7 +1435,11 @@ def send_free_trips_emails(req: EmailRequest, request: Request):
 
 def _generate_orders_from_excel_path(excel_path: str, user_login: str) -> dict[str, Any]:
     """Общий helper генерации заявок перевозчикам из локального/временного Excel-файла."""
-    template_candidates = [os.path.join(BASE_DIR, "Шаблон.docx")]
+    template_candidates = [
+        os.path.join(BASE_DIR, "data", "Шаблон.docx"),
+        os.path.join(BASE_DIR, "opt", "Шаблон.docx"),
+        os.path.join(BASE_DIR, "Шаблон.docx"),
+    ]
     net_dir = get_network_base_dir()
     if net_dir:
         template_candidates.append(os.path.join(net_dir, "Шаблон.docx"))
@@ -2159,14 +2157,14 @@ async def download_single_pdf(task_id: str, filename: str, request: Request):
 
 
 def get_thermo_email_to() -> str:
-    db_to, _ = mail_contacts_db.get_recipients_to_cc(BASE_DIR, "thermo")
+    db_to, _ = portal_db.get_recipients_to_cc(BASE_DIR, "thermo")
     if db_to:
         return db_to
     return os.environ.get("THERMO_EMAIL_TO", "").strip()
 
 
 def get_thermo_email_cc() -> str:
-    _, db_cc = mail_contacts_db.get_recipients_to_cc(BASE_DIR, "thermo")
+    _, db_cc = portal_db.get_recipients_to_cc(BASE_DIR, "thermo")
     if db_cc:
         return db_cc
     return os.environ.get("THERMO_EMAIL_CC", "").strip()
@@ -2176,7 +2174,7 @@ def get_thermo_email_cc() -> str:
 def get_mail_config(request: Request):
     """Возвращает адреса рассылки из SQLite/env только для авторизованных пользователей."""
     check_auth(request)
-    etrn_to, etrn_cc = mail_contacts_db.get_recipients_to_cc(BASE_DIR, "etrn")
+    etrn_to, etrn_cc = portal_db.get_recipients_to_cc(BASE_DIR, "etrn")
     return {
         "thermo_to": get_thermo_email_to(),
         "thermo_cc": get_thermo_email_cc(),
@@ -2208,21 +2206,21 @@ def admin_list_mail_contacts(
     q: Optional[str] = "",
 ):
     check_auth(request, require_admin=True)
-    mail_contacts_db.init_db(BASE_DIR, get_network_base_dir())
+    portal_db.init_db(BASE_DIR, get_network_base_dir())
     return {
         "status": "success",
-        "sections": mail_contacts_db.MAIL_SECTIONS,
-        "counts": mail_contacts_db.count_by_section(BASE_DIR),
-        "contacts": mail_contacts_db.list_contacts(BASE_DIR, section_key=section_key, query=q or ""),
+        "sections": portal_db.MAIL_SECTIONS,
+        "counts": portal_db.count_mail_contacts_by_section(BASE_DIR),
+        "contacts": portal_db.list_mail_contacts(BASE_DIR, section_key=section_key, query=q or ""),
     }
 
 
 @app.post("/api/admin/mail-contacts")
 def admin_add_mail_contact(req: MailContactCreateRequest, request: Request):
     admin = check_auth(request, require_admin=True)
-    mail_contacts_db.init_db(BASE_DIR, get_network_base_dir())
+    portal_db.init_db(BASE_DIR, get_network_base_dir())
     try:
-        item = mail_contacts_db.add_contact(
+        item = portal_db.add_mail_contact(
             BASE_DIR,
             section_key=req.section_key,
             recipient_name=req.recipient_name,
@@ -2239,9 +2237,9 @@ def admin_add_mail_contact(req: MailContactCreateRequest, request: Request):
 @app.post("/api/admin/mail-contacts/{contact_id}/update")
 def admin_update_mail_contact(contact_id: int, req: MailContactUpdateRequest, request: Request):
     admin = check_auth(request, require_admin=True)
-    mail_contacts_db.init_db(BASE_DIR, get_network_base_dir())
+    portal_db.init_db(BASE_DIR, get_network_base_dir())
     try:
-        item = mail_contacts_db.update_contact(
+        item = portal_db.update_mail_contact(
             BASE_DIR,
             contact_id=contact_id,
             section_key=req.section_key,
@@ -2262,10 +2260,237 @@ def admin_update_mail_contact(contact_id: int, req: MailContactUpdateRequest, re
 @app.delete("/api/admin/mail-contacts/{contact_id}")
 def admin_delete_mail_contact(contact_id: int, request: Request):
     check_auth(request, require_admin=True)
-    mail_contacts_db.init_db(BASE_DIR, get_network_base_dir())
-    ok = mail_contacts_db.delete_contact(BASE_DIR, contact_id)
+    portal_db.init_db(BASE_DIR, get_network_base_dir())
+    ok = portal_db.delete_mail_contact(BASE_DIR, contact_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Контакт не найден")
+    return {"status": "success"}
+
+
+class TariffCreateRequest(BaseModel):
+    origin: str = "Черная Грязь"
+    destination: str
+    carrier: str
+    tariff: int
+
+
+class TariffUpdateRequest(BaseModel):
+    origin: Optional[str] = None
+    destination: Optional[str] = None
+    carrier: Optional[str] = None
+    tariff: Optional[int] = None
+
+
+class CitySequenceCreateRequest(BaseModel):
+    city_name: str
+
+
+class CitySequenceMoveRequest(BaseModel):
+    direction: str
+
+
+class DistributionRuleCreateRequest(BaseModel):
+    city: str
+    rule_type: str
+    first_carrier: str = ""
+    second_carrier: str = ""
+    pool_carriers: str = ""
+    daily_limit: Optional[int] = None
+    weekly_limit: Optional[int] = None
+    notes: str = ""
+
+
+class DistributionRuleUpdateRequest(BaseModel):
+    city: Optional[str] = None
+    rule_type: Optional[str] = None
+    first_carrier: Optional[str] = None
+    second_carrier: Optional[str] = None
+    pool_carriers: Optional[str] = None
+    daily_limit: Optional[int] = None
+    weekly_limit: Optional[int] = None
+    notes: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+@app.get("/api/admin/tariffs")
+def admin_list_tariffs(request: Request, destination: Optional[str] = None, q: Optional[str] = ""):
+    check_auth(request, require_admin=True)
+    portal_db.init_db(BASE_DIR, get_network_base_dir())
+    return {
+        "status": "success",
+        "tariffs": portal_db.list_tariffs(BASE_DIR, destination=destination, query=q or ""),
+    }
+
+
+@app.post("/api/admin/tariffs")
+def admin_add_tariff(req: TariffCreateRequest, request: Request):
+    admin = check_auth(request, require_admin=True)
+    portal_db.init_db(BASE_DIR, get_network_base_dir())
+    try:
+        item = portal_db.add_tariff(
+            BASE_DIR,
+            destination=req.destination,
+            carrier=req.carrier,
+            tariff=req.tariff,
+            origin=req.origin,
+            updated_by=admin["login"],
+        )
+        return {"status": "success", "tariff": item}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/admin/tariffs/{tariff_id}/update")
+def admin_update_tariff(tariff_id: int, req: TariffUpdateRequest, request: Request):
+    admin = check_auth(request, require_admin=True)
+    portal_db.init_db(BASE_DIR, get_network_base_dir())
+    try:
+        item = portal_db.update_tariff(
+            BASE_DIR,
+            tariff_id=tariff_id,
+            destination=req.destination,
+            carrier=req.carrier,
+            tariff=req.tariff,
+            origin=req.origin,
+            updated_by=admin["login"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not item:
+        raise HTTPException(status_code=404, detail="Тариф не найден")
+    return {"status": "success", "tariff": item}
+
+
+@app.post("/api/admin/tariffs/{tariff_id}/delete")
+@app.delete("/api/admin/tariffs/{tariff_id}")
+def admin_delete_tariff(tariff_id: int, request: Request):
+    check_auth(request, require_admin=True)
+    portal_db.init_db(BASE_DIR, get_network_base_dir())
+    if not portal_db.delete_tariff(BASE_DIR, tariff_id):
+        raise HTTPException(status_code=404, detail="Тариф не найден")
+    return {"status": "success"}
+
+
+@app.get("/api/admin/city-sequence")
+def admin_list_city_sequence(request: Request):
+    check_auth(request, require_admin=True)
+    portal_db.init_db(BASE_DIR, get_network_base_dir())
+    return {"status": "success", "cities": portal_db.list_city_sequence(BASE_DIR)}
+
+
+@app.post("/api/admin/city-sequence")
+def admin_add_city_sequence(req: CitySequenceCreateRequest, request: Request):
+    admin = check_auth(request, require_admin=True)
+    portal_db.init_db(BASE_DIR, get_network_base_dir())
+    try:
+        item = portal_db.add_city_sequence(BASE_DIR, req.city_name, updated_by=admin["login"])
+        return {"status": "success", "city": item}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/admin/city-sequence/{item_id}/update")
+def admin_update_city_sequence(item_id: int, req: CitySequenceCreateRequest, request: Request):
+    admin = check_auth(request, require_admin=True)
+    portal_db.init_db(BASE_DIR, get_network_base_dir())
+    try:
+        item = portal_db.update_city_sequence(BASE_DIR, item_id, req.city_name, updated_by=admin["login"])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not item:
+        raise HTTPException(status_code=404, detail="Направление не найдено")
+    return {"status": "success", "city": item}
+
+
+@app.post("/api/admin/city-sequence/{item_id}/move")
+def admin_move_city_sequence(item_id: int, req: CitySequenceMoveRequest, request: Request):
+    check_auth(request, require_admin=True)
+    portal_db.init_db(BASE_DIR, get_network_base_dir())
+    try:
+        ok = portal_db.move_city_sequence(BASE_DIR, item_id, req.direction)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not ok:
+        raise HTTPException(status_code=404, detail="Направление не найдено")
+    return {"status": "success"}
+
+
+@app.post("/api/admin/city-sequence/{item_id}/delete")
+@app.delete("/api/admin/city-sequence/{item_id}")
+def admin_delete_city_sequence(item_id: int, request: Request):
+    check_auth(request, require_admin=True)
+    portal_db.init_db(BASE_DIR, get_network_base_dir())
+    if not portal_db.delete_city_sequence(BASE_DIR, item_id):
+        raise HTTPException(status_code=404, detail="Направление не найдено")
+    return {"status": "success"}
+
+
+@app.get("/api/admin/distribution-rules")
+def admin_list_distribution_rules(request: Request, q: Optional[str] = ""):
+    check_auth(request, require_admin=True)
+    portal_db.init_db(BASE_DIR, get_network_base_dir())
+    return {
+        "status": "success",
+        "rule_types": portal_db.RULE_TYPES,
+        "rules": portal_db.list_distribution_rules(BASE_DIR, query=q or ""),
+    }
+
+
+@app.post("/api/admin/distribution-rules")
+def admin_add_distribution_rule(req: DistributionRuleCreateRequest, request: Request):
+    admin = check_auth(request, require_admin=True)
+    portal_db.init_db(BASE_DIR, get_network_base_dir())
+    try:
+        item = portal_db.add_distribution_rule(
+            BASE_DIR,
+            city=req.city,
+            rule_type=req.rule_type,
+            first_carrier=req.first_carrier,
+            second_carrier=req.second_carrier,
+            pool_carriers=req.pool_carriers,
+            daily_limit=req.daily_limit,
+            weekly_limit=req.weekly_limit,
+            notes=req.notes,
+            updated_by=admin["login"],
+        )
+        return {"status": "success", "rule": item}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/admin/distribution-rules/{rule_id}/update")
+def admin_update_distribution_rule(rule_id: int, req: DistributionRuleUpdateRequest, request: Request):
+    admin = check_auth(request, require_admin=True)
+    portal_db.init_db(BASE_DIR, get_network_base_dir())
+    try:
+        item = portal_db.update_distribution_rule(
+            BASE_DIR,
+            rule_id=rule_id,
+            city=req.city,
+            rule_type=req.rule_type,
+            first_carrier=req.first_carrier,
+            second_carrier=req.second_carrier,
+            pool_carriers=req.pool_carriers,
+            daily_limit=req.daily_limit,
+            weekly_limit=req.weekly_limit,
+            notes=req.notes,
+            is_active=req.is_active,
+            updated_by=admin["login"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not item:
+        raise HTTPException(status_code=404, detail="Правило не найдено")
+    return {"status": "success", "rule": item}
+
+
+@app.post("/api/admin/distribution-rules/{rule_id}/delete")
+@app.delete("/api/admin/distribution-rules/{rule_id}")
+def admin_delete_distribution_rule(rule_id: int, request: Request):
+    check_auth(request, require_admin=True)
+    portal_db.init_db(BASE_DIR, get_network_base_dir())
+    if not portal_db.delete_distribution_rule(BASE_DIR, rule_id):
+        raise HTTPException(status_code=404, detail="Правило не найдено")
     return {"status": "success"}
 
 
@@ -2427,7 +2652,7 @@ async def server_status():
 # РАЗДЕЛ 3: МОНИТОРИНГ — ОТЧЕТЫ ЭТРН
 # ==============================================================================
 try:
-    from etrn.api_router import router as etrn_router
+    from monitoring.etrn.api_router import router as etrn_router
 
     def check_etrn_auth(req: Request):
         return check_auth(req, required_section="etrn")
@@ -2443,7 +2668,7 @@ except Exception as e:
 # ==============================================================================
 start_ml_service_background = lambda: None  # noqa: E731
 try:
-    from ml_waybills_router import create_ml_router, start_ml_service_background
+    from apt.ml_waybills_router import create_ml_router, start_ml_service_background
 
     app.include_router(create_ml_router(check_auth))
     logger.info("Модуль АПТ (Маршрутные листы) успешно подключен к серверу (/api/ml)")

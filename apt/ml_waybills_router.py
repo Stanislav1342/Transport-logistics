@@ -34,7 +34,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 logger = logging.getLogger("server.ml_waybills")
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_ML_HOST = "127.0.0.1"
 DEFAULT_ML_PORT = 8765
 MAX_PDF_UPLOAD_BYTES = 600 * 1024 * 1024

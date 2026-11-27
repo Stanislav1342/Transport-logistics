@@ -80,7 +80,25 @@ def find_city_sequence_file(base_dir=None):
     return None
 
 def load_city_sequence(base_dir=None):
-    """Загружает эталонную последовательность направлений из Последовательность направлений.xlsx"""
+    """Загружает эталонную последовательность направлений из SQLite (или Последовательность направлений.xlsx)."""
+    try:
+        from core import portal_db
+        portal_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        db_seq = portal_db.get_city_sequence_names(portal_root)
+        if db_seq:
+            seq = []
+            for s in db_seq:
+                s_clean = s.replace('ПУЛЬС ', '').replace('ПУЛЬС', '').strip()
+                if s_clean.upper() == 'СПБ':
+                    s_clean = 'Санкт-Петербург'
+                elif s_clean.upper() == 'РОСТОВ-НА-ДОНУ' or 'РОСТОВ' in s_clean.upper():
+                    s_clean = 'Ростов-на-Дону'
+                if s_clean and s_clean not in seq:
+                    seq.append(s_clean)
+            if seq:
+                return seq
+    except Exception:
+        pass
     filepath = find_city_sequence_file(base_dir)
     if not filepath:
         return list(DEFAULT_MASTER_CITY_ORDER)
@@ -224,12 +242,11 @@ def calculate_delivery_datetime(dep_date, time_str, city):
 
 
 def find_tariffs_file(base_dir=None):
-    """Ищет файл Тарифы.xlsx (или устаревший ТАРИФЫ РК ТАБЛИЦА.xlsx) в проекте, Загрузках или на Рабочем столе"""
+    """Ищет файл Тарифы.xlsx в проекте, Загрузках или на Рабочем столе"""
     names = [
         'Тарифы.xlsx',
         'Тарифы .xlsx',
         'ТАРИФЫ.xlsx',
-        'ТАРИФЫ РК ТАБЛИЦА.xlsx'
     ]
     search_dirs = []
     if base_dir:
@@ -256,10 +273,17 @@ def find_tariffs_file(base_dir=None):
 
 def load_tariffs_matrix(base_dir=None):
     """
-    Загружает актуальную матрицу тарифов из Тарифы.xlsx (табличный формат Откуда-Куда-Перевозчик-Тариф)
-    или устаревшего 'ТАРИФЫ РК ТАБЛИЦА.xlsx'.
+    Загружает актуальную матрицу тарифов из SQLite (или Тарифы.xlsx).
     Возвращает словарь: {город: {перевозчик: тариф}}
     """
+    try:
+        from core import portal_db
+        portal_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        db_tariffs = portal_db.get_tariffs_matrix(portal_root)
+        if db_tariffs:
+            return db_tariffs
+    except Exception:
+        pass
     tariff_file = find_tariffs_file(base_dir)
     tariffs = {}
     
@@ -407,6 +431,14 @@ def plan_weekly_carrier_assignments(plan_trips, tariffs, base_dir=None):
     carrier_counts = defaultdict(int)
     city_carrier_counts = defaultdict(lambda: defaultdict(int))
 
+    db_rules = {}
+    try:
+        from core import portal_db
+        portal_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        db_rules = portal_db.get_distribution_rules_map(portal_root)
+    except Exception:
+        db_rules = {}
+
     # Спец-ограничения и счетчики по направлениям
     ekb_nordline_used = False
     spb_nordline_day = defaultdict(int)
@@ -465,6 +497,40 @@ def plan_weekly_carrier_assignments(plan_trips, tariffs, base_dir=None):
         for city in city_order:
             cnt = d_plan.get(city, 0)
             for tr_i in range(1, cnt + 1):
+                db_rule = db_rules.get(city)
+                if db_rule and db_rule.get('rule_type') != 'custom_code':
+                    rt = db_rule.get('rule_type')
+                    c1 = db_rule.get('first_carrier') or 'ТК Сияние'
+                    c2 = db_rule.get('second_carrier') or 'АО Национальный'
+                    pool = [p.strip() for p in str(db_rule.get('pool_carriers') or '').split(';') if p.strip()]
+                    if rt == 'fixed_only':
+                        carrier = c1
+                    elif rt == 'first_then_second':
+                        carrier = c1 if tr_i == 1 else c2
+                    elif rt == 'first_then_pool':
+                        carrier = c1 if tr_i == 1 else (pick_city_balanced(city, pool) if pool else pick_cheapest(city, exclude={c1}))
+                    elif rt == 'first_second_then_cheapest':
+                        if tr_i == 1:
+                            carrier = c1
+                        elif tr_i == 2:
+                            carrier = c2
+                        else:
+                            carrier = pick_cheapest(city, exclude={c1, c2})
+                    elif rt == 'first_second_then_pool':
+                        if tr_i == 1:
+                            carrier = c1
+                        elif tr_i == 2:
+                            carrier = c2
+                        else:
+                            carrier = pick_city_balanced(city, pool) if pool else pick_cheapest(city, exclude={c1, c2})
+                    elif rt == 'cycle' and pool:
+                        carrier = pool[(tr_i - 1) % len(pool)]
+                    elif rt == 'pool_balanced' and pool:
+                        carrier = pick_city_balanced(city, pool)
+                    else:
+                        carrier = pick_cheapest(city)
+                    assign_trip(d_name, city, tr_i, carrier)
+                    continue
 
                 # 2. ЯРОСЛАВЛЬ
                 # 1-я машина: чередование по дням (Пн/Ср/Пт/Вс - Мельник, Вт/Чт/Сб - Коршунов)
@@ -982,7 +1048,16 @@ def create_schedule_copy_without_tariffs(excel_path):
         return None
 
 
-BASELINE_STORE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schedule_baselines.json')
+_PORTAL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASELINE_STORE_PATH = os.path.join(_PORTAL_ROOT, 'data', 'schedule_baselines.json')
+_LEGACY_BASELINE_PATH = os.path.join(_PORTAL_ROOT, 'schedule_baselines.json')
+if os.path.isfile(_LEGACY_BASELINE_PATH) and not os.path.exists(BASELINE_STORE_PATH):
+    try:
+        os.makedirs(os.path.dirname(BASELINE_STORE_PATH), exist_ok=True)
+        import shutil as _shutil
+        _shutil.move(_LEGACY_BASELINE_PATH, BASELINE_STORE_PATH)
+    except Exception:
+        pass
 _BASELINE_LOCK = threading.RLock()
 
 

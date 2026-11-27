@@ -39,7 +39,7 @@ from openpyxl.utils import get_column_letter
 import docx
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 RUSSIAN_MONTHS = [
     "января", "февраля", "марта", "апреля", "мая", "июня",

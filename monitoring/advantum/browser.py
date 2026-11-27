@@ -24,8 +24,12 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
 
-from cdp_driver import DirectCDPDriver
-from config import Config
+try:
+    from .cdp_driver import DirectCDPDriver
+    from .config import Config
+except ImportError:
+    from cdp_driver import DirectCDPDriver
+    from config import Config
 
 # ─── Настройки окружения ────────────────────────────────────────────────────────
 os.environ['WDM_LOCAL'] = '1'
