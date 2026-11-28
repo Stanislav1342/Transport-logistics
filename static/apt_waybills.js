@@ -277,6 +277,7 @@
     }
     try {
       const data = await apiJson('/api/ml/health');
+      state.mlHealth = data;
       if (Array.isArray(data.protected_labels)) {
         state.protectedLabels = new Set(data.protected_labels);
       }
@@ -288,6 +289,11 @@
       }
       if (Array.isArray(data.operator_add_labels)) {
         state.operatorAddLabels = data.operator_add_labels.filter(l => !state.protectedLabels.has(l));
+      }
+      if (errBanner && data.inference_mode === 'http' && data.inference_backend_ok === false) {
+        errBanner.style.display = 'block';
+        const verSuffix = data.weights_version ? ` (${data.weights_version})` : '';
+        errBanner.textContent = `Внимание: GPU-сервис инференса временно недоступен${verSuffix} — запуск новых проверок может завершиться ошибкой.`;
       }
       return true;
     } catch (err) {
@@ -799,6 +805,13 @@
         <div class="apt-kpi-value">${escapeHtml(c.value)}</div>
       </div>
     `).join('');
+
+    const errBanner = $('apt-ml-error-banner');
+    if (errBanner && state.session && (state.session.truncated || state.session.truncation_warning)) {
+      errBanner.style.display = 'block';
+      errBanner.textContent = state.session.truncation_warning
+        || `Документ обработан частично: ${state.session.processed_pages ?? '?'} из ${state.session.total_pages ?? '?'} стр.`;
+    }
 
     updateFinalizeAndExportButtons();
   }

@@ -211,18 +211,53 @@ def _get_ml_port() -> int:
     return port
 
 
+def _is_remote_ml_mode() -> bool:
+    return (os.environ.get("ML_REMOTE_MODE") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _get_allowed_remote_hosts() -> set[str]:
+    raw = (os.environ.get("ML_ALLOWED_HOSTS") or "").strip()
+    return {h.strip().lower() for h in raw.split(",") if h.strip()}
+
+
+def _get_ml_bearer_token() -> str:
+    return (os.environ.get("ML_BEARER_TOKEN") or "").strip()
+
+
+def _should_trust_env_for_ml() -> bool:
+    if not _is_remote_ml_mode():
+        return False
+    return (os.environ.get("ML_TRUST_ENV") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _get_ml_base_url() -> tuple[str, str, int]:
-    """Возвращает (base_url, host, port) и гарантирует строго loopback-адрес."""
+    """
+    Возвращает (base_url, host, port).
+    По умолчанию разрешён строго loopback (127.0.0.1 / localhost / ::1).
+    При ML_REMOTE_MODE=1 дополнительно разрешены http/https хосты из белого списка ML_ALLOWED_HOSTS.
+    """
     default_url = f"http://{DEFAULT_ML_HOST}:{_get_ml_port()}"
     raw_url = (os.environ.get("ML_SERVICE_URL") or default_url).strip().rstrip("/")
     parsed = urllib.parse.urlparse(raw_url)
     host = (parsed.hostname or "").lower()
-    if parsed.scheme not in ("http",) or host not in ALLOWED_LOOPBACK_HOSTS:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Из соображений ИБ ML_SERVICE_URL должен указывать строго на loopback-адрес (127.0.0.1 / localhost).",
-        )
-    port = parsed.port or _get_ml_port()
+    remote_mode = _is_remote_ml_mode()
+
+    if remote_mode:
+        allowed_hosts = set(ALLOWED_LOOPBACK_HOSTS) | _get_allowed_remote_hosts()
+        if parsed.scheme not in ("http", "https") or not host or host not in allowed_hosts:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Из соображений ИБ в режиме ML_REMOTE_MODE хост ML_SERVICE_URL должен входить в ML_ALLOWED_HOSTS (http/https).",
+            )
+    else:
+        if parsed.scheme not in ("http",) or host not in ALLOWED_LOOPBACK_HOSTS:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Из соображений ИБ ML_SERVICE_URL должен указывать строго на loopback-адрес (127.0.0.1 / localhost).",
+            )
+
+    default_scheme_port = 443 if parsed.scheme == "https" else (80 if remote_mode and host not in ALLOWED_LOOPBACK_HOSTS else _get_ml_port())
+    port = parsed.port or default_scheme_port
     normalized_host = "127.0.0.1" if host == "::1" else host
     return raw_url, normalized_host, port
 
@@ -341,13 +376,16 @@ def _resolve_ml_python(ml_dir: str) -> str:
 
 
 def _get_loopback_session() -> requests.Session:
-    """Возвращает потокобезопасную requests.Session с полным обходом системных HTTP-прокси."""
-    sess = getattr(_THREAD_LOCAL, "session", None)
+    """Возвращает потокобезопасную requests.Session (для loopback всегда обходит системные прокси)."""
+    trust_env = _should_trust_env_for_ml()
+    attr_name = "remote_session" if trust_env else "session"
+    sess = getattr(_THREAD_LOCAL, attr_name, None)
     if sess is None:
         sess = requests.Session()
-        sess.trust_env = False
-        sess.proxies = {"http": None, "https": None}
-        _THREAD_LOCAL.session = sess
+        sess.trust_env = trust_env
+        if not trust_env:
+            sess.proxies = {"http": None, "https": None}
+        setattr(_THREAD_LOCAL, attr_name, sess)
     return sess
 
 
@@ -410,17 +448,30 @@ def shutdown_ml_service() -> None:
     _ML_PROC_URL = None
 
 
+def _build_ml_auth_headers() -> dict[str, str]:
+    headers: dict[str, str] = {}
+    token = _get_ml_api_token()
+    if token:
+        headers["X-ML-Token"] = token
+    bearer = _get_ml_bearer_token()
+    if bearer:
+        headers["Authorization"] = f"Bearer {bearer}"
+    return headers
+
+
 def is_ml_service_healthy(base_url: Optional[str] = None, timeout: float = 1.5) -> tuple[bool, Optional[dict[str, Any]]]:
-    """Проверяет доступность GET /api/ml/health на loopback-адресе."""
+    """Проверяет доступность GET /api/ml/health на локальном или удалённом (ML_REMOTE_MODE) ML-сервисе."""
     if base_url is None:
         base_url, _, _ = _get_ml_base_url()
     sess = _get_loopback_session()
+    req_kwargs: dict[str, Any] = {
+        "timeout": timeout,
+        "headers": _build_ml_auth_headers(),
+    }
+    if not _should_trust_env_for_ml():
+        req_kwargs["proxies"] = {"http": None, "https": None}
     try:
-        resp = sess.get(
-            f"{base_url}/api/ml/health",
-            timeout=timeout,
-            proxies={"http": None, "https": None},
-        )
+        resp = sess.get(f"{base_url}/api/ml/health", **req_kwargs)
         if resp.status_code != 200:
             return False, None
         data = resp.json()
@@ -457,6 +508,15 @@ def ensure_ml_service_running(wait_timeout: float = 35.0) -> dict[str, Any]:
     global _ML_PROC, _ML_PROC_URL, _ATEXIT_REGISTERED
 
     base_url, host, port = _get_ml_base_url()
+    if _is_remote_ml_mode():
+        ok, data = is_ml_service_healthy(base_url, timeout=3.0)
+        if ok and data is not None:
+            return data
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Удалённый ML-сервис недоступен по адресу {base_url}. Проверьте состояние CPU-сервиса в Kubernetes.",
+        )
+
     ml_dir_found, _ = _find_ml_service_dir()
     expected_ver = _read_expected_ml_version(ml_dir_found)
 
@@ -638,11 +698,12 @@ def _upstream_request(
     stream: bool = False,
 ) -> requests.Response:
     base_url, _, _ = _get_ml_base_url()
+    remote_mode = _is_remote_ml_mode()
+    trust_env = _should_trust_env_for_ml()
     req_headers: dict[str, str] = dict(headers or {})
     if include_token:
-        token = _get_ml_api_token()
-        if token:
-            req_headers["X-ML-Token"] = token
+        for k, v in _build_ml_auth_headers().items():
+            req_headers.setdefault(k, v)
 
     if isinstance(raw_body, (bytes, bytearray)) and "Content-Length" not in req_headers:
         req_headers["Content-Length"] = str(len(raw_body))
@@ -650,35 +711,45 @@ def _upstream_request(
     url = f"{base_url}{path}"
     sess = requests.Session() if stream else _get_loopback_session()
     if stream:
-        sess.trust_env = False
-        sess.proxies = {"http": None, "https": None}
+        sess.trust_env = trust_env
+        if not trust_env:
+            sess.proxies = {"http": None, "https": None}
 
     def _do_call() -> requests.Response:
-        return sess.request(
-            method=method,
-            url=url,
-            params=params,
-            json=json_body,
-            data=raw_body,
-            headers=req_headers,
-            timeout=timeout,
-            proxies={"http": None, "https": None},
-            stream=stream,
-        )
+        req_kwargs: dict[str, Any] = {
+            "method": method,
+            "url": url,
+            "params": params,
+            "json": json_body,
+            "data": raw_body,
+            "headers": req_headers,
+            "timeout": timeout,
+            "stream": stream,
+        }
+        if not trust_env:
+            req_kwargs["proxies"] = {"http": None, "https": None}
+        return sess.request(**req_kwargs)
 
     try:
         resp = _do_call()
-    except requests.ConnectionError:
-        ensure_ml_service_running()
-        try:
-            resp = _do_call()
-        except requests.RequestException as exc:
+    except requests.ConnectionError as exc:
+        if remote_mode:
             if stream:
                 sess.close()
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"ML-сервис недоступен: {exc}",
+                detail=f"Удалённый ML-сервис недоступен ({base_url}): {exc}",
             ) from exc
+        ensure_ml_service_running()
+        try:
+            resp = _do_call()
+        except requests.RequestException as exc2:
+            if stream:
+                sess.close()
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"ML-сервис недоступен: {exc2}",
+            ) from exc2
     except requests.Timeout as exc:
         if stream:
             sess.close()
