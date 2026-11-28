@@ -41,7 +41,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import uvicorn
 
-from core import portal_db
+from core import portal_db, server_config
 from monitoring.advantum.config import Config, load_config
 from monitoring.advantum.export import ExportResult, export_thermographs
 from opt import generate_orders as orders_core
@@ -52,9 +52,16 @@ from opt import generate_schedule as core
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
-TASK_OUTPUT_DIR = os.path.join(BASE_DIR, "web_exports")
 USERS_DB_PATH = os.path.join(BASE_DIR, "users_db.json")
 
+# Загрузка переменных окружения из .env до вычисления серверных путей
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(BASE_DIR, ".env"))
+except ImportError:
+    pass
+
+TASK_OUTPUT_DIR = server_config.get_web_exports_dir(BASE_DIR)
 os.makedirs(TASK_OUTPUT_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
 
@@ -64,13 +71,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("puls_portal")
 
-# Загрузка переменных окружения из .env
-try:
-    from dotenv import load_dotenv
-    load_dotenv(os.path.join(BASE_DIR, ".env"))
-except ImportError:
-    pass
-
 try:
     portal_db.init_db(BASE_DIR, os.environ.get("NETWORK_BASE_DIR", "").strip())
 except Exception as _mc_exc:
@@ -78,7 +78,7 @@ except Exception as _mc_exc:
 
 # ─── Настройка FastAPI и CORS ─────────────────────────────────────────────────
 
-PORTAL_VERSION = "2.14"
+PORTAL_VERSION = "2.15"
 app = FastAPI(title="ПУЛЬС — Транспортная логистика", version=f"v{PORTAL_VERSION}")
 
 ALLOWED_ORIGIN_REGEX = (
@@ -89,6 +89,7 @@ ALLOWED_ORIGIN_REGEX = (
 
 app.add_middleware(
     CORSMiddleware,
+    allow_origins=server_config.get_cors_allowed_origins(),
     allow_origin_regex=ALLOWED_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
@@ -329,6 +330,52 @@ def _sanitize_user_public(u: dict[str, Any], include_pin: bool = False) -> dict[
     return res
 
 
+def _get_client_ip(req: Request) -> str:
+    if server_config.is_trust_proxy_headers():
+        xff = (req.headers.get("x-forwarded-for") or "").strip()
+        if xff:
+            return xff.split(",")[0].strip()
+        xri = (req.headers.get("x-real-ip") or "").strip()
+        if xri:
+            return xri
+    return req.client.host if req.client else "unknown"
+
+
+def _store_auth_session(token: str, login: str) -> dict[str, Any]:
+    ttl = server_config.get_session_ttl_seconds()
+    sess = portal_db.create_auth_session(BASE_DIR, token, login, ttl_seconds=ttl)
+    SESSIONS_DB[token] = sess
+    return sess
+
+
+def _lookup_auth_session(token: str) -> Optional[dict[str, Any]]:
+    tok = token.strip()
+    now = time.time()
+    cached = SESSIONS_DB.get(tok)
+    if cached is not None:
+        exp = cached.get("expires_at")
+        if exp is None or float(exp) > now:
+            return cached
+        SESSIONS_DB.pop(tok, None)
+    persisted = portal_db.get_auth_session(BASE_DIR, tok)
+    if persisted is not None:
+        SESSIONS_DB[tok] = persisted
+    return persisted
+
+
+def _revoke_auth_session(token: str) -> None:
+    tok = token.strip()
+    SESSIONS_DB.pop(tok, None)
+    portal_db.delete_auth_session(BASE_DIR, tok)
+
+
+def _revoke_user_sessions(login: str) -> None:
+    for tok, sess in list(SESSIONS_DB.items()):
+        if sess.get("login") == login:
+            SESSIONS_DB.pop(tok, None)
+    portal_db.delete_user_auth_sessions(BASE_DIR, login)
+
+
 def check_auth(
     req: Request,
     required_section: str | None = None,
@@ -338,7 +385,7 @@ def check_auth(
     Проверяет сессионный токен пользователя, его активность и права доступа к разделу.
     Возвращает словарь публичных данных пользователя.
     """
-    client_ip = req.client.host if req.client else "unknown"
+    client_ip = _get_client_ip(req)
     _check_ip_rate_limit(client_ip)
 
     token = (
@@ -351,7 +398,7 @@ def check_auth(
             detail="Требуется авторизация в системе",
         )
 
-    session = SESSIONS_DB.get(token.strip())
+    session = _lookup_auth_session(token)
     if not session:
         _record_failed_attempt(client_ip)
         raise HTTPException(
@@ -364,7 +411,7 @@ def check_auth(
         user = users.get(session["login"])
 
     if not user or not user.get("is_active", True):
-        SESSIONS_DB.pop(token.strip(), None)
+        _revoke_auth_session(token)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Ваша учетная запись заблокирована или удалена администратором.",
@@ -424,7 +471,7 @@ class UpdateUserRequest(BaseModel):
 @app.post("/api/auth/login")
 async def login_user(payload: LoginRequest, request: Request):
     """Авторизация по именному логину (формат и.фамилия) и 6-значному PIN-коду."""
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = _get_client_ip(request)
     _check_ip_rate_limit(client_ip)
 
     login_clean = payload.login.strip().lower()
@@ -458,10 +505,7 @@ async def login_user(payload: LoginRequest, request: Request):
     FAILED_AUTH_ATTEMPTS.pop(client_ip, None)
 
     token = secrets.token_urlsafe(32)
-    SESSIONS_DB[token] = {
-        "login": login_clean,
-        "created_at": time.time(),
-    }
+    _store_auth_session(token, login_clean)
 
     logger.info("Пользователь '%s' (%s) вошел в портал", login_clean, user.get("full_name"))
     return {
@@ -475,7 +519,7 @@ async def login_user(payload: LoginRequest, request: Request):
 async def logout_user(request: Request):
     token = request.headers.get("X-Auth-Token") or request.headers.get("X-Auth-PIN")
     if token:
-        SESSIONS_DB.pop(token.strip(), None)
+        _revoke_auth_session(token)
     return {"success": True}
 
 
@@ -610,9 +654,7 @@ async def admin_update_user(target_login: str, payload: UpdateUserRequest, reque
             user["is_active"] = bool(payload.is_active)
             if not user["is_active"]:
                 # Мгновенно сбрасываем все активные сессии заблокированного сотрудника
-                for tok, sess in list(SESSIONS_DB.items()):
-                    if sess.get("login") == login_clean:
-                        SESSIONS_DB.pop(tok, None)
+                _revoke_user_sessions(login_clean)
 
         if payload.pin is not None and payload.pin.strip():
             pin_val = payload.pin.strip()
@@ -648,9 +690,7 @@ async def admin_delete_user(target_login: str, request: Request):
         _save_users_db(users)
 
     # Удаляем активные сессии пользователя
-    for tok, sess in list(SESSIONS_DB.items()):
-        if sess.get("login") == login_clean:
-            SESSIONS_DB.pop(tok, None)
+    _revoke_user_sessions(login_clean)
 
     logger.info("Удалена учетная запись: %s", login_clean)
     return {"status": "success"}
@@ -2629,6 +2669,23 @@ async def send_thermo_email(task_id: str, req: ThermoEmailRequest, request: Requ
         return {"status": "error", "message": f"Ошибка Outlook: {str(e)}"}
 
 
+@app.get("/api/health")
+async def healthcheck():
+    """Лёгкая проба liveness/readiness для Kubernetes (проверяет доступность SQLite)."""
+    db_ok = portal_db.check_db_health(BASE_DIR)
+    code = 200 if db_ok else 503
+    return JSONResponse(
+        status_code=code,
+        content={
+            "status": "ok" if db_ok else "degraded",
+            "version": PORTAL_VERSION,
+            "server_mode": server_config.is_server_mode(),
+            "db": "sqlite" if db_ok else "error",
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.get("/api/status")
 async def server_status():
     with _JOBS_LOCK:
@@ -2640,6 +2697,11 @@ async def server_status():
             "queue_size": job_queue.qsize(),
             "total_jobs": total_jobs,
             "thermo_workers": THERMO_WORKERS,
+            "server_mode": server_config.is_server_mode(),
+            "etrn_1c_enabled": server_config.is_etrn_1c_enabled(),
+            "smtp_configured": server_config.is_smtp_configured(),
+            "notebook_enabled": server_config.is_notebook_configured(),
+            "ml_remote_mode": server_config.is_ml_remote_mode(),
         },
         headers={
             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",

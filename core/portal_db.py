@@ -22,6 +22,7 @@ import os
 import re
 import sqlite3
 import threading
+import time
 from typing import Any, Optional
 
 logger = logging.getLogger("puls_portal.db")
@@ -211,11 +212,14 @@ _FALLBACK_TARIFFS: dict[str, dict[str, int]] = {
 
 
 def get_db_path(base_dir: str) -> str:
-    """Возвращает путь к единой SQLite-базе портала (PORTAL_DB_PATH / MAIL_CONTACTS_DB_PATH / data/portal.db)."""
+    """Возвращает путь к единой SQLite-базе портала (PORTAL_DB_PATH / MAIL_CONTACTS_DB_PATH / PORTAL_DATA_DIR/portal.db)."""
     for env_name in ("PORTAL_DB_PATH", "MAIL_CONTACTS_DB_PATH"):
         override = os.environ.get(env_name, "").strip()
         if override:
             return override
+    data_dir = os.environ.get("PORTAL_DATA_DIR", "").strip()
+    if data_dir:
+        return os.path.join(os.path.abspath(os.path.expanduser(data_dir)), "portal.db")
     return os.path.join(base_dir, "data", "portal.db")
 
 
@@ -225,6 +229,11 @@ def _connect(db_path: str) -> sqlite3.Connection:
         os.makedirs(parent, exist_ok=True)
     conn = sqlite3.connect(db_path, timeout=10)
     conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=10000")
+    except Exception:
+        pass
     return conn
 
 
@@ -317,6 +326,19 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             updated_by TEXT NOT NULL DEFAULT ''
         )
         """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS auth_sessions (
+            token TEXT PRIMARY KEY,
+            login TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            expires_at REAL NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_auth_sessions_login ON auth_sessions(login)"
     )
 
 
@@ -1320,3 +1342,82 @@ def delete_distribution_rule(base_dir: str, rule_id: int) -> bool:
             cur = conn.execute("DELETE FROM opt_distribution_rules WHERE id = ?", (rule_id,))
             conn.commit()
             return cur.rowcount > 0
+
+
+# ─── Персистентные сессии авторизации (переживают рестарт пода в k8s) ────────
+
+
+def create_auth_session(base_dir: str, token: str, login: str, ttl_seconds: int = 43200) -> dict[str, Any]:
+    now = time.time()
+    expires_at = now + max(60, int(ttl_seconds))
+    db_path = get_db_path(base_dir)
+    with _DB_LOCK:
+        with _connect(db_path) as conn:
+            _ensure_schema(conn)
+            conn.execute("DELETE FROM auth_sessions WHERE expires_at <= ?", (now,))
+            conn.execute(
+                "INSERT OR REPLACE INTO auth_sessions(token, login, created_at, expires_at) VALUES (?, ?, ?, ?)",
+                (token, login, now, expires_at),
+            )
+            conn.commit()
+    return {"login": login, "created_at": now, "expires_at": expires_at}
+
+
+def get_auth_session(base_dir: str, token: str) -> Optional[dict[str, Any]]:
+    if not token:
+        return None
+    now = time.time()
+    db_path = get_db_path(base_dir)
+    with _DB_LOCK:
+        with _connect(db_path) as conn:
+            _ensure_schema(conn)
+            row = conn.execute(
+                "SELECT token, login, created_at, expires_at FROM auth_sessions WHERE token = ?",
+                (token,),
+            ).fetchone()
+            if not row:
+                return None
+            if float(row["expires_at"]) <= now:
+                conn.execute("DELETE FROM auth_sessions WHERE token = ?", (token,))
+                conn.commit()
+                return None
+            return {
+                "login": row["login"],
+                "created_at": float(row["created_at"]),
+                "expires_at": float(row["expires_at"]),
+            }
+
+
+def delete_auth_session(base_dir: str, token: str) -> None:
+    if not token:
+        return
+    db_path = get_db_path(base_dir)
+    with _DB_LOCK:
+        with _connect(db_path) as conn:
+            _ensure_schema(conn)
+            conn.execute("DELETE FROM auth_sessions WHERE token = ?", (token,))
+            conn.commit()
+
+
+def delete_user_auth_sessions(base_dir: str, login: str) -> int:
+    if not login:
+        return 0
+    db_path = get_db_path(base_dir)
+    with _DB_LOCK:
+        with _connect(db_path) as conn:
+            _ensure_schema(conn)
+            cur = conn.execute("DELETE FROM auth_sessions WHERE login = ?", (login,))
+            conn.commit()
+            return cur.rowcount
+
+
+def check_db_health(base_dir: str) -> bool:
+    db_path = get_db_path(base_dir)
+    try:
+        with _DB_LOCK:
+            with _connect(db_path) as conn:
+                _ensure_schema(conn)
+                row = conn.execute("SELECT 1").fetchone()
+                return bool(row and row[0] == 1)
+    except Exception:
+        return False
