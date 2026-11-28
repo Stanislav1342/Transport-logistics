@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ПУЛЬС — Транспортная логистика</title>
-  <link rel="stylesheet" href="/static/apt_waybills.css?v=2.15">
+  <link rel="stylesheet" href="/static/apt_waybills.css?v=2.16">
   <style>
     :root {
       --primary: #174ea6;
@@ -1143,7 +1143,7 @@
             <p>Единый корпоративный портал автоматизации транспортной логистики ФК «ПУЛЬС» (РЦ Черная Грязь)</p>
           </div>
           <span class="badge" id="portal-version-badge">
-            <span class="badge-dot"></span> Версия 2.15
+            <span class="badge-dot"></span> Версия 2.16
           </span>
         </div>
 
@@ -1533,6 +1533,9 @@
             <button type="button" class="btn btn-outline btn-sm" id="tab-etrn-manual" onclick="switchEtrnMode('manual')">
               Загрузка файлов вручную
             </button>
+          </div>
+          <div id="etrn-server-mode-note" style="display:none; margin-bottom:14px; padding:10px 14px; border-radius:8px; background:rgba(37,99,235,0.08); border:1px solid rgba(37,99,235,0.22); font-size:13px; color:var(--text-main);">
+            Серверный режим: загрузите 3 файла выгрузки из 1С (ЭТРН 1с, Модель расчетов, Процент). Прямое подключение к базе 1С будет добавлено после выделения read-only доступа.
           </div>
 
           <!-- РЕЖИМ 1: Автосбор из 1С -->
@@ -2548,7 +2551,7 @@
     function getClientPortalVersion() {
       const badge = document.getElementById('portal-version-badge');
       const m = (badge?.textContent || '').match(/(\d+\.\d+(?:\.\d+)?)/);
-      return m ? m[1] : '2.15';
+      return m ? m[1] : '2.16';
     }
 
     function isPortalBusy() {
@@ -2609,12 +2612,41 @@
       }, 10000);
     }
 
+    window.PORTAL_RUNTIME = {
+      server_mode: false,
+      etrn_1c_enabled: true,
+      smtp_configured: false,
+      notebook_enabled: true,
+      ml_remote_mode: false,
+    };
+
+    function applyPortalRuntimeFlags(data) {
+      if (!data || typeof data !== 'object') return;
+      window.PORTAL_RUNTIME = {
+        server_mode: Boolean(data.server_mode),
+        etrn_1c_enabled: data.etrn_1c_enabled !== false,
+        smtp_configured: Boolean(data.smtp_configured),
+        notebook_enabled: data.notebook_enabled !== false,
+        ml_remote_mode: Boolean(data.ml_remote_mode),
+      };
+      const tabAuto = document.getElementById('tab-etrn-auto');
+      const paneAuto = document.getElementById('etrn-pane-auto');
+      const serverNote = document.getElementById('etrn-server-mode-note');
+      if (window.PORTAL_RUNTIME.etrn_1c_enabled === false) {
+        if (tabAuto) tabAuto.style.display = 'none';
+        if (paneAuto) paneAuto.style.display = 'none';
+        if (serverNote) serverNote.style.display = 'block';
+        if (typeof switchEtrnMode === 'function') switchEtrnMode('manual');
+      }
+    }
+
     async function checkPortalVersion() {
       try {
         const resp = await fetch('/api/status?_t=' + Date.now(), { cache: 'no-store' });
         if (!resp.ok) return;
         const data = await resp.json().catch(() => null);
         if (!data || !data.version) return;
+        applyPortalRuntimeFlags(data);
 
         const clientVer = getClientPortalVersion();
         const serverVer = String(data.version);
@@ -2643,6 +2675,7 @@
     }
 
     function initPortalAutoUpdate() {
+      checkPortalVersion();
       setTimeout(checkPortalVersion, 3000);
       setInterval(checkPortalVersion, 60000);
       document.addEventListener('visibilitychange', () => {
@@ -4892,6 +4925,9 @@
     let etrnPollInterval = null;
 
     function switchEtrnMode(mode) {
+      if (mode === 'auto' && window.PORTAL_RUNTIME && window.PORTAL_RUNTIME.etrn_1c_enabled === false) {
+        mode = 'manual';
+      }
       document.getElementById('etrn-pane-auto').style.display = (mode === 'auto') ? 'block' : 'none';
       document.getElementById('etrn-pane-manual').style.display = (mode === 'manual') ? 'block' : 'none';
       const btnAuto = document.getElementById('tab-etrn-auto');
@@ -5184,7 +5220,7 @@
       }
     }
   </script>
-  <script src="/static/apt_box_editor.js?v=2.15"></script>
-  <script src="/static/apt_waybills.js?v=2.15"></script>
+  <script src="/static/apt_box_editor.js?v=2.16"></script>
+  <script src="/static/apt_waybills.js?v=2.16"></script>
 </body>
 </html>

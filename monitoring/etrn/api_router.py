@@ -38,6 +38,38 @@ _TASKS_LOCK = threading.Lock()
 _TASKS_STORE: Dict[str, Dict[str, Any]] = {}
 _ETRN_1C_LOCK = threading.Lock()
 
+def _is_etrn_1c_enabled() -> bool:
+    try:
+        from core import server_config
+        return server_config.is_etrn_1c_enabled()
+    except ImportError:
+        raw = (os.environ.get("ETRN_1C_AUTOMATION_ENABLED") or "").strip().lower()
+        if raw:
+            return raw in ("1", "true", "yes", "on")
+        return (os.environ.get("SERVER_MODE") or "").strip().lower() not in ("1", "true", "yes", "on")
+
+
+def _cleanup_old_etrn_exports(root_dir: str) -> None:
+    try:
+        ttl_days = int((os.environ.get("ETRN_EXPORT_TTL_DAYS") or "7").strip())
+    except ValueError:
+        ttl_days = 7
+    if ttl_days <= 0 or not os.path.isdir(root_dir):
+        return
+    cutoff = datetime.now().timestamp() - (ttl_days * 86400)
+    try:
+        import shutil
+        for entry in os.scandir(root_dir):
+            if entry.is_dir():
+                try:
+                    if entry.stat().st_mtime < cutoff:
+                        shutil.rmtree(entry.path, ignore_errors=True)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
 def get_etrn_email_to() -> str:
     try:
         from core import portal_db
@@ -102,9 +134,22 @@ async def process_files(
     as_json: Optional[bool] = Form(False, description="Вернуть JSON с task_id вместо бинарного потока"),
 ):
     try:
+        for upload_f in (etrn_file, model_file, percent_file):
+            fname = (upload_f.filename or "").strip().lower()
+            if not (fname.endswith(".xlsx") or fname.endswith(".xls")):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Неподдерживаемый формат файла «{upload_f.filename}». Ожидается .xlsx или .xls.",
+                )
+
         etrn_bytes = await etrn_file.read()
         model_bytes = await model_file.read()
         percent_bytes = await percent_file.read()
+        if not etrn_bytes or not model_bytes or not percent_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Один или несколько загруженных файлов Excel пустые.",
+            )
 
         # Генерация отчета в пуле потоков без блокировки event loop
         report_bytes = await asyncio.to_thread(
@@ -144,7 +189,9 @@ async def process_files(
             out_filename = f"ЭТРН_{s_from}_{s_to}.xlsx"
 
         task_id = str(uuid.uuid4())
-        out_dir = service.cfg.output_dir
+        out_root = service.cfg.output_dir
+        _cleanup_old_etrn_exports(out_root)
+        out_dir = os.path.join(out_root, task_id)
         os.makedirs(out_dir, exist_ok=True)
         out_filepath = os.path.join(out_dir, out_filename)
 
@@ -194,6 +241,8 @@ async def process_files(
                 "Access-Control-Expose-Headers": "Content-Disposition",
             },
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -258,6 +307,14 @@ def _run_background_etrn_task(task_id: str, d_from: datetime, d_to: datetime, da
     description="Ставит задачу в очередь фонового потока. Возвращает task_id для отслеживания статуса.",
 )
 async def generate_task(req: GenerateReportRequest):
+    if not _is_etrn_1c_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=(
+                "Автовыгрузка из 1С отключена в серверном режиме. "
+                "Загрузите 3 файла Excel (ЭТРН, Модель расчетов, Процент) на вкладке «Загрузка файлов вручную»."
+            ),
+        )
     try:
         d_from = service.parse_date(req.date_from)
         d_to = service.parse_date(req.date_to) if req.date_to else d_from

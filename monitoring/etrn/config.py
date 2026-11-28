@@ -46,6 +46,17 @@ class Config:
 
     @property
     def output_dir(self) -> str:
+        if (
+            os.environ.get("ETRN_OUTPUT_DIR", "").strip()
+            or os.environ.get("PORTAL_DATA_DIR", "").strip()
+            or os.environ.get("SERVER_MODE", "").strip().lower() in ("1", "true", "yes", "on")
+        ):
+            try:
+                from core import server_config
+                portal_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                return server_config.get_etrn_data_dir(portal_root)
+            except ImportError:
+                pass
         d = os.path.join(self.desktop_dir, self.output_dir_name)
         try:
             os.makedirs(d, exist_ok=True)
